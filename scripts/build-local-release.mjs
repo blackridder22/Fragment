@@ -24,7 +24,7 @@ const extensionDist = join(root, "apps", "extension", "dist");
 const extensionZip = join(releaseDir, `Fragment-Extension-v${version}.zip`);
 
 run("pnpm", ["build:extension"]);
-run("pnpm", ["build:desktop"]);
+run("pnpm", ["build:desktop"], { APPLE_SIGNING_IDENTITY: "-" });
 rmSync(releaseDir, { recursive: true, force: true });
 mkdirSync(releaseDir, { recursive: true });
 
@@ -99,8 +99,12 @@ console.log(`Fragment v${version} local release: ${releaseDir}`);
 console.log(`App bundle: ${appPath}`);
 console.log(`Extension ZIP: ${extensionZip}`);
 
-function run(command, args) {
-  execFileSync(command, args, { cwd: root, stdio: "inherit" });
+function run(command, args, env = {}) {
+  execFileSync(command, args, {
+    cwd: root,
+    env: { ...process.env, ...env },
+    stdio: "inherit",
+  });
 }
 
 function walkFiles(directory) {
