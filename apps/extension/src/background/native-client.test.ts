@@ -103,13 +103,13 @@ describe("persistent native port manager", () => {
       type: "frames.list",
       requestId: "frames-timeout",
     });
+    const rejection = expect(request).rejects.toMatchObject({
+      code: "native_host_timeout",
+    });
     port.completeHandshake(2);
 
     await vi.advanceTimersByTimeAsync(100);
-
-    await expect(request).rejects.toMatchObject({
-      code: "native_host_timeout",
-    });
+    await rejection;
     manager.dispose();
   });
 
