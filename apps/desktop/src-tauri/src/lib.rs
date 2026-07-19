@@ -4,9 +4,9 @@ mod state;
 use commands::{
     asset_data_url, asset_root, check_import_duplicate, create_frame, delete_fragment,
     delete_fragment_everywhere, delete_frame, ensure_default_frame, get_fragment, import_image,
-    list_all_fragments, list_child_frames, list_fragments, list_frames, list_trashed_fragments,
-    open_fragment_source, rename_frame, restore_fragment, reveal_fragment_in_finder,
-    update_fragment,
+    get_library_revision, list_all_fragments, list_child_frames, list_fragment_page,
+    list_fragments, list_frames, list_trashed_fragments, load_library_snapshot,
+    open_fragment_source, rename_frame, restore_fragment, reveal_fragment_in_finder, update_fragment,
 };
 use state::FragmentState;
 
@@ -27,6 +27,9 @@ pub fn run() {
             rename_frame,
             delete_frame,
             list_all_fragments,
+            load_library_snapshot,
+            list_fragment_page,
+            get_library_revision,
             list_trashed_fragments,
             list_fragments,
             get_fragment,
