@@ -1,5 +1,56 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Fragment, Frame } from "@fragment/shared";
+
+export type LibrarySnapshot = {
+  defaultFrame: Frame;
+  frames: Frame[];
+  fragments: Fragment[];
+  fragmentTotal: number;
+  revision: string;
+  assetRoot: string;
+};
+
+export type FragmentPage = {
+  items: Fragment[];
+  offset: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+  revision: string;
+};
+
+export type ImportBatchItem = {
+  requestId: string;
+  frameId: string | null;
+  filePath: string;
+  titleOverride?: string | null;
+};
+
+export type ImportBatchResult = {
+  requestId: string;
+  ok: boolean;
+  fragment?: Fragment | null;
+  error?: string | null;
+};
+
+export type ImportBatchEvent =
+  | { event: "queued"; jobId: string; requestId: string }
+  | { event: "preparing"; jobId: string; requestId: string }
+  | {
+      event: "complete";
+      jobId: string;
+      requestId: string;
+      fragment: Fragment;
+    }
+  | { event: "failed"; jobId: string; requestId: string; error: string }
+  | { event: "cancelled"; jobId: string; requestId: string }
+  | {
+      event: "finished";
+      jobId: string;
+      completed: number;
+      failed: number;
+      cancelled: number;
+    };
 
 export type ImportDuplicateCheck = {
   duplicate: boolean;
@@ -24,6 +75,28 @@ export function isTauriRuntime(): boolean {
 
 export async function ensureDefaultFrame(): Promise<Frame> {
   return invoke("ensure_default_frame");
+}
+
+export async function loadLibrarySnapshot(limit = 60): Promise<LibrarySnapshot> {
+  return invoke("load_library_snapshot", { limit });
+}
+
+export async function listFragmentPage(options: {
+  frameId?: string | null;
+  trashed?: boolean;
+  offset?: number;
+  limit?: number;
+}): Promise<FragmentPage> {
+  return invoke("list_fragment_page", {
+    frameId: options.frameId ?? null,
+    trashed: options.trashed ?? false,
+    offset: options.offset ?? 0,
+    limit: options.limit ?? 60
+  });
+}
+
+export async function getLibraryRevision(): Promise<string> {
+  return invoke("get_library_revision");
 }
 
 export async function listFrames(): Promise<Frame[]> {
@@ -64,6 +137,20 @@ export async function importImage(
   titleOverride?: string | null
 ): Promise<Fragment> {
   return invoke("import_image", { frameId, filePath, titleOverride });
+}
+
+export async function importImageBatch(
+  jobId: string,
+  items: ImportBatchItem[],
+  onEvent: (event: ImportBatchEvent) => void
+): Promise<ImportBatchResult[]> {
+  const channel = new Channel<ImportBatchEvent>();
+  channel.onmessage = onEvent;
+  return invoke("import_image_batch", { jobId, items, onEvent: channel });
+}
+
+export async function cancelImportJob(jobId: string): Promise<void> {
+  return invoke("cancel_import_job", { jobId });
 }
 
 export async function checkImportDuplicate(
