@@ -1,9 +1,12 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, Duration, Utc};
 use image::ImageFormat;
-use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OptionalExtension, Row, TransactionBehavior,
+};
 use uuid::Uuid;
 
 use crate::db::FragmentCore;
@@ -111,6 +114,33 @@ pub(crate) fn map_fragment(row: &Row<'_>) -> rusqlite::Result<Fragment> {
 }
 
 impl FragmentCore {
+    pub fn active_fragment_counts_by_frame(&self) -> CoreResult<BTreeMap<String, u64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "
+            SELECT fragments.frame_id, count(*)
+            FROM fragments
+            INNER JOIN frames ON frames.id = fragments.frame_id
+            WHERE fragments.deleted_at IS NULL AND frames.deleted_at IS NULL
+            GROUP BY fragments.frame_id
+            ",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(frame_id, count)| {
+                u64::try_from(count)
+                    .map(|count| (frame_id, count))
+                    .map_err(|_| {
+                        CoreError::InvalidInput("Fragment count cannot be negative".to_string())
+                    })
+            })
+            .collect()
+    }
+
     pub fn list_all_fragments(&self) -> CoreResult<Vec<Fragment>> {
         let conn = self.conn()?;
         let sql = fragment_select_sql(
@@ -162,6 +192,65 @@ impl FragmentCore {
             .query_map(params![frame_id], map_fragment)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(fragments)
+    }
+
+    pub fn list_fragment_page(
+        &self,
+        frame_id: Option<String>,
+        trashed: bool,
+        offset: usize,
+        limit: usize,
+    ) -> CoreResult<(Vec<Fragment>, u64)> {
+        if let Some(frame_id) = frame_id.as_deref() {
+            self.require_frame(frame_id)?;
+        }
+
+        let mut conditions = Vec::with_capacity(3);
+        let mut values = Vec::with_capacity(3);
+        if let Some(frame_id) = frame_id {
+            conditions.push("fragments.frame_id = ?");
+            values.push(Value::Text(frame_id));
+        }
+        conditions.push(if trashed {
+            "fragments.deleted_at IS NOT NULL"
+        } else {
+            "fragments.deleted_at IS NULL"
+        });
+        conditions.push(
+            "EXISTS (
+               SELECT 1 FROM frames
+               WHERE frames.id = fragments.frame_id AND frames.deleted_at IS NULL
+             )",
+        );
+        let predicate = conditions.join(" AND ");
+        let conn = self.conn()?;
+        let count_sql = format!("SELECT count(*) FROM fragments WHERE {predicate}");
+        let total: i64 = conn.query_row(&count_sql, params_from_iter(values.iter()), |row| {
+            row.get(0)
+        })?;
+
+        let order = if trashed {
+            "fragments.deleted_at DESC, fragments.id DESC"
+        } else {
+            "fragments.captured_at DESC, fragments.id DESC"
+        };
+        let page_clause = format!("WHERE {predicate} ORDER BY {order} LIMIT ? OFFSET ?");
+        let sql = fragment_select_sql(&page_clause);
+        let mut page_values = values;
+        page_values.push(Value::Integer(i64::try_from(limit).map_err(|_| {
+            CoreError::InvalidInput("Fragment page limit is too large".to_string())
+        })?));
+        page_values.push(Value::Integer(i64::try_from(offset).map_err(|_| {
+            CoreError::InvalidInput("Fragment page offset is too large".to_string())
+        })?));
+        let mut stmt = conn.prepare(&sql)?;
+        let items = stmt
+            .query_map(params_from_iter(page_values.iter()), map_fragment)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let total = u64::try_from(total).map_err(|_| {
+            CoreError::InvalidInput("Fragment count cannot be negative".to_string())
+        })?;
+        Ok((items, total))
     }
 
     pub fn get_fragment(&self, id: String) -> CoreResult<Fragment> {
@@ -1685,5 +1774,47 @@ mod tests {
         for path in paths {
             assert!(!path.exists(), "{} should be removed", path.display());
         }
+    }
+
+    #[test]
+    fn fragment_pages_return_bounded_items_and_complete_counts() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let mut imported = Vec::new();
+
+        for index in 0..3 {
+            let frame = core
+                .create_frame(None, format!("Page {index}"))
+                .expect("create frame");
+            imported.push(
+                core.import_image(
+                    Some(frame.id),
+                    source_path.to_string_lossy().to_string(),
+                    None,
+                )
+                .expect("import membership"),
+            );
+        }
+
+        let (page, total) = core
+            .list_fragment_page(None, false, 1, 1)
+            .expect("active page");
+        assert_eq!(page.len(), 1);
+        assert_eq!(total, 3);
+
+        core.delete_fragment_with_policy(imported[0].id.clone(), Some(7))
+            .expect("trash membership");
+        let (trash_page, trash_total) = core
+            .list_fragment_page(None, true, 0, 10)
+            .expect("trash page");
+        assert_eq!(trash_page.len(), 1);
+        assert_eq!(trash_total, 1);
+
+        let counts = core
+            .active_fragment_counts_by_frame()
+            .expect("frame counts");
+        assert_eq!(counts.values().sum::<u64>(), 2);
     }
 }

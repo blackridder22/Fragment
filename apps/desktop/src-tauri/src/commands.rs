@@ -1,11 +1,11 @@
+use std::collections::BTreeMap;
 use std::fs;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use fragment_core::{Fragment, Frame, ImportDuplicateCheck};
+use fragment_core::{Fragment, Frame, ImportDuplicateCheck, PurgeReport};
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, State};
 use url::Url;
@@ -25,7 +25,9 @@ pub struct LibrarySnapshot {
     default_frame: Frame,
     frames: Vec<Frame>,
     fragments: Vec<Fragment>,
-    fragment_total: usize,
+    fragment_total: u64,
+    trash_total: u64,
+    frame_counts: BTreeMap<String, u64>,
     revision: String,
     asset_root: String,
 }
@@ -36,7 +38,7 @@ pub struct FragmentPage {
     items: Vec<Fragment>,
     offset: usize,
     limit: usize,
-    total: usize,
+    total: u64,
     has_more: bool,
     revision: String,
 }
@@ -96,25 +98,6 @@ fn safe_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-fn library_revision(frames: &[Frame], fragments: &[Fragment]) -> String {
-    let mut hasher = DefaultHasher::new();
-    frames.len().hash(&mut hasher);
-    fragments.len().hash(&mut hasher);
-
-    for frame in frames {
-        frame.id.hash(&mut hasher);
-        frame.updated_at.hash(&mut hasher);
-    }
-    for fragment in fragments {
-        fragment.id.hash(&mut hasher);
-        fragment.frame_id.hash(&mut hasher);
-        fragment.updated_at.hash(&mut hasher);
-        fragment.deleted_at.hash(&mut hasher);
-    }
-
-    format!("{:016x}", hasher.finish())
-}
-
 fn page_size(limit: Option<u32>) -> usize {
     limit
         .map(|value| value as usize)
@@ -123,19 +106,18 @@ fn page_size(limit: Option<u32>) -> usize {
 }
 
 fn fragment_page(
-    fragments: Vec<Fragment>,
+    items: Vec<Fragment>,
     offset: usize,
     limit: usize,
+    total: u64,
     revision: String,
 ) -> FragmentPage {
-    let total = fragments.len();
-    let items = fragments.into_iter().skip(offset).take(limit).collect();
     FragmentPage {
         items,
         offset,
         limit,
         total,
-        has_more: offset.saturating_add(limit) < total,
+        has_more: u64::try_from(offset.saturating_add(limit)).unwrap_or(u64::MAX) < total,
         revision,
     }
 }
@@ -151,10 +133,14 @@ pub async fn load_library_snapshot(
         let started_at = Instant::now();
         let default_frame = core.ensure_default_frame().map_err(safe_error)?;
         let frames = core.list_frames().map_err(safe_error)?;
-        let mut fragments = core.list_all_fragments().map_err(safe_error)?;
-        let fragment_total = fragments.len();
-        let revision = library_revision(&frames, &fragments);
-        fragments.truncate(limit);
+        let (fragments, fragment_total) = core
+            .list_fragment_page(None, false, 0, limit)
+            .map_err(safe_error)?;
+        let (_, trash_total) = core
+            .list_fragment_page(None, true, 0, 1)
+            .map_err(safe_error)?;
+        let frame_counts = core.active_fragment_counts_by_frame().map_err(safe_error)?;
+        let revision = core.library_revision().map_err(safe_error)?.to_string();
         tracing::info!(
             elapsed_ms = started_at.elapsed().as_millis(),
             frame_count = frames.len(),
@@ -167,6 +153,8 @@ pub async fn load_library_snapshot(
             frames,
             fragments,
             fragment_total,
+            trash_total,
+            frame_counts,
             revision,
             asset_root: core.paths().root().to_string_lossy().to_string(),
         })
@@ -187,16 +175,11 @@ pub async fn list_fragment_page(
     let offset = offset.unwrap_or_default() as usize;
     let limit = page_size(limit);
     tauri::async_runtime::spawn_blocking(move || {
-        let frames = core.list_frames().map_err(safe_error)?;
-        let fragments = if trashed.unwrap_or(false) {
-            core.list_trashed_fragments().map_err(safe_error)?
-        } else if let Some(frame_id) = frame_id {
-            core.list_fragments(frame_id).map_err(safe_error)?
-        } else {
-            core.list_all_fragments().map_err(safe_error)?
-        };
-        let revision = library_revision(&frames, &fragments);
-        Ok(fragment_page(fragments, offset, limit, revision))
+        let (items, total) = core
+            .list_fragment_page(frame_id, trashed.unwrap_or(false), offset, limit)
+            .map_err(safe_error)?;
+        let revision = core.library_revision().map_err(safe_error)?.to_string();
+        Ok(fragment_page(items, offset, limit, total, revision))
     })
     .await
     .map_err(safe_error)?
@@ -206,9 +189,9 @@ pub async fn list_fragment_page(
 pub async fn get_library_revision(state: State<'_, FragmentState>) -> CommandResult<String> {
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let frames = core.list_frames().map_err(safe_error)?;
-        let fragments = core.list_all_fragments().map_err(safe_error)?;
-        Ok(library_revision(&frames, &fragments))
+        core.library_revision()
+            .map(|revision| revision.to_string())
+            .map_err(safe_error)
     })
     .await
     .map_err(safe_error)?
@@ -251,8 +234,38 @@ pub fn rename_frame(
 }
 
 #[tauri::command]
-pub fn delete_frame(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
-    state.core.delete_frame(id).map_err(safe_error)
+pub fn delete_frame(
+    state: State<'_, FragmentState>,
+    id: String,
+    retention_days: Option<u32>,
+) -> CommandResult<()> {
+    state
+        .core
+        .delete_frame_with_policy(id, Some(retention_days.unwrap_or(31)))
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn hard_delete_frame(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
+    state.core.hard_delete_frame(id).map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn list_trashed_frames(state: State<'_, FragmentState>) -> CommandResult<Vec<Frame>> {
+    state.core.list_trashed_frames().map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn restore_frame(state: State<'_, FragmentState>, id: String) -> CommandResult<Frame> {
+    state.core.restore_frame(id).map_err(safe_error)
+}
+
+#[tauri::command]
+pub async fn purge_expired_trash(state: State<'_, FragmentState>) -> CommandResult<PurgeReport> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || core.purge_expired_trash().map_err(safe_error))
+        .await
+        .map_err(safe_error)?
 }
 
 #[tauri::command]
@@ -662,8 +675,10 @@ mod tests {
 
     #[test]
     fn fragment_page_reports_complete_result_metadata() {
-        let fragments = (0..125).map(|index| fragment(&index.to_string())).collect();
-        let page = fragment_page(fragments, 60, 60, "revision".to_string());
+        let fragments = (60..120)
+            .map(|index| fragment(&index.to_string()))
+            .collect();
+        let page = fragment_page(fragments, 60, 60, 125, "revision".to_string());
 
         assert_eq!(page.items.len(), 60);
         assert_eq!(page.offset, 60);

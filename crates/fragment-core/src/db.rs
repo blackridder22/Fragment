@@ -12,7 +12,8 @@ use crate::errors::{CoreError, CoreResult};
 
 const INIT_MIGRATION: &str = include_str!("../migrations/0001_init.sql");
 const DATA_SAFETY_MIGRATION: &str = include_str!("../migrations/0002_data_safety.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const LIBRARY_REVISION_MIGRATION: &str = include_str!("../migrations/0003_library_revision.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone)]
 pub struct FragmentCore {
@@ -62,6 +63,17 @@ impl FragmentCore {
         Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
     }
 
+    pub fn library_revision(&self) -> CoreResult<u64> {
+        let conn = self.conn()?;
+        let revision: i64 = conn.query_row(
+            "SELECT revision FROM vault_metadata WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        u64::try_from(revision)
+            .map_err(|_| CoreError::InvalidInput("Vault revision cannot be negative".to_string()))
+    }
+
     pub(crate) fn conn(&self) -> CoreResult<MutexGuard<'_, Connection>> {
         self.connection
             .lock()
@@ -94,6 +106,14 @@ fn run_migrations(connection: &mut Connection) -> CoreResult<()> {
     if version < 2 {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         migrate_data_safety_schema(&tx)?;
+        tx.pragma_update(None, "user_version", 2_i64)?;
+        tx.commit()?;
+        version = 2;
+    }
+
+    if version < 3 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(LIBRARY_REVISION_MIGRATION)?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;
     }
@@ -390,7 +410,7 @@ mod tests {
         let conn = core.conn().expect("conn");
         let count: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('frames', 'assets', 'fragments', 'tags', 'fragment_tags', 'pending_file_deletions')",
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('frames', 'assets', 'fragments', 'tags', 'fragment_tags', 'pending_file_deletions', 'vault_metadata')",
                 [],
                 |row| row.get(0),
             )
@@ -398,8 +418,25 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("schema version");
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn library_revision_changes_after_visible_mutations() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let core = FragmentCore::new_at(temp.path().to_path_buf()).expect("core");
+        let initial = core.library_revision().expect("initial revision");
+
+        let frame = core
+            .create_frame(None, "Revision Frame".to_string())
+            .expect("create frame");
+        let after_create = core.library_revision().expect("created revision");
+        assert!(after_create > initial);
+
+        core.rename_frame(frame.id, "Renamed Revision Frame".to_string())
+            .expect("rename frame");
+        assert!(core.library_revision().expect("renamed revision") > after_create);
     }
 
     #[test]

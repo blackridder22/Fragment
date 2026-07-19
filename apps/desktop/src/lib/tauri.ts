@@ -6,6 +6,8 @@ export type LibrarySnapshot = {
   frames: Frame[];
   fragments: Fragment[];
   fragmentTotal: number;
+  trashTotal: number;
+  frameCounts: Record<string, number>;
   revision: string;
   assetRoot: string;
 };
@@ -111,8 +113,33 @@ export async function renameFrame(id: string, name: string): Promise<Frame> {
   return invoke("rename_frame", { id, name });
 }
 
-export async function deleteFrame(id: string): Promise<void> {
-  return invoke("delete_frame", { id });
+export async function deleteFrame(
+  id: string,
+  retentionDays: number | null = 31
+): Promise<void> {
+  if (retentionDays === null) {
+    return invoke("hard_delete_frame", { id });
+  }
+  return invoke("delete_frame", { id, retentionDays });
+}
+
+export async function listTrashedFrames(): Promise<Frame[]> {
+  return invoke("list_trashed_frames");
+}
+
+export async function restoreFrame(id: string): Promise<Frame> {
+  return invoke("restore_frame", { id });
+}
+
+export type PurgeReport = {
+  fragments: number;
+  frames: number;
+  assets: number;
+  cleanup: { removed: number; deferred: number };
+};
+
+export async function purgeExpiredTrash(): Promise<PurgeReport> {
+  return invoke("purge_expired_trash");
 }
 
 export async function listAllFragments(): Promise<Fragment[]> {
