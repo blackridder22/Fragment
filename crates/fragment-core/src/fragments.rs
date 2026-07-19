@@ -395,6 +395,51 @@ impl FragmentCore {
         Ok(())
     }
 
+    pub fn delete_fragment_everywhere_with_policy(
+        &self,
+        id: String,
+        retention_days: Option<u32>,
+    ) -> CoreResult<()> {
+        match retention_days {
+            Some(days) if days > 0 => self.trash_fragment_everywhere(id, days),
+            _ => self.delete_fragment_everywhere(id),
+        }
+    }
+
+    fn trash_fragment_everywhere(&self, id: String, retention_days: u32) -> CoreResult<()> {
+        let now = Utc::now();
+        let deleted_at = now.to_rfc3339();
+        let delete_after = (now + Duration::days(i64::from(retention_days))).to_rfc3339();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let fragment = fragment_by_id_in_conn(&tx, &id, true)?
+            .ok_or_else(|| CoreError::NotFound("Fragment".to_string()))?;
+        let changed = if let Some(asset_id) = fragment.asset_id.as_deref() {
+            tx.execute(
+                "
+                UPDATE fragments
+                SET deleted_at = ?1, delete_after = ?2, updated_at = ?1
+                WHERE asset_id = ?3 AND deleted_at IS NULL
+                ",
+                params![&deleted_at, &delete_after, asset_id],
+            )?
+        } else {
+            tx.execute(
+                "
+                UPDATE fragments
+                SET deleted_at = ?1, delete_after = ?2, updated_at = ?1
+                WHERE id = ?3 AND deleted_at IS NULL
+                ",
+                params![&deleted_at, &delete_after, &id],
+            )?
+        };
+        if changed == 0 {
+            return Err(CoreError::NotFound("Active Fragment".to_string()));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn trash_fragment(&self, id: String, retention_days: u32) -> CoreResult<()> {
         let now = Utc::now();
         let deleted_at = now.to_rfc3339();
@@ -1774,6 +1819,37 @@ mod tests {
         for path in paths {
             assert!(!path.exists(), "{} should be removed", path.display());
         }
+    }
+
+    #[test]
+    fn trash_everywhere_preserves_one_shared_asset_until_retention_purge() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let frame = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        core.import_image(
+            Some(frame.id),
+            source_path.to_string_lossy().to_string(),
+            None,
+        )
+        .expect("second import");
+        let original = core
+            .paths()
+            .resolve_relative_path(&first.original_path)
+            .expect("resolve original");
+
+        core.delete_fragment_everywhere_with_policy(first.id, Some(31))
+            .expect("trash everywhere");
+
+        assert!(core.list_all_fragments().expect("active").is_empty());
+        assert_eq!(core.list_trashed_fragments().expect("trash").len(), 2);
+        assert!(original.exists());
     }
 
     #[test]

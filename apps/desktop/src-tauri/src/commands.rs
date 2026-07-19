@@ -517,10 +517,11 @@ pub fn restore_fragment(state: State<'_, FragmentState>, id: String) -> CommandR
 pub fn delete_fragment_everywhere(
     state: State<'_, FragmentState>,
     id: String,
+    retention_days: Option<u32>,
 ) -> CommandResult<()> {
     state
         .core
-        .delete_fragment_everywhere(id)
+        .delete_fragment_everywhere_with_policy(id, retention_days)
         .map_err(safe_error)
 }
 

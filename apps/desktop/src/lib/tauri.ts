@@ -198,8 +198,11 @@ export async function restoreFragment(id: string): Promise<Fragment> {
   return invoke("restore_fragment", { id });
 }
 
-export async function deleteFragmentEverywhere(id: string): Promise<void> {
-  return invoke("delete_fragment_everywhere", { id });
+export async function deleteFragmentEverywhere(
+  id: string,
+  retentionDays: number | null = 31
+): Promise<void> {
+  return invoke("delete_fragment_everywhere", { id, retentionDays });
 }
 
 export async function revealFragmentInFinder(id: string): Promise<void> {
