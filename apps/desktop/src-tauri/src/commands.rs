@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use fragment_core::{Fragment, Frame, ImportDuplicateCheck};
-use serde::Serialize;
-use tauri::State;
+use serde::{Deserialize, Serialize};
+use tauri::{ipc::Channel, State};
 use url::Url;
 
 use crate::state::FragmentState;
@@ -16,6 +16,8 @@ type CommandResult<T> = Result<T, String>;
 const MAX_ASSET_DATA_URL_BYTES: u64 = 20 * 1024 * 1024;
 const DEFAULT_FRAGMENT_PAGE_SIZE: usize = 60;
 const MAX_FRAGMENT_PAGE_SIZE: usize = 200;
+const MAX_IMPORT_BATCH_SIZE: usize = 500;
+const IMPORT_CONCURRENCY: usize = 2;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +39,57 @@ pub struct FragmentPage {
     total: usize,
     has_more: bool,
     revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBatchItem {
+    request_id: String,
+    frame_id: Option<String>,
+    file_path: String,
+    title_override: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBatchResult {
+    request_id: String,
+    ok: bool,
+    fragment: Option<Fragment>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", rename_all = "camelCase")]
+pub enum ImportBatchEvent {
+    Queued {
+        job_id: String,
+        request_id: String,
+    },
+    Preparing {
+        job_id: String,
+        request_id: String,
+    },
+    Complete {
+        job_id: String,
+        request_id: String,
+        fragment: Fragment,
+    },
+    Failed {
+        job_id: String,
+        request_id: String,
+        error: String,
+    },
+    Cancelled {
+        job_id: String,
+        request_id: String,
+    },
+    Finished {
+        job_id: String,
+        completed: usize,
+        failed: usize,
+        cancelled: usize,
+    },
 }
 
 fn safe_error(error: impl std::fmt::Display) -> String {
@@ -150,9 +203,7 @@ pub async fn list_fragment_page(
 }
 
 #[tauri::command]
-pub async fn get_library_revision(
-    state: State<'_, FragmentState>,
-) -> CommandResult<String> {
+pub async fn get_library_revision(state: State<'_, FragmentState>) -> CommandResult<String> {
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let frames = core.list_frames().map_err(safe_error)?;
@@ -269,6 +320,167 @@ pub async fn check_import_duplicate(
     })
     .await
     .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub async fn import_image_batch(
+    state: State<'_, FragmentState>,
+    job_id: String,
+    items: Vec<ImportBatchItem>,
+    on_event: Channel<ImportBatchEvent>,
+) -> CommandResult<Vec<ImportBatchResult>> {
+    if job_id.trim().is_empty() {
+        return Err("Import job ID cannot be empty".to_string());
+    }
+    if items.len() > MAX_IMPORT_BATCH_SIZE {
+        return Err(format!(
+            "Import batch exceeds the {MAX_IMPORT_BATCH_SIZE}-image limit"
+        ));
+    }
+
+    let mut request_ids = std::collections::HashSet::with_capacity(items.len());
+    if items
+        .iter()
+        .any(|item| !request_ids.insert(item.request_id.clone()))
+    {
+        return Err("Import batch request IDs must be unique".to_string());
+    }
+
+    state
+        .cancelled_import_jobs
+        .lock()
+        .map_err(safe_error)?
+        .remove(&job_id);
+    let core = state.core.clone();
+    let cancelled_jobs = state.cancelled_import_jobs.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        for item in &items {
+            let _ = on_event.send(ImportBatchEvent::Queued {
+                job_id: job_id.clone(),
+                request_id: item.request_id.clone(),
+            });
+        }
+
+        let mut results = Vec::with_capacity(items.len());
+        let mut completed = 0;
+        let mut failed = 0;
+        let mut cancelled = 0;
+
+        for chunk in items.chunks(IMPORT_CONCURRENCY) {
+            let is_cancelled = cancelled_jobs.lock().map_err(safe_error)?.contains(&job_id);
+            if is_cancelled {
+                for item in chunk
+                    .iter()
+                    .chain(items[results.len().saturating_add(chunk.len())..].iter())
+                {
+                    cancelled += 1;
+                    let _ = on_event.send(ImportBatchEvent::Cancelled {
+                        job_id: job_id.clone(),
+                        request_id: item.request_id.clone(),
+                    });
+                    results.push(ImportBatchResult {
+                        request_id: item.request_id.clone(),
+                        ok: false,
+                        fragment: None,
+                        error: Some("Import cancelled".to_string()),
+                    });
+                }
+                break;
+            }
+
+            let handles = chunk
+                .iter()
+                .cloned()
+                .map(|item| {
+                    let request_id = item.request_id.clone();
+                    let core = core.clone();
+                    let on_event = on_event.clone();
+                    let job_id = job_id.clone();
+                    (
+                        request_id,
+                        std::thread::spawn(move || {
+                            let _ = on_event.send(ImportBatchEvent::Preparing {
+                                job_id: job_id.clone(),
+                                request_id: item.request_id.clone(),
+                            });
+                            core.import_image(item.frame_id, item.file_path, item.title_override)
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            for (request_id, handle) in handles {
+                match handle.join() {
+                    Ok(Ok(fragment)) => {
+                        completed += 1;
+                        let _ = on_event.send(ImportBatchEvent::Complete {
+                            job_id: job_id.clone(),
+                            request_id: request_id.clone(),
+                            fragment: fragment.clone(),
+                        });
+                        results.push(ImportBatchResult {
+                            request_id,
+                            ok: true,
+                            fragment: Some(fragment),
+                            error: None,
+                        });
+                    }
+                    Ok(Err(error)) => {
+                        failed += 1;
+                        let error = error.to_string();
+                        let _ = on_event.send(ImportBatchEvent::Failed {
+                            job_id: job_id.clone(),
+                            request_id: request_id.clone(),
+                            error: error.clone(),
+                        });
+                        results.push(ImportBatchResult {
+                            request_id,
+                            ok: false,
+                            fragment: None,
+                            error: Some(error),
+                        });
+                    }
+                    Err(_) => {
+                        failed += 1;
+                        let error = "Import worker stopped unexpectedly".to_string();
+                        let _ = on_event.send(ImportBatchEvent::Failed {
+                            job_id: job_id.clone(),
+                            request_id: request_id.clone(),
+                            error: error.clone(),
+                        });
+                        results.push(ImportBatchResult {
+                            request_id,
+                            ok: false,
+                            fragment: None,
+                            error: Some(error),
+                        });
+                    }
+                }
+            }
+        }
+
+        cancelled_jobs.lock().map_err(safe_error)?.remove(&job_id);
+        let _ = on_event.send(ImportBatchEvent::Finished {
+            job_id,
+            completed,
+            failed,
+            cancelled,
+        });
+        Ok(results)
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub fn cancel_import_job(state: State<'_, FragmentState>, job_id: String) -> CommandResult<()> {
+    state
+        .cancelled_import_jobs
+        .lock()
+        .map_err(safe_error)?
+        .insert(job_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -450,9 +662,7 @@ mod tests {
 
     #[test]
     fn fragment_page_reports_complete_result_metadata() {
-        let fragments = (0..125)
-            .map(|index| fragment(&index.to_string()))
-            .collect();
+        let fragments = (0..125).map(|index| fragment(&index.to_string())).collect();
         let page = fragment_page(fragments, 60, 60, "revision".to_string());
 
         assert_eq!(page.items.len(), 60);
