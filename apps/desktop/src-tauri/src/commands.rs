@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use fragment_core::{Fragment, Frame, ImportDuplicateCheck, PurgeReport};
+use fragment_core::{CoreError, Fragment, Frame, ImportDuplicateCheck, PurgeReport};
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, State};
 use url::Url;
@@ -17,6 +17,7 @@ const MAX_ASSET_DATA_URL_BYTES: u64 = 20 * 1024 * 1024;
 const DEFAULT_FRAGMENT_PAGE_SIZE: usize = 60;
 const MAX_FRAGMENT_PAGE_SIZE: usize = 200;
 const MAX_IMPORT_BATCH_SIZE: usize = 500;
+const MAX_SELECTION_BATCH_SIZE: usize = 50_000;
 const IMPORT_CONCURRENCY: usize = 2;
 
 #[derive(Debug, Serialize)]
@@ -59,6 +60,9 @@ pub struct ImportBatchResult {
     ok: bool,
     fragment: Option<Fragment>,
     error: Option<String>,
+    error_code: Option<String>,
+    existing_fragment_id: Option<String>,
+    existing_trashed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +85,9 @@ pub enum ImportBatchEvent {
         job_id: String,
         request_id: String,
         error: String,
+        error_code: Option<String>,
+        existing_fragment_id: Option<String>,
+        existing_trashed: Option<bool>,
     },
     Cancelled {
         job_id: String,
@@ -96,6 +103,31 @@ pub enum ImportBatchEvent {
 
 fn safe_error(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+fn import_error_details(error: &CoreError) -> (Option<String>, Option<String>, Option<bool>) {
+    match error {
+        CoreError::DuplicateMembership {
+            fragment_id,
+            trashed,
+            ..
+        } => (
+            Some("duplicate_membership".to_string()),
+            Some(fragment_id.clone()),
+            Some(*trashed),
+        ),
+        CoreError::ExistingAsset {
+            fragment_id,
+            trashed,
+            ..
+        } => (
+            Some("duplicate_asset_elsewhere".to_string()),
+            Some(fragment_id.clone()),
+            Some(*trashed),
+        ),
+        CoreError::DuplicateFragment(_) => (Some("duplicate_fragment".to_string()), None, None),
+        _ => (None, None, None),
+    }
 }
 
 fn page_size(limit: Option<u32>) -> usize {
@@ -180,6 +212,36 @@ pub async fn list_fragment_page(
             .map_err(safe_error)?;
         let revision = core.library_revision().map_err(safe_error)?.to_string();
         Ok(fragment_page(items, offset, limit, total, revision))
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub async fn list_fragment_ids(
+    state: State<'_, FragmentState>,
+    frame_id: Option<String>,
+    trashed: Option<bool>,
+    query: Option<String>,
+    source_filter: Option<String>,
+) -> CommandResult<Vec<String>> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.list_fragment_ids(frame_id, trashed.unwrap_or(false), query, source_filter)
+            .map_err(safe_error)
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub async fn fragment_membership_count(
+    state: State<'_, FragmentState>,
+    id: String,
+) -> CommandResult<u64> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.fragment_membership_count(id).map_err(safe_error)
     })
     .await
     .map_err(safe_error)?
@@ -292,6 +354,29 @@ pub fn get_fragment(state: State<'_, FragmentState>, id: String) -> CommandResul
 }
 
 #[tauri::command]
+pub fn get_fragment_any(state: State<'_, FragmentState>, id: String) -> CommandResult<Fragment> {
+    state
+        .core
+        .get_fragment_including_deleted(id)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub async fn add_existing_fragment_to_frame(
+    state: State<'_, FragmentState>,
+    existing_fragment_id: String,
+    frame_id: Option<String>,
+) -> CommandResult<Fragment> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.add_existing_fragment_to_frame(existing_fragment_id, frame_id)
+            .map_err(safe_error)
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
 pub fn update_fragment(
     state: State<'_, FragmentState>,
     id: String,
@@ -397,6 +482,9 @@ pub async fn import_image_batch(
                         ok: false,
                         fragment: None,
                         error: Some("Import cancelled".to_string()),
+                        error_code: None,
+                        existing_fragment_id: None,
+                        existing_trashed: None,
                     });
                 }
                 break;
@@ -437,21 +525,32 @@ pub async fn import_image_batch(
                             ok: true,
                             fragment: Some(fragment),
                             error: None,
+                            error_code: None,
+                            existing_fragment_id: None,
+                            existing_trashed: None,
                         });
                     }
                     Ok(Err(error)) => {
                         failed += 1;
+                        let (error_code, existing_fragment_id, existing_trashed) =
+                            import_error_details(&error);
                         let error = error.to_string();
                         let _ = on_event.send(ImportBatchEvent::Failed {
                             job_id: job_id.clone(),
                             request_id: request_id.clone(),
                             error: error.clone(),
+                            error_code: error_code.clone(),
+                            existing_fragment_id: existing_fragment_id.clone(),
+                            existing_trashed,
                         });
                         results.push(ImportBatchResult {
                             request_id,
                             ok: false,
                             fragment: None,
                             error: Some(error),
+                            error_code,
+                            existing_fragment_id,
+                            existing_trashed,
                         });
                     }
                     Err(_) => {
@@ -461,12 +560,18 @@ pub async fn import_image_batch(
                             job_id: job_id.clone(),
                             request_id: request_id.clone(),
                             error: error.clone(),
+                            error_code: None,
+                            existing_fragment_id: None,
+                            existing_trashed: None,
                         });
                         results.push(ImportBatchResult {
                             request_id,
                             ok: false,
                             fragment: None,
                             error: Some(error),
+                            error_code: None,
+                            existing_fragment_id: None,
+                            existing_trashed: None,
                         });
                     }
                 }
@@ -523,6 +628,52 @@ pub fn delete_fragment_everywhere(
         .core
         .delete_fragment_everywhere_with_policy(id, retention_days)
         .map_err(safe_error)
+}
+
+#[tauri::command]
+pub async fn delete_fragments(
+    state: State<'_, FragmentState>,
+    ids: Vec<String>,
+    retention_days: Option<u32>,
+) -> CommandResult<usize> {
+    if ids.len() > MAX_SELECTION_BATCH_SIZE {
+        return Err(format!(
+            "A batch can contain at most {MAX_SELECTION_BATCH_SIZE} Fragments"
+        ));
+    }
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let ids = ids.into_iter().collect::<BTreeSet<_>>();
+        for id in &ids {
+            core.delete_fragment_with_policy(id.clone(), retention_days)
+                .map_err(safe_error)?;
+        }
+        Ok(ids.len())
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub async fn restore_fragments(
+    state: State<'_, FragmentState>,
+    ids: Vec<String>,
+) -> CommandResult<usize> {
+    if ids.len() > MAX_SELECTION_BATCH_SIZE {
+        return Err(format!(
+            "A batch can contain at most {MAX_SELECTION_BATCH_SIZE} Fragments"
+        ));
+    }
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let ids = ids.into_iter().collect::<BTreeSet<_>>();
+        for id in &ids {
+            core.restore_fragment(id.clone()).map_err(safe_error)?;
+        }
+        Ok(ids.len())
+    })
+    .await
+    .map_err(safe_error)?
 }
 
 #[tauri::command]
@@ -686,5 +837,41 @@ mod tests {
         assert_eq!(page.total, 125);
         assert!(page.has_more);
         assert_eq!(page.revision, "revision");
+    }
+
+    #[test]
+    fn duplicate_membership_errors_include_existing_fragment_metadata() {
+        let error = CoreError::DuplicateMembership {
+            frame_id: "frame".to_string(),
+            fragment_id: "existing".to_string(),
+            trashed: true,
+        };
+
+        assert_eq!(
+            import_error_details(&error),
+            (
+                Some("duplicate_membership".to_string()),
+                Some("existing".to_string()),
+                Some(true),
+            )
+        );
+    }
+
+    #[test]
+    fn existing_assets_return_a_typed_duplicate_decision() {
+        let error = CoreError::ExistingAsset {
+            frame_id: "other-frame".to_string(),
+            fragment_id: "existing".to_string(),
+            trashed: false,
+        };
+
+        assert_eq!(
+            import_error_details(&error),
+            (
+                Some("duplicate_asset_elsewhere".to_string()),
+                Some("existing".to_string()),
+                Some(false),
+            )
+        );
     }
 }

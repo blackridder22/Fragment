@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Fragment } from "@fragment/shared";
 import {
   Clipboard,
@@ -57,6 +57,36 @@ export function FragmentDetailSheet({
     .join("\u0000");
   const assetSource = assetSources[previewIndex];
   const assetUrl = assetSource?.url ?? "";
+  const isDirty =
+    title !== (fragment.title ?? "") || note !== (fragment.note ?? "");
+
+  const save = useCallback(async () => {
+    setBusy(true);
+    try {
+      await onSave(title.trim() || null, note.trim() || null);
+    } finally {
+      setBusy(false);
+    }
+  }, [note, onSave, title]);
+  const confirmDiscard = useCallback(
+    () =>
+      !isDirty ||
+      window.confirm("Discard the unsaved changes to this Fragment?"),
+    [isDirty],
+  );
+  const requestClose = useCallback(() => {
+    if (confirmDiscard()) {
+      onClose();
+    }
+  }, [confirmDiscard, onClose]);
+  const navigate = useCallback(
+    (action: () => void) => {
+      if (confirmDiscard()) {
+        action();
+      }
+    },
+    [confirmDiscard],
+  );
 
   useEffect(() => {
     if (copyResetTimer.current !== null) {
@@ -84,6 +114,13 @@ export function FragmentDetailSheet({
 
   useEffect(() => {
     function handleDetailNavigation(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (!busy) {
+          void save();
+        }
+        return;
+      }
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -95,25 +132,16 @@ export function FragmentDetailSheet({
       }
       if (event.key === "ArrowLeft" && onPrevious) {
         event.preventDefault();
-        onPrevious();
+        navigate(onPrevious);
       } else if (event.key === "ArrowRight" && onNext) {
         event.preventDefault();
-        onNext();
+        navigate(onNext);
       }
     }
 
     window.addEventListener("keydown", handleDetailNavigation);
     return () => window.removeEventListener("keydown", handleDetailNavigation);
-  }, [onNext, onPrevious]);
-
-  async function save() {
-    setBusy(true);
-    try {
-      await onSave(title.trim() || null, note.trim() || null);
-    } finally {
-      setBusy(false);
-    }
-  }
+  }, [busy, navigate, onNext, onPrevious, save]);
 
   async function copyImage() {
     if (!assetUrl) {
@@ -171,7 +199,7 @@ export function FragmentDetailSheet({
             aria-label="Previous Fragment"
             className="icon-button"
             disabled={!onPrevious}
-            onClick={onPrevious}
+            onClick={() => (onPrevious ? navigate(onPrevious) : undefined)}
             title="Previous Fragment"
             type="button"
           >
@@ -181,7 +209,7 @@ export function FragmentDetailSheet({
             aria-label="Next Fragment"
             className="icon-button"
             disabled={!onNext}
-            onClick={onNext}
+            onClick={() => (onNext ? navigate(onNext) : undefined)}
             title="Next Fragment"
             type="button"
           >
@@ -189,7 +217,7 @@ export function FragmentDetailSheet({
           </button>
         </div>
       }
-      onClose={onClose}
+      onClose={requestClose}
     >
       <div className="detail-sheet">
         <div className="detail-preview" data-transparent={transparentAsset}>

@@ -8,6 +8,7 @@ export type SelectionState =
   | {
       mode: "all-matching";
       scopeKey: string;
+      matchingIds: string[];
       excludedIds: string[];
       anchorId: string | null;
     };
@@ -52,13 +53,15 @@ export function selectionReducer(
       return createSelectionState(action.scopeKey);
     }
     if (state.mode === "all-matching") {
+      const allMatchingIds = state.matchingIds;
+      const allMatchingSet = new Set(allMatchingIds);
       return {
         ...state,
-        excludedIds: state.excludedIds.filter((id) => validIds.has(id)),
+        excludedIds: state.excludedIds.filter((id) => allMatchingSet.has(id)),
         anchorId:
-          state.anchorId && validIds.has(state.anchorId)
+          state.anchorId && allMatchingSet.has(state.anchorId)
             ? state.anchorId
-            : (matchingIds[0] ?? null),
+            : (allMatchingIds[0] ?? null),
       };
     }
     return {
@@ -76,6 +79,7 @@ export function selectionReducer(
     return {
       mode: "all-matching",
       scopeKey: action.scopeKey,
+      matchingIds,
       excludedIds: [],
       anchorId: matchingIds[0],
     };
@@ -102,12 +106,12 @@ export function selectionReducer(
       } else {
         excluded.add(action.id);
       }
-      if (excluded.size === matchingIds.length) {
+      if (excluded.size === scopedState.matchingIds.length) {
         return createSelectionState(action.scopeKey);
       }
       return {
         ...scopedState,
-        excludedIds: matchingIds.filter((id) => excluded.has(id)),
+        excludedIds: scopedState.matchingIds.filter((id) => excluded.has(id)),
         anchorId: action.id,
       };
     }
@@ -166,7 +170,7 @@ export function resolveSelectedIds(
   }
   if (state.mode === "all-matching") {
     const excluded = new Set(state.excludedIds);
-    return matchingIds.filter((id) => !excluded.has(id));
+    return state.matchingIds.filter((id) => !excluded.has(id));
   }
   const selected = new Set(state.ids);
   return matchingIds.filter((id) => selected.has(id));

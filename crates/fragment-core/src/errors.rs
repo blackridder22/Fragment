@@ -31,6 +31,14 @@ pub enum CoreError {
         trashed: bool,
     },
     #[error(
+        "asset already exists as Fragment {fragment_id} in Frame {frame_id} (trashed: {trashed})"
+    )]
+    ExistingAsset {
+        frame_id: String,
+        fragment_id: String,
+        trashed: bool,
+    },
+    #[error(
         "Fragment {fragment_id} cannot be restored because Fragment {existing_fragment_id} already belongs to the same Frame"
     )]
     RestoreConflict {

@@ -47,6 +47,7 @@ impl FragmentCore {
                 captured_from: Some(request.candidate.source.clone()),
             },
             request.tags.as_deref().unwrap_or_default(),
+            true,
         )?;
         let thumbnail_path = result
             .fragments

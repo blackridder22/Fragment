@@ -26,8 +26,8 @@
   --radius-md: 14px;
   --radius-lg: 22px;
   --font:
-    "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-    "Segoe UI", system-ui, sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
   --font-accent: "Caveat", "Brush Script MT", cursive;
   --neon: #89f7ff;
 }

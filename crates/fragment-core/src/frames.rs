@@ -594,12 +594,8 @@ mod tests {
         let first = core
             .import_image(None, source_path.to_string_lossy().to_string(), None)
             .expect("inbox import");
-        core.import_image(
-            Some(frame.id.clone()),
-            source_path.to_string_lossy().to_string(),
-            None,
-        )
-        .expect("shared import");
+        core.add_existing_fragment_to_frame(first.id.clone(), Some(frame.id.clone()))
+            .expect("shared membership");
         let original = core
             .paths()
             .resolve_relative_path(&first.original_path)

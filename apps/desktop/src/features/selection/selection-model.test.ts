@@ -38,29 +38,37 @@ describe("selectionReducer", () => {
     ]);
   });
 
-  it("keeps all-matching selection query-aware as records refresh", () => {
+  it("keeps the complete all-matching query while visible pages refresh", () => {
     let state = selectionReducer(createSelectionState(vaultScope), {
       type: "select-all",
       scopeKey: vaultScope,
-      matchingIds: ["a", "b"],
+      matchingIds: ["a", "b", "c", "d"],
     });
 
     expect(state.mode).toBe("all-matching");
-    expect(resolveSelectedIds(state, vaultScope, ["a", "b", "c"])).toEqual([
+    state = selectionReducer(state, {
+      type: "reconcile",
+      scopeKey: vaultScope,
+      matchingIds: ["a", "b"],
+    });
+    expect(resolveSelectedIds(state, vaultScope, ["a", "b"])).toEqual([
       "a",
       "b",
       "c",
+      "d",
     ]);
 
     state = selectionReducer(state, {
       type: "toggle",
       scopeKey: vaultScope,
-      matchingIds: ["a", "b", "c"],
+      matchingIds: ["a", "b"],
       id: "b",
     });
-    expect(resolveSelectedIds(state, vaultScope, ["a", "b", "c", "d"])).toEqual(
-      ["a", "c", "d"],
-    );
+    expect(resolveSelectedIds(state, vaultScope, ["a", "b"])).toEqual([
+      "a",
+      "c",
+      "d",
+    ]);
   });
 
   it("clears selection when the query or Vault/Trash scope changes", () => {

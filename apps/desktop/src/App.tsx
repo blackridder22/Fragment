@@ -11,16 +11,7 @@ import {
 import type { Fragment, Frame } from "@fragment/shared";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import {
-  Monitor,
-  Moon,
-  Plug,
-  ShieldCheck,
-  Sun,
-  Trash2,
-  Undo2,
-  X,
-} from "lucide-react";
+import { Trash2, Undo2, X } from "lucide-react";
 import { AppShell } from "./app/AppShell";
 import { EmptyState } from "./components/EmptyState";
 import type { RailView } from "./components/IconRail";
@@ -34,6 +25,19 @@ import {
 } from "./components/TopCommandBar";
 import { CreateFrameModal } from "./features/frames/CreateFrameModal";
 import { FragmentDetailSheet } from "./features/fragments/FragmentDetailSheet";
+import {
+  importQueueReducer,
+  type ImportQueueItem,
+} from "./features/import/import-state";
+import { DuplicateImportModal } from "./features/import/DuplicateImportModal";
+import {
+  PendingImportCards,
+  PendingImportStatus,
+} from "./features/import/PendingImports";
+import {
+  mergeUniqueFragments,
+  readSnapshotMetadata,
+} from "./features/library/library-state";
 import { SelectionToolbar } from "./features/selection/SelectionToolbar";
 import {
   createSelectionState,
@@ -41,27 +45,39 @@ import {
   selectionKeyboardIntent,
   selectionReducer,
 } from "./features/selection/selection-model";
+import {
+  SettingsPage,
+  type DeletePolicy,
+  type ThemePreference,
+} from "./features/settings/SettingsPage";
+import { TrashedFramesList } from "./features/trash/TrashedFramesList";
 import type { AssetSource } from "./lib/assets";
 import {
+  addExistingFragmentToFrame,
   assetUrl,
-  checkImportDuplicate,
+  cancelImportJob,
   createFrame,
   deleteFragment,
   deleteFragmentEverywhere,
+  deleteFragments,
   deleteFrame,
-  ensureDefaultFrame,
-  importImage,
+  fragmentMembershipCount,
+  getFragmentAny,
+  getLibraryRevision,
+  importImageBatch,
   isTauriRuntime,
-  listAllFragments,
-  listFrames,
-  listTrashedFragments,
+  listFragmentIds,
+  listFragmentPage,
+  listTrashedFrames,
+  loadLibrarySnapshot,
   loadAssetDataUrl,
-  loadAssetRoot,
   openFragmentSource,
   renameFrame,
   revealFragmentInFinder,
-  restoreFragment,
+  restoreFragments,
+  restoreFrame,
   updateFragment,
+  type ImportBatchEvent,
 } from "./lib/tauri";
 import { demoFrames, demoFragments, isDemoFragment } from "./lib/demo-vault";
 
@@ -70,26 +86,25 @@ type FrameModalState =
   | { mode: "rename"; frame: Frame }
   | null;
 
-type PendingImport = {
-  id: string;
-  name: string;
-  path: string;
-  frameName: string;
-};
-
-type ThemeMode = "light" | "dark";
-type ThemePreference = ThemeMode | "system";
-type DeletePolicy = "forever" | "7" | "14" | "24" | "31";
+type ThemeMode = Exclude<ThemePreference, "system">;
 type TrashDropState = "idle" | "armed" | "success";
 type TrashDragPayload =
   | { kind: "fragments"; ids: string[] }
   | { kind: "frame"; id: string };
-type TrashUndoState = { ids: string[]; label: string } | null;
+type TrashUndoState =
+  | { kind: "fragments"; ids: string[]; label: string }
+  | { kind: "frame"; frameId: string; label: string }
+  | null;
+type DuplicateImportPrompt = {
+  item: ImportQueueItem;
+  existing: Fragment;
+};
 
 const THEME_STORAGE_KEY = "fragment-theme";
 const DELETE_POLICY_STORAGE_KEY = "fragment-delete-policy";
 const FRAGMENT_DRAG_MIME = "application/x-fragment-fragment-ids";
 const FRAME_DRAG_MIME = "application/x-fragment-frame-id";
+const LIBRARY_PAGE_SIZE = 60;
 
 function initialTheme(): ThemePreference {
   if (typeof window === "undefined") {
@@ -110,12 +125,16 @@ function initialSystemPrefersDark() {
 
 function initialDeletePolicy(): DeletePolicy {
   if (typeof window === "undefined") {
-    return "forever";
+    return "31";
   }
   const stored = window.localStorage.getItem(DELETE_POLICY_STORAGE_KEY);
-  return stored === "7" || stored === "14" || stored === "24" || stored === "31"
+  return stored === "forever" ||
+    stored === "7" ||
+    stored === "14" ||
+    stored === "24" ||
+    stored === "31"
     ? stored
-    : "forever";
+    : "31";
 }
 
 function resolvedThemePreference(
@@ -188,6 +207,12 @@ function uniqueValues(values: Array<string | null | undefined>) {
   );
 }
 
+function operationId(prefix: string) {
+  const suffix =
+    globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36);
+  return `${prefix}-${suffix}`;
+}
+
 function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -206,19 +231,59 @@ export default function App() {
   const [defaultFrameId, setDefaultFrameId] = useState<string | null>(null);
   const [frames, setFrames] = useState<Frame[]>([]);
   const [fragments, setFragments] = useState<Fragment[]>([]);
+  const [framePreviewFragments, setFramePreviewFragments] = useState<
+    Fragment[]
+  >([]);
+  const [frameFragmentCounts, setFrameFragmentCounts] = useState<
+    Record<string, number>
+  >({});
+  const [libraryRevision, setLibraryRevision] = useState("");
+  const [activeTotal, setActiveTotal] = useState(0);
+  const [activeHasMore, setActiveHasMore] = useState(false);
+  const [activePageLoading, setActivePageLoading] = useState(false);
   const [trashedFragments, setTrashedFragments] = useState<Fragment[]>([]);
-  const [pendingImports, setPendingImports] = useState<PendingImport[]>([]);
+  const [trashedFrames, setTrashedFrames] = useState<Frame[]>([]);
+  const [trashTotal, setTrashTotal] = useState(0);
+  const [trashHasMore, setTrashHasMore] = useState(false);
+  const [trashLoaded, setTrashLoaded] = useState(false);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [pendingImports, dispatchImportQueue] = useReducer(
+    importQueueReducer,
+    [],
+  );
+  const [duplicateImports, setDuplicateImports] = useState<
+    DuplicateImportPrompt[]
+  >([]);
   const [assetDataUrls, setAssetDataUrls] = useState<Record<string, string>>(
     {},
   );
   const assetFallbackRequests = useRef<
     Partial<Record<string, Promise<string | null>>>
   >({});
+  const revisionRef = useRef("");
+  const activeTotalRef = useRef(0);
+  const activeNextOffsetRef = useRef(0);
+  const selectedFrameIdRef = useRef<string | null>(null);
+  const activePageFrameIdRef = useRef<string | null>(null);
+  const fragmentsRef = useRef<Fragment[]>([]);
+  const trashedFragmentsRef = useRef<Fragment[]>([]);
+  const trashLoadedRef = useRef(false);
+  const trashLoadAttemptedRef = useRef(false);
+  const snapshotLoadingRef = useRef(false);
+  const activePageRequestRef = useRef(0);
+  const trashPageRequestRef = useRef(0);
+  const trashNextOffsetRef = useRef(0);
+  const completedImportRequests = useRef(new Set<string>());
   const trashDragPayload = useRef<TrashDragPayload | null>(null);
+  const importPathsRef = useRef<(paths: string[]) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
   const [selectedFragment, setSelectedFragment] = useState<Fragment | null>(
     null,
   );
+  const [selectedFragmentReferenceCount, setSelectedFragmentReferenceCount] =
+    useState(1);
   const [selection, dispatchSelection] = useReducer(
     selectionReducer,
     createSelectionState(),
@@ -241,39 +306,165 @@ export default function App() {
   const trashUndoTimer = useRef<number | null>(null);
   const previewMode = !isTauriRuntime();
 
-  const refresh = useCallback(async () => {
+  const rememberRevision = useCallback((revision: string) => {
+    revisionRef.current = revision;
+    setLibraryRevision(revision);
+  }, []);
+
+  const loadActivePage = useCallback(
+    async (frameId: string | null, reset: boolean) => {
+      if (!isTauriRuntime()) {
+        return;
+      }
+      const requestId = ++activePageRequestRef.current;
+      const offset = reset ? 0 : activeNextOffsetRef.current;
+      setActivePageLoading(true);
+      try {
+        const page = await listFragmentPage({
+          frameId,
+          offset,
+          limit: LIBRARY_PAGE_SIZE,
+        });
+        if (
+          requestId !== activePageRequestRef.current ||
+          selectedFrameIdRef.current !== frameId
+        ) {
+          return;
+        }
+        const nextFragments = reset
+          ? mergeUniqueFragments([], page.items)
+          : mergeUniqueFragments(fragmentsRef.current, page.items);
+        fragmentsRef.current = nextFragments;
+        setFragments(nextFragments);
+        activePageFrameIdRef.current = frameId;
+        activeNextOffsetRef.current = page.offset + page.items.length;
+        activeTotalRef.current = page.total;
+        setActiveTotal(page.total);
+        setActiveHasMore(page.hasMore);
+        rememberRevision(page.revision);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+        setStatus("Library page failed");
+      } finally {
+        if (requestId === activePageRequestRef.current) {
+          setActivePageLoading(false);
+        }
+      }
+    },
+    [rememberRevision],
+  );
+
+  const loadTrashPage = useCallback(
+    async (reset: boolean) => {
+      if (!isTauriRuntime()) {
+        return;
+      }
+      const requestId = ++trashPageRequestRef.current;
+      const offset = reset ? 0 : trashNextOffsetRef.current;
+      setTrashLoading(true);
+      try {
+        const [page, deletedFrames] = await Promise.all([
+          listFragmentPage({
+            trashed: true,
+            offset,
+            limit: LIBRARY_PAGE_SIZE,
+          }),
+          reset ? listTrashedFrames() : Promise.resolve(null),
+        ]);
+        if (requestId !== trashPageRequestRef.current) {
+          return;
+        }
+        const nextFragments = reset
+          ? mergeUniqueFragments([], page.items)
+          : mergeUniqueFragments(trashedFragmentsRef.current, page.items);
+        trashedFragmentsRef.current = nextFragments;
+        setTrashedFragments(nextFragments);
+        trashNextOffsetRef.current = page.offset + page.items.length;
+        setTrashTotal(page.total);
+        setTrashHasMore(page.hasMore);
+        if (deletedFrames) {
+          setTrashedFrames(deletedFrames);
+        }
+        trashLoadedRef.current = true;
+        setTrashLoaded(true);
+        rememberRevision(page.revision);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+        setStatus("Trash failed to load");
+      } finally {
+        if (requestId === trashPageRequestRef.current) {
+          setTrashLoading(false);
+        }
+      }
+    },
+    [rememberRevision],
+  );
+
+  const refreshSnapshot = useCallback(async () => {
     if (!isTauriRuntime()) {
       setFrames([]);
       setFragments([]);
+      fragmentsRef.current = [];
+      activeNextOffsetRef.current = 0;
+      setFramePreviewFragments([]);
+      setFrameFragmentCounts({});
       setTrashedFragments([]);
+      setTrashedFrames([]);
+      trashedFragmentsRef.current = [];
+      trashNextOffsetRef.current = 0;
+      setTrashLoaded(false);
+      trashLoadedRef.current = false;
+      trashLoadAttemptedRef.current = false;
       setAssetRoot("");
       setDefaultFrameId(null);
+      activeTotalRef.current = 0;
+      setActiveTotal(0);
+      setActiveHasMore(false);
       setError(null);
       setStatus("Browser preview");
       return;
     }
+    if (snapshotLoadingRef.current) {
+      return;
+    }
 
+    snapshotLoadingRef.current = true;
     try {
       setError(null);
-      const defaultFrame = await ensureDefaultFrame();
-      const [nextFrames, nextFragments, nextTrashedFragments, nextRoot] =
-        await Promise.all([
-          listFrames(),
-          listAllFragments(),
-          listTrashedFragments(),
-          loadAssetRoot(),
-        ]);
-      setDefaultFrameId(defaultFrame.id);
-      setFrames(nextFrames);
-      setFragments(nextFragments);
-      setTrashedFragments(nextTrashedFragments);
-      setAssetRoot(nextRoot);
+      const snapshot = await loadLibrarySnapshot(LIBRARY_PAGE_SIZE);
+      const metadata = readSnapshotMetadata(snapshot);
+      setDefaultFrameId(snapshot.defaultFrame.id);
+      setFrames(snapshot.frames);
+      setFramePreviewFragments(snapshot.fragments);
+      setFrameFragmentCounts(metadata.frameCounts);
+      setTrashTotal(metadata.trashTotal);
+      setAssetRoot(snapshot.assetRoot);
+      rememberRevision(snapshot.revision);
+
+      const activeFrameId = selectedFrameIdRef.current;
+      if (activeFrameId === null) {
+        const nextFragments = mergeUniqueFragments([], snapshot.fragments);
+        fragmentsRef.current = nextFragments;
+        setFragments(nextFragments);
+        activePageFrameIdRef.current = null;
+        activeNextOffsetRef.current = snapshot.fragments.length;
+        activeTotalRef.current = snapshot.fragmentTotal;
+        setActiveTotal(snapshot.fragmentTotal);
+        setActiveHasMore(snapshot.fragments.length < snapshot.fragmentTotal);
+      } else {
+        await loadActivePage(activeFrameId, true);
+      }
+      if (trashLoadedRef.current) {
+        await loadTrashPage(true);
+      }
       setStatus("Native host ready");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setStatus("Needs setup");
+    } finally {
+      snapshotLoadingRef.current = false;
     }
-  }, []);
+  }, [loadActivePage, loadTrashPage, rememberRevision]);
 
   const resolvedTheme = resolvedThemePreference(theme, systemPrefersDark);
 
@@ -305,8 +496,51 @@ export default function App() {
   }, [deletePolicy]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    revisionRef.current = libraryRevision;
+  }, [libraryRevision]);
+
+  useEffect(() => {
+    selectedFrameIdRef.current = selectedFrameId;
+  }, [selectedFrameId]);
+
+  useEffect(() => {
+    const fragment = selectedFragment;
+    if (!fragment || isDemoFragment(fragment) || !isTauriRuntime()) {
+      setSelectedFragmentReferenceCount(1);
+      return;
+    }
+    let cancelled = false;
+    void fragmentMembershipCount(fragment.id)
+      .then((count) => {
+        if (!cancelled) {
+          setSelectedFragmentReferenceCount(Math.max(1, count));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedFragmentReferenceCount(1);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFragment]);
+
+  useEffect(() => {
+    fragmentsRef.current = fragments;
+  }, [fragments]);
+
+  useEffect(() => {
+    activeTotalRef.current = activeTotal;
+  }, [activeTotal]);
+
+  useEffect(() => {
+    trashedFragmentsRef.current = trashedFragments;
+  }, [trashedFragments]);
+
+  useEffect(() => {
+    void refreshSnapshot();
+  }, [refreshSnapshot]);
 
   useEffect(
     () => () => {
@@ -318,10 +552,37 @@ export default function App() {
   );
 
   useEffect(() => {
-    const onFocus = () => void refresh();
+    const onFocus = () => {
+      if (!isTauriRuntime() || snapshotLoadingRef.current) {
+        return;
+      }
+      void getLibraryRevision()
+        .then((revision) => {
+          if (revision !== revisionRef.current) {
+            return refreshSnapshot();
+          }
+          return undefined;
+        })
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : String(caught));
+          setStatus("Revision check failed");
+        });
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [refresh]);
+  }, [refreshSnapshot]);
+
+  useEffect(() => {
+    if (
+      activeView === "trash" &&
+      !trashLoaded &&
+      !trashLoading &&
+      !trashLoadAttemptedRef.current
+    ) {
+      trashLoadAttemptedRef.current = true;
+      void loadTrashPage(true);
+    }
+  }, [activeView, loadTrashPage, trashLoaded, trashLoading]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -340,7 +601,7 @@ export default function App() {
           }
           if (event.payload.type === "drop") {
             setDragActive(false);
-            void importPaths(event.payload.paths);
+            void importPathsRef.current(event.payload.paths);
           }
         })
         .then((unlisten) => {
@@ -353,20 +614,32 @@ export default function App() {
       setDragActive(false);
     }
     return () => dispose?.();
-  }, [selectedFrameId]);
+  }, []);
 
   const frameById = useMemo(
     () => new Map(frames.map((frame) => [frame.id, frame])),
     [frames],
   );
 
+  const cachedFragments = useMemo(
+    () => mergeUniqueFragments(framePreviewFragments, fragments),
+    [framePreviewFragments, fragments],
+  );
+
   const counts = useMemo(() => {
-    const next = new Map<string, number>();
-    for (const fragment of fragments) {
-      next.set(fragment.frameId, (next.get(fragment.frameId) ?? 0) + 1);
+    const next = new Map<string, number>(
+      Object.entries(frameFragmentCounts).map(([frameId, count]) => [
+        frameId,
+        count,
+      ]),
+    );
+    if (next.size === 0) {
+      for (const fragment of cachedFragments) {
+        next.set(fragment.frameId, (next.get(fragment.frameId) ?? 0) + 1);
+      }
     }
     return next;
-  }, [fragments]);
+  }, [cachedFragments, frameFragmentCounts]);
 
   const demoCounts = useMemo(() => {
     const next = new Map<string, number>();
@@ -447,7 +720,7 @@ export default function App() {
     frames.length > 0 ? counts : previewMode ? demoCounts : new Map();
   const visibleFrames = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    const sourceFragments = frames.length > 0 ? fragments : demoFragments;
+    const sourceFragments = frames.length > 0 ? cachedFragments : demoFragments;
     const matchingFrameIds =
       sourceFilter === "all"
         ? null
@@ -490,7 +763,7 @@ export default function App() {
     demoCounts,
     displayCounts,
     displayFrames,
-    fragments,
+    cachedFragments,
     frames.length,
     query,
     sortMode,
@@ -503,7 +776,7 @@ export default function App() {
     ? previewMode
       ? "Sample wall"
       : "No Fragments yet"
-    : `${galleryFragments.length} ${galleryFragments.length === 1 ? "Fragment" : "Fragments"}`;
+    : `${activeTotal} ${activeTotal === 1 ? "Fragment" : "Fragments"}`;
   const commandTitle =
     activeView === "settings"
       ? "Settings"
@@ -516,14 +789,22 @@ export default function App() {
     activeView === "settings"
       ? "Vault and native bridge"
       : activeView === "trash"
-        ? `${trashedFragments.length} ${trashedFragments.length === 1 ? "Fragment" : "Fragments"}`
+        ? trashLoading && !trashLoaded
+          ? "Loading Trash"
+          : `${trashTotal + trashedFrames.length} ${trashTotal + trashedFrames.length === 1 ? "item" : "items"}`
         : activeView === "frames"
           ? `${visibleFrames.length} ${visibleFrames.length === 1 ? "Frame" : "Frames"}`
           : mainSubtitle;
   const showEmptyState =
     !showDemoGallery &&
     galleryFragments.length === 0 &&
-    pendingImports.length === 0;
+    pendingImports.length === 0 &&
+    !activePageLoading &&
+    !activeHasMore;
+  const failedImportCount = pendingImports.filter(
+    (item) => item.status === "failed",
+  ).length;
+  const activeImportCount = pendingImports.length - failedImportCount;
   const visibleFragmentIds = useMemo(
     () => galleryFragments.map((fragment) => fragment.id),
     [galleryFragments],
@@ -555,6 +836,14 @@ export default function App() {
     () => visibleTrashedFragments.map((fragment) => fragment.id),
     [visibleTrashedFragments],
   );
+  const visibleTrashedFrames = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return trashedFrames
+      .filter(
+        (frame) => !normalized || frame.name.toLowerCase().includes(normalized),
+      )
+      .sort((left, right) => compareFrames(left, right, sortMode, new Map()));
+  }, [query, sortMode, trashedFrames]);
   const selectableFragmentIds =
     activeView === "trash"
       ? visibleTrashedFragmentIds
@@ -581,6 +870,21 @@ export default function App() {
     [selectedFragmentIds],
   );
   const selectedVisibleCount = selectedFragmentIds.length;
+  const selectedAllMatching =
+    selection.mode === "all-matching" &&
+    selection.scopeKey === selectionScopeKey;
+  const matchingSelectionTotal = selectedAllMatching
+    ? selection.matchingIds.length
+    : activeView === "trash"
+      ? trashTotal
+      : activeView === "home"
+        ? activeTotal
+        : selectableFragmentIds.length;
+  const canSelectAll = previewMode
+    ? selectableFragmentIds.length > 0
+    : activeView === "trash"
+      ? trashTotal > 0
+      : activeView === "home" && activeTotal > 0;
 
   useEffect(() => {
     dispatchSelection({
@@ -617,7 +921,14 @@ export default function App() {
       if (intent === "clear" && selectedFragmentIds.length === 0) {
         return;
       }
-      if (intent === "select-all" && selectableFragmentIds.length === 0) {
+      if (
+        intent === "select-all" &&
+        (previewMode
+          ? selectableFragmentIds.length === 0
+          : activeView === "trash"
+            ? trashTotal === 0
+            : activeTotal === 0)
+      ) {
         return;
       }
       if (intent === "toggle-focused" && !focusedId) {
@@ -626,11 +937,7 @@ export default function App() {
 
       event.preventDefault();
       if (intent === "select-all") {
-        dispatchSelection({
-          type: "select-all",
-          scopeKey: selectionScopeKey,
-          matchingIds: selectableFragmentIds,
-        });
+        void selectAllMatchingFragments();
       } else if (intent === "clear") {
         dispatchSelection({ type: "clear", scopeKey: selectionScopeKey });
       } else {
@@ -652,14 +959,32 @@ export default function App() {
     selectedFragment,
     selectedFragmentIds.length,
     selectionScopeKey,
+    activeTotal,
+    previewMode,
+    trashTotal,
   ]);
 
-  const selectFrame = useCallback((frameId: string | null) => {
-    setSelectedFragment(null);
-    setSelectedFrameId(frameId);
-    dispatchSelection({ type: "clear", scopeKey: "" });
-    setActiveView("home");
-  }, []);
+  const clearDuplicateImportPrompts = useCallback(() => {
+    for (const prompt of duplicateImports) {
+      dispatchImportQueue({ type: "skip", id: prompt.item.id });
+    }
+    setDuplicateImports([]);
+  }, [duplicateImports]);
+
+  const selectFrame = useCallback(
+    (frameId: string | null) => {
+      setSelectedFragment(null);
+      clearDuplicateImportPrompts();
+      selectedFrameIdRef.current = frameId;
+      setSelectedFrameId(frameId);
+      dispatchSelection({ type: "clear", scopeKey: "" });
+      setActiveView("home");
+      if (isTauriRuntime()) {
+        void loadActivePage(frameId, true);
+      }
+    },
+    [clearDuplicateImportPrompts, loadActivePage],
+  );
 
   function assetPathCandidates(fragment: Fragment, mode: "detail" | "gallery") {
     const paths =
@@ -766,12 +1091,38 @@ export default function App() {
     });
   }
 
-  function selectAllMatchingFragments() {
-    dispatchSelection({
-      type: "select-all",
-      scopeKey: selectionScopeKey,
-      matchingIds: selectableFragmentIds,
-    });
+  async function selectAllMatchingFragments() {
+    if (previewMode) {
+      dispatchSelection({
+        type: "select-all",
+        scopeKey: selectionScopeKey,
+        matchingIds: selectableFragmentIds,
+      });
+      return;
+    }
+
+    setStatus("Selecting matching Fragments");
+    try {
+      const matchingIds = await listFragmentIds({
+        frameId: activeView === "home" ? selectedFrameId : null,
+        trashed: activeView === "trash",
+        query,
+        sourceFilter,
+      });
+      dispatchSelection({
+        type: "select-all",
+        scopeKey: selectionScopeKey,
+        matchingIds,
+      });
+      setStatus(
+        matchingIds.length === 1
+          ? "Selected 1 Fragment"
+          : `Selected ${matchingIds.length} Fragments`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Selection failed");
+    }
   }
 
   function deselectAllFragments() {
@@ -808,91 +1159,290 @@ export default function App() {
     }
   }
 
+  function addImportedFragment(requestId: string, fragment: Fragment) {
+    if (completedImportRequests.current.has(requestId)) {
+      return;
+    }
+    completedImportRequests.current.add(requestId);
+
+    setFramePreviewFragments((current) =>
+      mergeUniqueFragments(current, [fragment], "prepend"),
+    );
+    setFrameFragmentCounts((current) => ({
+      ...current,
+      [fragment.frameId]: (current[fragment.frameId] ?? 0) + 1,
+    }));
+
+    const activeFrameId = selectedFrameIdRef.current;
+    if (activeFrameId === null || activeFrameId === fragment.frameId) {
+      const nextFragments = mergeUniqueFragments(
+        fragmentsRef.current,
+        [fragment],
+        "prepend",
+      );
+      fragmentsRef.current = nextFragments;
+      setFragments(nextFragments);
+      activeNextOffsetRef.current += 1;
+      const nextTotal = activeTotalRef.current + 1;
+      activeTotalRef.current = nextTotal;
+      setActiveTotal(nextTotal);
+      setActiveHasMore(nextFragments.length < nextTotal);
+    }
+  }
+
+  async function queueDuplicateImport(
+    item: ImportQueueItem,
+    errorCode: string,
+    existingFragmentId?: string | null,
+    existingTrashed?: boolean | null,
+  ) {
+    if (!existingFragmentId) {
+      return;
+    }
+    try {
+      const existing = await getFragmentAny(existingFragmentId);
+      setDuplicateImports((current) =>
+        current.some((prompt) => prompt.item.id === item.id)
+          ? current
+          : [
+              ...current,
+              {
+                item: {
+                  ...item,
+                  errorCode,
+                  existingFragmentId,
+                  existingTrashed: existingTrashed ?? false,
+                },
+                existing,
+              },
+            ],
+      );
+    } catch {
+      // The failed import card remains available if the existing record changed.
+    }
+  }
+
+  async function runImportBatch(items: ImportQueueItem[], enqueue: boolean) {
+    if (items.length === 0) {
+      return;
+    }
+    const jobId = items[0]!.jobId;
+    if (enqueue) {
+      dispatchImportQueue({ type: "enqueue", items });
+    }
+    setError(null);
+    setStatus(
+      items.length === 1
+        ? "Importing 1 image"
+        : `Importing ${items.length} images`,
+    );
+
+    try {
+      const results = await importImageBatch(
+        jobId,
+        items.map((item) => ({
+          requestId: item.id,
+          frameId: item.frameId,
+          filePath: item.path,
+        })),
+        (event: ImportBatchEvent) => {
+          if (event.event === "failed") {
+            dispatchImportQueue({
+              type: "event",
+              event: {
+                event: "failed",
+                requestId: event.requestId,
+                error: event.error,
+                errorCode: event.errorCode ?? undefined,
+                existingFragmentId: event.existingFragmentId ?? undefined,
+                existingTrashed: event.existingTrashed ?? undefined,
+              },
+            });
+            if (
+              event.errorCode === "duplicate_membership" ||
+              event.errorCode === "duplicate_asset_elsewhere"
+            ) {
+              const item = items.find(
+                (candidate) => candidate.id === event.requestId,
+              );
+              if (item) {
+                void queueDuplicateImport(
+                  item,
+                  event.errorCode,
+                  event.existingFragmentId,
+                  event.existingTrashed,
+                );
+              }
+            }
+          } else {
+            dispatchImportQueue({ type: "event", event });
+          }
+          if (event.event === "complete") {
+            addImportedFragment(event.requestId, event.fragment);
+          }
+        },
+      );
+
+      for (const result of results) {
+        if (result.ok && result.fragment) {
+          addImportedFragment(result.requestId, result.fragment);
+          dispatchImportQueue({
+            type: "event",
+            event: { event: "complete", requestId: result.requestId },
+          });
+        } else if (result.error) {
+          dispatchImportQueue({
+            type: "event",
+            event: {
+              event: "failed",
+              requestId: result.requestId,
+              error: result.error,
+              errorCode: result.errorCode ?? undefined,
+              existingFragmentId: result.existingFragmentId ?? undefined,
+              existingTrashed: result.existingTrashed ?? undefined,
+            },
+          });
+          if (
+            result.errorCode === "duplicate_membership" ||
+            result.errorCode === "duplicate_asset_elsewhere"
+          ) {
+            const item = items.find(
+              (candidate) => candidate.id === result.requestId,
+            );
+            if (item) {
+              void queueDuplicateImport(
+                item,
+                result.errorCode,
+                result.existingFragmentId,
+                result.existingTrashed,
+              );
+            }
+          }
+        }
+      }
+
+      const completed = results.filter((result) => result.ok).length;
+      const failed = results.length - completed;
+      setStatus(
+        failed > 0
+          ? `${failed} ${failed === 1 ? "import needs" : "imports need"} attention`
+          : completed === 1
+            ? "Imported Fragment"
+            : `Imported ${completed} Fragments`,
+      );
+      try {
+        rememberRevision(await getLibraryRevision());
+      } catch {
+        // A later focus revision check will reconcile the library.
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      dispatchImportQueue({
+        type: "fail",
+        ids: items.map((item) => item.id),
+        error: message,
+      });
+      setError(message);
+      setStatus("Import failed");
+    }
+  }
+
+  function retryImport(item: ImportQueueItem) {
+    const jobId = operationId("import-job");
+    const retryItem = { ...item, jobId, status: "queued" as const };
+    dispatchImportQueue({ type: "retry", id: item.id, jobId });
+    void runImportBatch([retryItem], false);
+  }
+
+  async function cancelImport(item: ImportQueueItem) {
+    await cancelImportJob(item.jobId);
+    setStatus(`Cancelling ${item.name}`);
+  }
+
+  function skipImport(item: ImportQueueItem) {
+    dispatchImportQueue({ type: "skip", id: item.id });
+    setStatus(`Skipped ${item.name}`);
+  }
+
+  function dismissDuplicateImport() {
+    const prompt = duplicateImports[0];
+    if (!prompt) {
+      return;
+    }
+    dispatchImportQueue({ type: "skip", id: prompt.item.id });
+    setDuplicateImports((current) => current.slice(1));
+    setStatus(`Kept existing ${prompt.existing.title ?? "Fragment"}`);
+  }
+
+  async function openDuplicateImport() {
+    const prompt = duplicateImports[0];
+    if (!prompt) {
+      return;
+    }
+    if (prompt.item.existingTrashed) {
+      changeView("trash");
+      await loadTrashPage(true);
+    } else {
+      selectFrame(prompt.existing.frameId);
+    }
+    setSelectedFragment(prompt.existing);
+    dispatchImportQueue({ type: "skip", id: prompt.item.id });
+    setDuplicateImports((current) => current.slice(1));
+  }
+
+  async function renameDuplicateImport(title: string) {
+    const prompt = duplicateImports[0];
+    if (!prompt) {
+      return;
+    }
+    const updated = await updateFragment(
+      prompt.existing.id,
+      title,
+      prompt.existing.note ?? null,
+    );
+    dispatchImportQueue({ type: "skip", id: prompt.item.id });
+    setDuplicateImports((current) => current.slice(1));
+    setSelectedFragment(updated);
+    setStatus("Renamed existing Fragment");
+    await refreshSnapshot();
+  }
+
+  async function addDuplicateImportToFrame() {
+    const prompt = duplicateImports[0];
+    if (!prompt) {
+      return;
+    }
+    const fragment = await addExistingFragmentToFrame(
+      prompt.existing.id,
+      prompt.item.frameId,
+    );
+    addImportedFragment(prompt.item.id, fragment);
+    dispatchImportQueue({ type: "skip", id: prompt.item.id });
+    setDuplicateImports((current) => current.slice(1));
+    setStatus(`Added existing Fragment to ${prompt.item.frameName}`);
+    rememberRevision(await getLibraryRevision());
+  }
+
   async function importPaths(paths: string[]) {
     if (paths.length === 0) {
       return;
     }
+    const frameId = selectedFrameIdRef.current;
     const frameName = selectedDisplayFrame?.name ?? "Inbox";
-    const batch = paths.map((path, index) => ({
-      id: `${Date.now()}-${index}`,
+    const jobId = operationId("import-job");
+    const batch: ImportQueueItem[] = paths.map((path) => ({
+      id: operationId("import"),
+      jobId,
       name: fileNameFromPath(path),
       path,
+      frameId,
       frameName,
+      status: "queued",
     }));
-    setPendingImports((current) => [...batch, ...current]);
-
-    try {
-      setError(null);
-      setStatus(
-        paths.length === 1
-          ? "Importing 1 image"
-          : `Importing ${paths.length} images`,
-      );
-      let importedCount = 0;
-      for (const item of batch) {
-        const duplicate = await checkImportDuplicate(
-          selectedFrameId,
-          item.path,
-        );
-        let titleOverride: string | null | undefined;
-        if (duplicate.duplicate) {
-          if (duplicate.kind === "same_image_in_vault") {
-            const existingFrameName =
-              duplicate.existingFrameName ?? "another Frame";
-            const confirmed = window.confirm(
-              `This exact image already exists in ${existingFrameName}.\n\nAdd it to ${frameName} too? Fragment will share the same local asset, not duplicate the file.`,
-            );
-            if (!confirmed) {
-              setPendingImports((current) =>
-                current.filter((pending) => pending.id !== item.id),
-              );
-              continue;
-            }
-          } else {
-            const reason =
-              duplicate.kind === "same_name_and_pixels"
-                ? `A Fragment named "${duplicate.existingTitle ?? item.name}" with the same pixel size already exists in this Frame.`
-                : `This exact image already exists in this Frame.`;
-            const renamed = window.prompt(
-              `${reason}\n\nEnter a new name to import it anyway, or press Cancel for Never mind.`,
-              duplicate.suggestedTitle ?? `${item.name} copy`,
-            );
-            if (!renamed?.trim()) {
-              setPendingImports((current) =>
-                current.filter((pending) => pending.id !== item.id),
-              );
-              continue;
-            }
-            titleOverride = renamed.trim();
-          }
-        }
-
-        const imported = await importImage(
-          selectedFrameId,
-          item.path,
-          titleOverride,
-        );
-        importedCount += 1;
-        setFragments((current) => [
-          imported,
-          ...current.filter((fragment) => fragment.id !== imported.id),
-        ]);
-        setPendingImports((current) =>
-          current.filter((pending) => pending.id !== item.id),
-        );
-      }
-      void refresh();
-      setStatus(importedCount > 0 ? "Imported" : "Import cancelled");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-      setStatus("Import failed");
-      setPendingImports((current) =>
-        current.filter(
-          (pending) => !batch.some((item) => item.id === pending.id),
-        ),
-      );
-    }
+    await runImportBatch(batch, true);
   }
+
+  importPathsRef.current = importPaths;
 
   async function chooseImages() {
     if (!isTauriRuntime()) {
@@ -918,11 +1468,20 @@ export default function App() {
   function changeView(view: RailView) {
     setSelectedFragment(null);
     setFrameModal(null);
+    clearDuplicateImportPrompts();
     dispatchSelection({ type: "clear", scopeKey: "" });
     if (view === "trash" || view === "settings") {
+      selectedFrameIdRef.current = null;
       setSelectedFrameId(null);
     }
     setActiveView(view);
+    if (
+      view === "home" &&
+      activePageFrameIdRef.current !== selectedFrameIdRef.current &&
+      isTauriRuntime()
+    ) {
+      void loadActivePage(selectedFrameIdRef.current, true);
+    }
   }
 
   async function submitFrame(name: string) {
@@ -935,12 +1494,13 @@ export default function App() {
       await renameFrame(frameModal.frame.id, name);
     } else {
       const created = await createFrame(name);
+      selectedFrameIdRef.current = created.id;
       setSelectedFrameId(created.id);
       setSelectedFragment(null);
       setActiveView("home");
     }
     setFrameModal(null);
-    await refresh();
+    await refreshSnapshot();
   }
 
   async function removeFrame(frame: Frame) {
@@ -949,19 +1509,18 @@ export default function App() {
       return;
     }
     const count = counts.get(frame.id) ?? 0;
-    if (count > 0) {
-      const confirmed = window.confirm(
-        `Delete "${frame.name}" and its ${count} Fragments? This cannot be undone.`,
-      );
-      if (!confirmed) {
-        return;
-      }
+    const confirmed = window.confirm(
+      `${deletePolicy === "forever" ? "Delete" : "Move"} "${frame.name}"${count > 0 ? ` with its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""} ${deletePolicy === "forever" ? "forever" : `to Trash for ${deletePolicy} days`}?`,
+    );
+    if (!confirmed) {
+      return;
     }
-    await deleteFrame(frame.id);
+    await deleteFrame(frame.id, deleteRetentionDays());
     if (selectedFrameId === frame.id) {
+      selectedFrameIdRef.current = null;
       setSelectedFrameId(null);
     }
-    await refresh();
+    await refreshSnapshot();
   }
 
   async function saveSelectedFragment(
@@ -973,10 +1532,10 @@ export default function App() {
     }
     const updated = await updateFragment(selectedFragment.id, title, note);
     setSelectedFragment(updated);
-    await refresh();
+    await refreshSnapshot();
   }
 
-  function sharedReferenceCount(fragment: Fragment) {
+  function loadedSharedReferenceCount(fragment: Fragment) {
     if (!fragment.assetId) {
       return 1;
     }
@@ -985,11 +1544,22 @@ export default function App() {
     ).length;
   }
 
+  async function resolveSharedReferenceCount(fragment: Fragment) {
+    if (isTauriRuntime()) {
+      try {
+        return Math.max(1, await fragmentMembershipCount(fragment.id));
+      } catch {
+        // Fall back to the currently loaded page if the record changed.
+      }
+    }
+    return loadedSharedReferenceCount(fragment);
+  }
+
   async function removeSelectedFragment() {
     if (!selectedFragment) {
       return;
     }
-    const sharedCount = sharedReferenceCount(selectedFragment);
+    const sharedCount = await resolveSharedReferenceCount(selectedFragment);
     const confirmed = window.confirm(
       sharedCount > 1
         ? `Remove "${selectedFragment.title ?? "Fragment"}" from this Frame? The shared image stays in ${sharedCount - 1} other ${sharedCount - 1 === 1 ? "place" : "places"}.`
@@ -1000,25 +1570,25 @@ export default function App() {
     }
     await deleteFragment(selectedFragment.id, deleteRetentionDays());
     setSelectedFragment(null);
-    await refresh();
+    await refreshSnapshot();
   }
 
   async function removeSelectedFragmentEverywhere() {
     if (!selectedFragment) {
       return;
     }
-    const sharedCount = sharedReferenceCount(selectedFragment);
+    const sharedCount = await resolveSharedReferenceCount(selectedFragment);
     const confirmed = window.confirm(
       `Delete "${selectedFragment.title ?? "Fragment"}" everywhere? This removes ${sharedCount} ${sharedCount === 1 ? "reference" : "references"} and the shared image file.`,
     );
     if (!confirmed) {
       return;
     }
-    await deleteFragmentEverywhere(selectedFragment.id);
+    await deleteFragmentEverywhere(selectedFragment.id, deleteRetentionDays());
     setSelectedFragment(null);
     deselectAllFragments();
     setStatus("Deleted everywhere");
-    await refresh();
+    await refreshSnapshot();
   }
 
   async function removeSelectedFragments() {
@@ -1032,11 +1602,9 @@ export default function App() {
     if (!confirmed) {
       return;
     }
-    await Promise.all(
-      ids.map((id) => deleteFragment(id, deleteRetentionDays())),
-    );
+    await deleteFragments(ids, deleteRetentionDays());
     deselectAllFragments();
-    await refresh();
+    await refreshSnapshot();
   }
 
   async function restoreSelectedFragments() {
@@ -1044,14 +1612,14 @@ export default function App() {
     if (ids.length === 0) {
       return;
     }
-    await Promise.all(ids.map((id) => restoreFragment(id)));
+    await restoreFragments(ids);
     deselectAllFragments();
     setStatus(
       ids.length === 1
         ? "Restored Fragment"
         : `Restored ${ids.length} Fragments`,
     );
-    await refresh();
+    await refreshSnapshot();
   }
 
   function dragTypes(event: DragEvent<HTMLElement>) {
@@ -1109,8 +1677,22 @@ export default function App() {
   function offerTrashUndo(ids: string[]) {
     dismissTrashUndo();
     setTrashUndo({
+      kind: "fragments",
       ids,
       label: `${ids.length} ${ids.length === 1 ? "Fragment" : "Fragments"} moved to Trash`,
+    });
+    trashUndoTimer.current = window.setTimeout(() => {
+      trashUndoTimer.current = null;
+      setTrashUndo(null);
+    }, 6000);
+  }
+
+  function offerFrameTrashUndo(frame: Frame) {
+    dismissTrashUndo();
+    setTrashUndo({
+      kind: "frame",
+      frameId: frame.id,
+      label: `${frame.name} moved to Trash`,
     });
     trashUndoTimer.current = window.setTimeout(() => {
       trashUndoTimer.current = null;
@@ -1122,16 +1704,21 @@ export default function App() {
     if (!trashUndo) {
       return;
     }
-    const ids = trashUndo.ids;
+    const undo = trashUndo;
     dismissTrashUndo();
     try {
-      await Promise.all(ids.map((id) => restoreFragment(id)));
-      setStatus(
-        ids.length === 1
-          ? "Restored Fragment"
-          : `Restored ${ids.length} Fragments`,
-      );
-      await refresh();
+      if (undo.kind === "frame") {
+        await restoreFrame(undo.frameId);
+        setStatus("Restored Frame");
+      } else {
+        await restoreFragments(undo.ids);
+        setStatus(
+          undo.ids.length === 1
+            ? "Restored Fragment"
+            : `Restored ${undo.ids.length} Fragments`,
+        );
+      }
+      await refreshSnapshot();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setStatus("Restore failed");
@@ -1195,9 +1782,7 @@ export default function App() {
         return false;
       }
     }
-    await Promise.all(
-      realIds.map((id) => deleteFragment(id, deleteRetentionDays())),
-    );
+    await deleteFragments(realIds, deleteRetentionDays());
     deselectAllFragments();
     setSelectedFragment((current) =>
       current && realIds.includes(current.id) ? null : current,
@@ -1210,7 +1795,7 @@ export default function App() {
         ? "Deleted Fragment"
         : `Moved ${realIds.length} to Trash`,
     );
-    await refresh();
+    await refreshSnapshot();
     return true;
   }
 
@@ -1225,21 +1810,37 @@ export default function App() {
     }
     const count = counts.get(frame.id) ?? 0;
     const confirmed = window.confirm(
-      `Delete "${frame.name}" permanently${count > 0 ? ` with its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""}? Frame restore is not available yet.`,
+      `${deletePolicy === "forever" ? "Delete" : "Move"} "${frame.name}"${count > 0 ? ` with its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""} ${deletePolicy === "forever" ? "forever" : `to Trash for ${deletePolicy} days`}?`,
     );
     if (!confirmed) {
       return false;
     }
-    await deleteFrame(frame.id);
+    await deleteFrame(frame.id, deleteRetentionDays());
     if (selectedFrameId === frame.id) {
+      selectedFrameIdRef.current = null;
       setSelectedFrameId(null);
     }
     dispatchSelection({ type: "clear", scopeKey: "" });
     setSelectedFragment(null);
-    setActiveView("frames");
-    setStatus("Deleted Frame");
-    await refresh();
+    if (deletePolicy !== "forever") {
+      offerFrameTrashUndo(frame);
+    }
+    setStatus(
+      deletePolicy === "forever" ? "Deleted Frame" : "Moved Frame to Trash",
+    );
+    await refreshSnapshot();
     return true;
+  }
+
+  async function restoreTrashedFrame(frame: Frame) {
+    try {
+      await restoreFrame(frame.id);
+      setStatus(`Restored ${frame.name}`);
+      await refreshSnapshot();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Frame restore failed");
+    }
   }
 
   async function handleTrashDrop(event: DragEvent<HTMLElement>) {
@@ -1289,7 +1890,7 @@ export default function App() {
       <div className="frame-card-grid">
         {visibleFrames.map((frame) => {
           const frameFragments = (
-            frames.length > 0 ? fragments : demoFragments
+            frames.length > 0 ? cachedFragments : demoFragments
           ).filter((fragment) => fragment.frameId === frame.id);
           const demo = frame.id.startsWith("demo-");
           const protectedFrame = !demo && isProtectedFrame(frame);
@@ -1361,8 +1962,8 @@ export default function App() {
         onSelectAll={
           (activeView === "home" || activeView === "trash") &&
           selectedVisibleCount === 0 &&
-          selectableFragmentIds.length > 0
-            ? selectAllMatchingFragments
+          canSelectAll
+            ? () => void selectAllMatchingFragments()
             : undefined
         }
         showLibraryTools={
@@ -1388,30 +1989,23 @@ export default function App() {
 
         {activeView === "home" ? (
           <SelectionToolbar
-            allMatching={
-              selection.mode === "all-matching" &&
-              selection.scopeKey === selectionScopeKey
-            }
+            allMatching={selectedAllMatching}
             context="vault"
             count={selectedVisibleCount}
-            totalCount={selectableFragmentIds.length}
+            totalCount={matchingSelectionTotal}
             onClear={deselectAllFragments}
             onDelete={() => void removeSelectedFragments()}
-            onSelectAll={selectAllMatchingFragments}
+            onSelectAll={() => void selectAllMatchingFragments()}
           />
         ) : null}
 
         {error ? <div className="error-banner">{error}</div> : null}
 
         {pendingImports.length > 0 ? (
-          <div className="import-status" aria-live="polite">
-            <span />
-            <strong>
-              Importing {pendingImports.length}{" "}
-              {pendingImports.length === 1 ? "Fragment" : "Fragments"}
-            </strong>
-            <small>You can keep using Fragment while this finishes.</small>
-          </div>
+          <PendingImportStatus
+            activeCount={activeImportCount}
+            failedCount={failedImportCount}
+          />
         ) : null}
 
         {activeView === "frames" ? (
@@ -1425,23 +2019,33 @@ export default function App() {
                 <span>
                   {deletePolicy === "forever"
                     ? "Delete forever is active"
-                    : `Fragments stay here for ${deletePolicy} days`}
+                    : `Frames and Fragments stay here for ${deletePolicy} days`}
                 </span>
               </div>
             </div>
             <SelectionToolbar
-              allMatching={
-                selection.mode === "all-matching" &&
-                selection.scopeKey === selectionScopeKey
-              }
+              allMatching={selectedAllMatching}
               context="trash"
               count={selectedVisibleCount}
-              totalCount={selectableFragmentIds.length}
+              totalCount={matchingSelectionTotal}
               onClear={deselectAllFragments}
               onRestore={() => void restoreSelectedFragments()}
-              onSelectAll={selectAllMatchingFragments}
+              onSelectAll={() => void selectAllMatchingFragments()}
             />
-            {visibleTrashedFragments.length === 0 ? (
+            {visibleTrashedFrames.length > 0 ? (
+              <TrashedFramesList
+                frames={visibleTrashedFrames}
+                onRestore={restoreTrashedFrame}
+              />
+            ) : null}
+            {trashLoading && !trashLoaded ? (
+              <div className="import-status" aria-live="polite">
+                <span />
+                <strong>Loading Trash</strong>
+                <small>Your active library remains available.</small>
+              </div>
+            ) : visibleTrashedFragments.length === 0 &&
+              visibleTrashedFrames.length === 0 ? (
               <EmptyState
                 actionLabel="Back to Vault"
                 title={
@@ -1449,7 +2053,7 @@ export default function App() {
                 }
                 onAction={() => changeView("home")}
               />
-            ) : (
+            ) : visibleTrashedFragments.length > 0 ? (
               <div className="gallery-wrap trash-gallery">
                 <MasonryGrid
                   assetSourcesFor={(fragment) =>
@@ -1462,110 +2066,41 @@ export default function App() {
                   selectedIds={selectedFragmentIdSet}
                   onSelect={handleFragmentCardSelect}
                 />
+                {trashHasMore ? (
+                  <div className="section-heading" aria-live="polite">
+                    <span>
+                      Showing {trashedFragments.length} of {trashTotal}
+                    </span>
+                    <button
+                      className="button compact"
+                      disabled={trashLoading}
+                      onClick={() => void loadTrashPage(false)}
+                      type="button"
+                    >
+                      {trashLoading ? "Loading" : "Load More"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            )}
+            ) : null}
           </section>
         ) : activeView === "settings" ? (
-          <section className="utility-panel utility-panel-wide settings-page">
-            <p className="panel-kicker">Vault settings</p>
-            <h1>Local library, native bridge, protected defaults.</h1>
-            <div className="settings-grid">
-              <article>
-                <Plug size={19} />
-                <span>Capture connection</span>
-                <strong>{status}</strong>
-              </article>
-              <article>
-                <ShieldCheck size={19} />
-                <span>System Frame</span>
-                <strong>Inbox cannot be renamed or deleted</strong>
-              </article>
-              <article className="settings-theme-card">
-                <Trash2 size={19} />
-                <span>Delete behavior</span>
-                <strong>
-                  {deletePolicy === "forever"
-                    ? "Delete forever"
-                    : `Trash for ${deletePolicy} days`}
-                </strong>
-                <div
-                  className="theme-toggle"
-                  aria-label="Delete behavior"
-                  role="group"
-                >
-                  {(["forever", "7", "14", "24", "31"] as DeletePolicy[]).map(
-                    (policy) => (
-                      <button
-                        aria-pressed={deletePolicy === policy}
-                        className="theme-option"
-                        data-active={deletePolicy === policy}
-                        key={policy}
-                        onClick={() => setDeletePolicy(policy)}
-                        type="button"
-                      >
-                        {policy === "forever" ? "Forever" : `${policy}d`}
-                      </button>
-                    ),
-                  )}
-                </div>
-              </article>
-              <article className="settings-theme-card">
-                <Sun size={19} />
-                <span>Appearance</span>
-                <strong>Window theme</strong>
-                <div
-                  className="theme-toggle"
-                  aria-label="Appearance"
-                  role="group"
-                >
-                  <button
-                    aria-pressed={theme === "system"}
-                    className="theme-option"
-                    data-active={theme === "system"}
-                    onClick={() => setTheme("system")}
-                    type="button"
-                  >
-                    <Monitor aria-hidden="true" size={15} />
-                    System
-                  </button>
-                  <button
-                    aria-pressed={theme === "light"}
-                    className="theme-option"
-                    data-active={theme === "light"}
-                    onClick={() => setTheme("light")}
-                    type="button"
-                  >
-                    <Sun aria-hidden="true" size={15} />
-                    Light
-                  </button>
-                  <button
-                    aria-pressed={theme === "dark"}
-                    className="theme-option"
-                    data-active={theme === "dark"}
-                    onClick={() => setTheme("dark")}
-                    type="button"
-                  >
-                    <Moon aria-hidden="true" size={15} />
-                    Dark
-                  </button>
-                </div>
-              </article>
-            </div>
-          </section>
+          <SettingsPage
+            deletePolicy={deletePolicy}
+            theme={theme}
+            onDeletePolicyChange={setDeletePolicy}
+            onThemeChange={setTheme}
+          />
         ) : (
           <>
             <section className="fragment-section">
               {pendingImports.length > 0 ? (
-                <div className="pending-import-grid" aria-live="polite">
-                  {pendingImports.map((item) => (
-                    <article className="pending-import-card" key={item.id}>
-                      <div className="pending-import-preview" />
-                      <span>{item.frameName}</span>
-                      <strong>{item.name}</strong>
-                      <small>Importing Fragment</small>
-                    </article>
-                  ))}
-                </div>
+                <PendingImportCards
+                  items={pendingImports}
+                  onCancel={(item) => void cancelImport(item)}
+                  onRetry={retryImport}
+                  onSkip={skipImport}
+                />
               ) : null}
               {showEmptyState ? (
                 <EmptyState
@@ -1587,6 +2122,24 @@ export default function App() {
                     selectedIds={selectedFragmentIdSet}
                     onSelect={handleFragmentCardSelect}
                   />
+                  {!showDemoGallery && (activeHasMore || activePageLoading) ? (
+                    <div className="section-heading" aria-live="polite">
+                      <span>
+                        Showing {fragments.length} of {activeTotal}
+                      </span>
+                      <button
+                        aria-label={`Load more Fragments. Showing ${fragments.length} of ${activeTotal}`}
+                        className="button compact"
+                        disabled={activePageLoading || !activeHasMore}
+                        onClick={() =>
+                          void loadActivePage(selectedFrameIdRef.current, false)
+                        }
+                        type="button"
+                      >
+                        {activePageLoading ? "Loading" : "Load More"}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </section>
@@ -1630,12 +2183,34 @@ export default function App() {
         />
       ) : null}
 
+      {duplicateImports[0] ? (
+        <DuplicateImportModal
+          canAddToFrame={
+            duplicateImports[0].item.errorCode === "duplicate_asset_elsewhere"
+          }
+          existingFrameName={
+            frameById.get(duplicateImports[0].existing.frameId)?.name ??
+            "another Frame"
+          }
+          existingTitle={
+            duplicateImports[0].existing.title ?? duplicateImports[0].item.name
+          }
+          fileName={duplicateImports[0].item.name}
+          frameName={duplicateImports[0].item.frameName}
+          trashed={duplicateImports[0].item.existingTrashed ?? false}
+          onAddToFrame={addDuplicateImportToFrame}
+          onCancel={dismissDuplicateImport}
+          onOpenExisting={openDuplicateImport}
+          onRenameExisting={renameDuplicateImport}
+        />
+      ) : null}
+
       {selectedFragment ? (
         <FragmentDetailSheet
           assetSources={assetSourcesFor(selectedFragment, "detail")}
           transparentAsset={isTransparentAsset(selectedFragment)}
           fragment={selectedFragment}
-          sharedReferenceCount={sharedReferenceCount(selectedFragment)}
+          sharedReferenceCount={selectedFragmentReferenceCount}
           onAssetFallback={resolveAssetFallback}
           onClose={() => setSelectedFragment(null)}
           onDelete={removeSelectedFragment}

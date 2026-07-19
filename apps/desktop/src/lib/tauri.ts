@@ -33,6 +33,9 @@ export type ImportBatchResult = {
   ok: boolean;
   fragment?: Fragment | null;
   error?: string | null;
+  errorCode?: string | null;
+  existingFragmentId?: string | null;
+  existingTrashed?: boolean | null;
 };
 
 export type ImportBatchEvent =
@@ -44,7 +47,15 @@ export type ImportBatchEvent =
       requestId: string;
       fragment: Fragment;
     }
-  | { event: "failed"; jobId: string; requestId: string; error: string }
+  | {
+      event: "failed";
+      jobId: string;
+      requestId: string;
+      error: string;
+      errorCode?: string | null;
+      existingFragmentId?: string | null;
+      existingTrashed?: boolean | null;
+    }
   | { event: "cancelled"; jobId: string; requestId: string }
   | {
       event: "finished";
@@ -79,7 +90,9 @@ export async function ensureDefaultFrame(): Promise<Frame> {
   return invoke("ensure_default_frame");
 }
 
-export async function loadLibrarySnapshot(limit = 60): Promise<LibrarySnapshot> {
+export async function loadLibrarySnapshot(
+  limit = 60,
+): Promise<LibrarySnapshot> {
   return invoke("load_library_snapshot", { limit });
 }
 
@@ -93,7 +106,21 @@ export async function listFragmentPage(options: {
     frameId: options.frameId ?? null,
     trashed: options.trashed ?? false,
     offset: options.offset ?? 0,
-    limit: options.limit ?? 60
+    limit: options.limit ?? 60,
+  });
+}
+
+export async function listFragmentIds(options: {
+  frameId?: string | null;
+  trashed?: boolean;
+  query?: string;
+  sourceFilter?: "all" | "source" | "local" | "png";
+}): Promise<string[]> {
+  return invoke("list_fragment_ids", {
+    frameId: options.frameId ?? null,
+    trashed: options.trashed ?? false,
+    query: options.query?.trim() || null,
+    sourceFilter: options.sourceFilter ?? "all",
   });
 }
 
@@ -115,7 +142,7 @@ export async function renameFrame(id: string, name: string): Promise<Frame> {
 
 export async function deleteFrame(
   id: string,
-  retentionDays: number | null = 31
+  retentionDays: number | null = 31,
 ): Promise<void> {
   if (retentionDays === null) {
     return invoke("hard_delete_frame", { id });
@@ -153,15 +180,33 @@ export async function listTrashedFragments(): Promise<Fragment[]> {
 export async function updateFragment(
   id: string,
   title: string | null,
-  note: string | null
+  note: string | null,
 ): Promise<Fragment> {
   return invoke("update_fragment", { id, title, note });
+}
+
+export async function getFragmentAny(id: string): Promise<Fragment> {
+  return invoke("get_fragment_any", { id });
+}
+
+export async function fragmentMembershipCount(id: string): Promise<number> {
+  return invoke("fragment_membership_count", { id });
+}
+
+export async function addExistingFragmentToFrame(
+  existingFragmentId: string,
+  frameId: string | null,
+): Promise<Fragment> {
+  return invoke("add_existing_fragment_to_frame", {
+    existingFragmentId,
+    frameId,
+  });
 }
 
 export async function importImage(
   frameId: string | null,
   filePath: string,
-  titleOverride?: string | null
+  titleOverride?: string | null,
 ): Promise<Fragment> {
   return invoke("import_image", { frameId, filePath, titleOverride });
 }
@@ -169,7 +214,7 @@ export async function importImage(
 export async function importImageBatch(
   jobId: string,
   items: ImportBatchItem[],
-  onEvent: (event: ImportBatchEvent) => void
+  onEvent: (event: ImportBatchEvent) => void,
 ): Promise<ImportBatchResult[]> {
   const channel = new Channel<ImportBatchEvent>();
   channel.onmessage = onEvent;
@@ -182,14 +227,14 @@ export async function cancelImportJob(jobId: string): Promise<void> {
 
 export async function checkImportDuplicate(
   frameId: string | null,
-  filePath: string
+  filePath: string,
 ): Promise<ImportDuplicateCheck> {
   return invoke("check_import_duplicate", { frameId, filePath });
 }
 
 export async function deleteFragment(
   id: string,
-  retentionDays?: number | null
+  retentionDays?: number | null,
 ): Promise<void> {
   return invoke("delete_fragment", { id, retentionDays });
 }
@@ -200,9 +245,20 @@ export async function restoreFragment(id: string): Promise<Fragment> {
 
 export async function deleteFragmentEverywhere(
   id: string,
-  retentionDays: number | null = 31
+  retentionDays: number | null = 31,
 ): Promise<void> {
   return invoke("delete_fragment_everywhere", { id, retentionDays });
+}
+
+export async function deleteFragments(
+  ids: string[],
+  retentionDays: number | null,
+): Promise<number> {
+  return invoke("delete_fragments", { ids, retentionDays });
+}
+
+export async function restoreFragments(ids: string[]): Promise<number> {
+  return invoke("restore_fragments", { ids });
 }
 
 export async function revealFragmentInFinder(id: string): Promise<void> {
