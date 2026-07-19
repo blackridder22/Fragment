@@ -108,11 +108,25 @@ copying its Chrome extension ID:
 scripts/install-native-host-macos.sh <chrome-extension-id>
 ```
 
+The installer prefers the host bundled inside an installed or locally built
+`Fragment.app`, then falls back to a release/debug workspace binary. This keeps
+Chrome connected after the source checkout is moved or cleaned.
+
 Uninstall it with:
 
 ```bash
 scripts/uninstall-native-host-macos.sh
 ```
+
+Build a complete local app/extension release with checksums and a release
+manifest:
+
+```bash
+pnpm release:local
+```
+
+Artifacts are written under `target/release/artifacts/v<version>/`; the app
+bundle remains under `target/release/bundle/macos/Fragment.app`.
 
 ## MVP Scope
 

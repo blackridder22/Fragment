@@ -25,15 +25,16 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline';",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$HOME/Library/Application Support/Fragment/**/*"
-        ]
+        "scope": ["$HOME/Library/Application Support/Fragment/**/*"]
       }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../../target/release/fragment-host": "fragment-host"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

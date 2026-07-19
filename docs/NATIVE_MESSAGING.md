@@ -82,6 +82,12 @@ Install for local development:
 scripts/install-native-host-macos.sh <chrome-extension-id>
 ```
 
+Without an explicit host path, the installer checks the host bundled in
+`Fragment.app` first, then release and debug workspace binaries. Production
+builds bundle `fragment-host` at
+`Fragment.app/Contents/Resources/fragment-host` so the manifest does not depend
+on a repository path.
+
 The development manifest is written to:
 
 ```txt
