@@ -75,7 +75,7 @@ pub enum ImportBatchEvent {
     Complete {
         job_id: String,
         request_id: String,
-        fragment: Fragment,
+        fragment: Box<Fragment>,
     },
     Failed {
         job_id: String,
@@ -430,7 +430,7 @@ pub async fn import_image_batch(
                         let _ = on_event.send(ImportBatchEvent::Complete {
                             job_id: job_id.clone(),
                             request_id: request_id.clone(),
-                            fragment: fragment.clone(),
+                            fragment: Box::new(fragment.clone()),
                         });
                         results.push(ImportBatchResult {
                             request_id,
@@ -541,7 +541,7 @@ pub fn reveal_fragment_in_finder(state: State<'_, FragmentState>, id: String) ->
             .arg(path)
             .status()
             .map_err(safe_error)?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
