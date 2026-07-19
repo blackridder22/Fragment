@@ -1,0 +1,86 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Clean checkout
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+          version: 10.20.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: pnpm
+          node-version-file: .nvmrc
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          components: clippy, rustfmt
+          toolchain: 1.96.0
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fragment-quality
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint TypeScript and JavaScript
+        if: ${{ !cancelled() }}
+        run: pnpm lint
+
+      - name: Typecheck workspaces
+        if: ${{ !cancelled() }}
+        run: pnpm typecheck
+
+      - name: Run TypeScript tests
+        if: ${{ !cancelled() }}
+        run: pnpm test
+
+      - name: Verify deterministic Vault fixtures
+        if: ${{ !cancelled() }}
+        run: pnpm benchmark:vault:fixtures:verify
+
+      - name: Check Rust formatting
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run Rust tests
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --locked
+
+      - name: Build Chrome extension
+        if: ${{ !cancelled() }}
+        run: pnpm build:extension
+
+      - name: Build desktop frontend
+        if: ${{ !cancelled() }}
+        run: pnpm build:desktop:frontend

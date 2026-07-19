@@ -6,17 +6,17 @@ Host name:
 com.autoscale.fragment
 ```
 
-The host reads Chrome Native Messaging messages from stdin and writes responses
-to stdout. Diagnostics go to stderr only.
+The native host reads Chrome Native Messaging messages from stdin and writes
+responses to stdout. Diagnostics go to stderr or a log file, never stdout.
 
 Each message is:
 
 ```txt
-4-byte little-endian length
+4-byte little-endian payload length
 UTF-8 JSON payload
 ```
 
-## Supported Requests
+## Supported requests
 
 ```ts
 type NativeRequest =
@@ -25,9 +25,46 @@ type NativeRequest =
   | CaptureFragmentRequest;
 ```
 
-## Manifest
+`CaptureFragmentRequest` supports preferred `frameIds: string[]` destinations
+and the legacy `frameId` fallback. See `CAPTURE_PROTOCOL.md` for exact capture
+and shared-asset semantics.
 
-Example:
+## Supported responses
+
+```ts
+type NativeResponse =
+  | {
+      type: "pong";
+      requestId: string;
+      ok: true;
+      app: "Fragment";
+      version: string;
+    }
+  | { type: "frames.list.result"; requestId: string; ok: true; frames: Frame[] }
+  | CaptureFragmentResponse
+  | {
+      type: "error";
+      requestId?: string;
+      ok: false;
+      error: { code: string; message: string };
+    };
+```
+
+Every response to a valid request must echo its `requestId`. The extension must
+reject mismatched IDs rather than associating a stale response with a newer UI
+action.
+
+## Version compatibility
+
+- The root, npm workspaces, Cargo packages, Tauri app, and extension manifests
+  use application version `0.0.3` while this release is in development.
+- `extensionVersion` reports the sender build.
+- `pong.version` reports the native host build.
+- Neither field is currently a protocol version.
+- Explicit protocol negotiation and one-version backward compatibility remain
+  v0.0.3 release work; any added field must be optional for the previous client.
+
+## Development manifest
 
 ```json
 {
@@ -35,9 +72,7 @@ Example:
   "description": "Fragment native messaging host",
   "path": "/absolute/path/to/fragment-host",
   "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
-  ]
+  "allowed_origins": ["chrome-extension://REPLACE_WITH_EXTENSION_ID/"]
 }
 ```
 
@@ -47,23 +82,28 @@ Install for local development:
 scripts/install-native-host-macos.sh <chrome-extension-id>
 ```
 
-Manifest destination:
+The development manifest is written to:
 
 ```txt
 ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.autoscale.fragment.json
 ```
 
-## Debugging
+This script points at a local build and is not a production installer. The
+v0.0.3 distribution target is a signed host bundled at a stable path inside
+`Fragment.app`, with an install/repair action that changes the Chrome manifest
+only after the bundled host answers `ping`.
 
-Run the host tests:
+## Debugging
 
 ```bash
 cargo test -p fragment-host
+pnpm smoke:native-host
 ```
 
 If Chrome cannot connect, verify:
 
-- The manifest path exists.
-- The `path` points to an executable `fragment-host`.
-- The extension ID matches the loaded unpacked extension.
-- Host logs are not written to stdout.
+- The manifest exists at Chrome's expected path.
+- `path` points to an executable host.
+- `allowed_origins` contains the exact loaded extension ID.
+- The host writes no diagnostics to stdout.
+- The host and extension report compatible application versions.
