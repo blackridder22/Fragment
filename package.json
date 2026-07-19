@@ -1,6 +1,6 @@
 {
   "name": "fragment",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "description": "Fragment by Auto Scale Agency - a local-first visual reference vault.",
   "license": "MIT",
@@ -13,6 +13,7 @@
     "smoke:extension-capture": "node scripts/extension-capture-smoke.mjs",
     "smoke:native-host": "node scripts/native-host-smoke.mjs",
     "benchmark:pinterest-quality": "node scripts/pinterest-quality-benchmark.mjs",
+    "version:set": "node scripts/set-version.mjs",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",

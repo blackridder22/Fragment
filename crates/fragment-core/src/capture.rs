@@ -459,7 +459,7 @@ mod tests {
             note: Some("captured note".to_string()),
             tags: Some(vec!["glass".to_string(), " reference ".to_string()]),
             requested_at: "2026-06-24T12:00:00Z".to_string(),
-            extension_version: "0.0.2".to_string(),
+            extension_version: "0.0.3".to_string(),
         }
     }
 
