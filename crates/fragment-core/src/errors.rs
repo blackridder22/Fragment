@@ -22,6 +22,23 @@ pub enum CoreError {
     InvalidInput(String),
     #[error("duplicate fragment: {0}")]
     DuplicateFragment(String),
+    #[error(
+        "asset already belongs to Frame {frame_id} as Fragment {fragment_id} (trashed: {trashed})"
+    )]
+    DuplicateMembership {
+        frame_id: String,
+        fragment_id: String,
+        trashed: bool,
+    },
+    #[error(
+        "Fragment {fragment_id} cannot be restored because Fragment {existing_fragment_id} already belongs to the same Frame"
+    )]
+    RestoreConflict {
+        fragment_id: String,
+        existing_fragment_id: String,
+    },
+    #[error("database schema version {found} is newer than supported version {supported}")]
+    UnsupportedSchemaVersion { found: i64, supported: i64 },
     #[error("download is too large")]
     DownloadTooLarge,
     #[error("unsupported image source")]

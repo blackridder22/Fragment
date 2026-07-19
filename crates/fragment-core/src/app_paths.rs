@@ -11,7 +11,7 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
-    pub fn default() -> CoreResult<Self> {
+    pub fn discover() -> CoreResult<Self> {
         if let Some(path) = std::env::var_os("FRAGMENT_APP_DATA_DIR") {
             return Self::from_root(PathBuf::from(path));
         }
@@ -21,7 +21,7 @@ impl AppPaths {
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .ok_or_else(|| CoreError::InvalidInput("HOME is not set".to_string()))?;
-            return Self::from_root(home.join("Library/Application Support/Fragment"));
+            Self::from_root(home.join("Library/Application Support/Fragment"))
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -32,6 +32,11 @@ impl AppPaths {
                 })?;
             Self::from_root(project_dirs.data_dir().to_path_buf())
         }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> CoreResult<Self> {
+        Self::discover()
     }
 
     pub fn from_root(root: PathBuf) -> CoreResult<Self> {

@@ -57,6 +57,22 @@ pub struct ImportDuplicateCheck {
     pub height: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileCleanupReport {
+    pub removed: u64,
+    pub deferred: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeReport {
+    pub fragments: u64,
+    pub frames: u64,
+    pub assets: u64,
+    pub cleanup: FileCleanupReport,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CandidateRect {

@@ -6,7 +6,6 @@ use url::Url;
 use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
 use crate::fragments::NewFragmentAsset;
-use crate::hashing::sha256_hex;
 use crate::models::{
     CaptureError, CaptureFragmentRequest, CaptureFragmentResponse, ImageUrlCandidate,
 };
@@ -30,45 +29,39 @@ impl FragmentCore {
             bytes,
             format,
         } = self.download_capture_image(&request)?;
-        let sha256 = sha256_hex(&bytes);
-
-        let mut fragment_ids = Vec::new();
-        let mut duplicate_ids = Vec::new();
-        let mut thumbnail_path = None;
-        for frame_id in frame_ids {
-            if let Some(existing_id) = self.duplicate_fragment_id_in_frame(&frame_id, &sha256)? {
-                duplicate_ids.push(existing_id);
-                continue;
-            }
-
-            let fragment = self.insert_fragment_from_asset(
-                &frame_id,
-                NewFragmentAsset {
-                    bytes: bytes.clone(),
-                    format,
-                    title: request
-                        .candidate
-                        .title
-                        .clone()
-                        .or_else(|| request.candidate.alt.clone()),
-                    note: request.note.clone(),
-                    source_url: Some(image_url.clone()),
-                    page_url: Some(request.candidate.page_url.clone()),
-                    site_name: request.candidate.site_name.clone(),
-                    creator_name: None,
-                    captured_from: Some(request.candidate.source.clone()),
-                },
-                false,
-            )?;
-
-            if let Some(tags) = request.tags.as_deref() {
-                self.insert_tags(&fragment.id, tags)?;
-            }
-            if thumbnail_path.is_none() {
-                thumbnail_path = Some(fragment.thumbnail_path.clone());
-            }
-            fragment_ids.push(fragment.id);
-        }
+        let result = self.insert_fragments_from_asset(
+            &frame_ids,
+            NewFragmentAsset {
+                bytes,
+                format,
+                title: request
+                    .candidate
+                    .title
+                    .clone()
+                    .or_else(|| request.candidate.alt.clone()),
+                note: request.note.clone(),
+                source_url: Some(image_url),
+                page_url: Some(request.candidate.page_url.clone()),
+                site_name: request.candidate.site_name.clone(),
+                creator_name: None,
+                captured_from: Some(request.candidate.source.clone()),
+            },
+            request.tags.as_deref().unwrap_or_default(),
+        )?;
+        let thumbnail_path = result
+            .fragments
+            .first()
+            .map(|fragment| fragment.thumbnail_path.clone());
+        let fragment_ids = result
+            .fragments
+            .into_iter()
+            .map(|fragment| fragment.id)
+            .collect::<Vec<_>>();
+        let duplicate_ids = result
+            .duplicates
+            .into_iter()
+            .map(|(fragment_id, _)| fragment_id)
+            .collect::<Vec<_>>();
 
         Ok(CaptureFragmentResponse {
             message_type: "capture.fragment.result".to_string(),
@@ -207,7 +200,7 @@ fn ranked_capture_urls(request: &CaptureFragmentRequest) -> CoreResult<Vec<Strin
         .into_iter()
         .filter_map(|candidate| candidate.valid())
         .collect::<Vec<_>>();
-    valid.sort_by(|left, right| right.score.cmp(&left.score));
+    valid.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
 
     let mut urls = Vec::new();
     for candidate in valid {
@@ -602,5 +595,10 @@ mod tests {
             .expect("fragment b");
         assert_eq!(a.asset_id, b.asset_id);
         assert_eq!(a.original_path, b.original_path);
+        let conn = core.conn().expect("conn");
+        let tag_memberships: i64 = conn
+            .query_row("SELECT count(*) FROM fragment_tags", [], |row| row.get(0))
+            .expect("tag memberships");
+        assert_eq!(tag_memberships, 4);
     }
 }

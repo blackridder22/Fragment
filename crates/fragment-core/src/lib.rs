@@ -12,6 +12,6 @@ pub mod thumbnails;
 pub use db::FragmentCore;
 pub use errors::{CoreError, CoreResult};
 pub use models::{
-    CandidateRect, CaptureError, CaptureFragmentRequest, CaptureFragmentResponse, Fragment, Frame,
-    ImageCandidate, ImportDuplicateCheck,
+    CandidateRect, CaptureError, CaptureFragmentRequest, CaptureFragmentResponse,
+    FileCleanupReport, Fragment, Frame, ImageCandidate, ImportDuplicateCheck, PurgeReport,
 };
