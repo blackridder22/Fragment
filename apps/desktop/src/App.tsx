@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type DragEvent,
@@ -11,14 +12,13 @@ import type { Fragment, Frame } from "@fragment/shared";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
-  CheckSquare,
   Monitor,
   Moon,
   Plug,
-  RotateCcw,
   ShieldCheck,
   Sun,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import { AppShell } from "./app/AppShell";
@@ -34,6 +34,13 @@ import {
 } from "./components/TopCommandBar";
 import { CreateFrameModal } from "./features/frames/CreateFrameModal";
 import { FragmentDetailSheet } from "./features/fragments/FragmentDetailSheet";
+import { SelectionToolbar } from "./features/selection/SelectionToolbar";
+import {
+  createSelectionState,
+  resolveSelectedIds,
+  selectionKeyboardIntent,
+  selectionReducer,
+} from "./features/selection/selection-model";
 import type { AssetSource } from "./lib/assets";
 import {
   assetUrl,
@@ -77,6 +84,7 @@ type TrashDropState = "idle" | "armed" | "success";
 type TrashDragPayload =
   | { kind: "fragments"; ids: string[] }
   | { kind: "frame"; id: string };
+type TrashUndoState = { ids: string[]; label: string } | null;
 
 const THEME_STORAGE_KEY = "fragment-theme";
 const DELETE_POLICY_STORAGE_KEY = "fragment-delete-policy";
@@ -180,6 +188,18 @@ function uniqueValues(values: Array<string | null | undefined>) {
   );
 }
 
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<RailView>("home");
   const [assetRoot, setAssetRoot] = useState("");
@@ -199,9 +219,9 @@ export default function App() {
   const [selectedFragment, setSelectedFragment] = useState<Fragment | null>(
     null,
   );
-  const [selectedFragmentIds, setSelectedFragmentIds] = useState<string[]>([]);
-  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(
-    null,
+  const [selection, dispatchSelection] = useReducer(
+    selectionReducer,
+    createSelectionState(),
   );
   const [frameModal, setFrameModal] = useState<FrameModalState>(null);
   const [query, setQuery] = useState("");
@@ -216,8 +236,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("Ready");
   const [dragActive, setDragActive] = useState(false);
-  const [trashDropState, setTrashDropState] =
-    useState<TrashDropState>("idle");
+  const [trashDropState, setTrashDropState] = useState<TrashDropState>("idle");
+  const [trashUndo, setTrashUndo] = useState<TrashUndoState>(null);
+  const trashUndoTimer = useRef<number | null>(null);
   const previewMode = !isTauriRuntime();
 
   const refresh = useCallback(async () => {
@@ -284,18 +305,17 @@ export default function App() {
   }, [deletePolicy]);
 
   useEffect(() => {
-    const fragmentIds = new Set([
-      ...fragments.map((fragment) => fragment.id),
-      ...demoFragments.map((fragment) => fragment.id),
-    ]);
-    setSelectedFragmentIds((current) =>
-      current.filter((id) => fragmentIds.has(id)),
-    );
-  }, [fragments]);
-
-  useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(
+    () => () => {
+      if (trashUndoTimer.current !== null) {
+        window.clearTimeout(trashUndoTimer.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const onFocus = () => void refresh();
@@ -489,25 +509,21 @@ export default function App() {
       ? "Settings"
       : activeView === "trash"
         ? "Trash"
-      : activeView === "frames"
-        ? "Frames"
-        : mainTitle;
+        : activeView === "frames"
+          ? "Frames"
+          : mainTitle;
   const commandSubtitle =
     activeView === "settings"
       ? "Vault and native bridge"
       : activeView === "trash"
         ? `${trashedFragments.length} ${trashedFragments.length === 1 ? "Fragment" : "Fragments"}`
-      : activeView === "frames"
-        ? `${visibleFrames.length} ${visibleFrames.length === 1 ? "Frame" : "Frames"}`
-        : mainSubtitle;
+        : activeView === "frames"
+          ? `${visibleFrames.length} ${visibleFrames.length === 1 ? "Frame" : "Frames"}`
+          : mainSubtitle;
   const showEmptyState =
     !showDemoGallery &&
     galleryFragments.length === 0 &&
     pendingImports.length === 0;
-  const selectedFragmentIdSet = useMemo(
-    () => new Set(selectedFragmentIds),
-    [selectedFragmentIds],
-  );
   const visibleFragmentIds = useMemo(
     () => galleryFragments.map((fragment) => fragment.id),
     [galleryFragments],
@@ -540,30 +556,108 @@ export default function App() {
     [visibleTrashedFragments],
   );
   const selectableFragmentIds =
-    activeView === "trash" ? visibleTrashedFragmentIds : visibleFragmentIds;
-  const selectedVisibleCount = useMemo(
+    activeView === "trash"
+      ? visibleTrashedFragmentIds
+      : activeView === "home"
+        ? visibleFragmentIds
+        : [];
+  const selectionScopeKey = useMemo(
     () =>
-      selectableFragmentIds.filter((id) => selectedFragmentIdSet.has(id))
-        .length,
-    [selectableFragmentIds, selectedFragmentIdSet],
+      [
+        activeView,
+        selectedFrameId ?? "all-frames",
+        query.trim().toLowerCase(),
+        sourceFilter,
+      ].join("\u0000"),
+    [activeView, query, selectedFrameId, sourceFilter],
   );
+  const selectedFragmentIds = useMemo(
+    () =>
+      resolveSelectedIds(selection, selectionScopeKey, selectableFragmentIds),
+    [selectableFragmentIds, selection, selectionScopeKey],
+  );
+  const selectedFragmentIdSet = useMemo(
+    () => new Set(selectedFragmentIds),
+    [selectedFragmentIds],
+  );
+  const selectedVisibleCount = selectedFragmentIds.length;
 
   useEffect(() => {
-    const visibleIds = new Set(selectableFragmentIds);
-    setSelectedFragmentIds((current) => {
-      const next = current.filter((id) => visibleIds.has(id));
-      return next.length === current.length ? current : next;
+    dispatchSelection({
+      type: "reconcile",
+      scopeKey: selectionScopeKey,
+      matchingIds: selectableFragmentIds,
     });
-    setSelectionAnchorId((current) =>
-      current && visibleIds.has(current) ? current : null,
-    );
-  }, [selectableFragmentIds]);
+  }, [selectableFragmentIds, selectionScopeKey]);
+
+  useEffect(() => {
+    function handleSelectionKeyDown(event: KeyboardEvent) {
+      if (
+        (activeView !== "home" && activeView !== "trash") ||
+        selectedFragment ||
+        frameModal ||
+        isEditableTarget(event.target)
+      ) {
+        return;
+      }
+
+      const focusedElement = document.activeElement as HTMLElement | null;
+      const focusedId = focusedElement?.dataset.fragmentId ?? null;
+      const intent = selectionKeyboardIntent(event.key, {
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        hasFocusedItem: Boolean(
+          focusedId && selectableFragmentIds.includes(focusedId),
+        ),
+        metaKey: event.metaKey,
+      });
+      if (!intent) {
+        return;
+      }
+      if (intent === "clear" && selectedFragmentIds.length === 0) {
+        return;
+      }
+      if (intent === "select-all" && selectableFragmentIds.length === 0) {
+        return;
+      }
+      if (intent === "toggle-focused" && !focusedId) {
+        return;
+      }
+
+      event.preventDefault();
+      if (intent === "select-all") {
+        dispatchSelection({
+          type: "select-all",
+          scopeKey: selectionScopeKey,
+          matchingIds: selectableFragmentIds,
+        });
+      } else if (intent === "clear") {
+        dispatchSelection({ type: "clear", scopeKey: selectionScopeKey });
+      } else {
+        dispatchSelection({
+          type: "toggle",
+          scopeKey: selectionScopeKey,
+          matchingIds: selectableFragmentIds,
+          id: focusedId!,
+        });
+      }
+    }
+
+    window.addEventListener("keydown", handleSelectionKeyDown);
+    return () => window.removeEventListener("keydown", handleSelectionKeyDown);
+  }, [
+    activeView,
+    frameModal,
+    selectableFragmentIds,
+    selectedFragment,
+    selectedFragmentIds.length,
+    selectionScopeKey,
+  ]);
 
   const selectFrame = useCallback((frameId: string | null) => {
     setSelectedFragment(null);
     setSelectedFrameId(frameId);
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    dispatchSelection({ type: "clear", scopeKey: "" });
     setActiveView("home");
   }, []);
 
@@ -654,48 +748,34 @@ export default function App() {
   }
 
   function toggleFragmentSelection(fragmentId: string) {
-    setSelectedFragmentIds((current) => {
-      const next = current.includes(fragmentId)
-        ? current.filter((id) => id !== fragmentId)
-        : [...current, fragmentId];
-      return next;
+    dispatchSelection({
+      type: "toggle",
+      scopeKey: selectionScopeKey,
+      matchingIds: selectableFragmentIds,
+      id: fragmentId,
     });
-    setSelectionAnchorId(fragmentId);
   }
 
-  function selectFragmentRange(fragmentId: string) {
-    const clickedIndex = selectableFragmentIds.indexOf(fragmentId);
-    if (clickedIndex === -1) {
-      return;
-    }
-    const anchorId =
-      selectionAnchorId && selectableFragmentIds.includes(selectionAnchorId)
-        ? selectionAnchorId
-        : selectedFragmentIds.find((id) => selectableFragmentIds.includes(id));
-    if (!anchorId) {
-      setSelectedFragmentIds([fragmentId]);
-      setSelectionAnchorId(fragmentId);
-      return;
-    }
-    const anchorIndex = selectableFragmentIds.indexOf(anchorId);
-    if (anchorIndex === -1) {
-      setSelectedFragmentIds([fragmentId]);
-      setSelectionAnchorId(fragmentId);
-      return;
-    }
-    const start = Math.min(anchorIndex, clickedIndex);
-    const end = Math.max(anchorIndex, clickedIndex);
-    setSelectedFragmentIds(selectableFragmentIds.slice(start, end + 1));
+  function selectFragmentRange(fragmentId: string, additive = false) {
+    dispatchSelection({
+      type: "range",
+      scopeKey: selectionScopeKey,
+      matchingIds: selectableFragmentIds,
+      id: fragmentId,
+      additive,
+    });
   }
 
-  function selectAllVisibleFragments() {
-    setSelectedFragmentIds(selectableFragmentIds);
-    setSelectionAnchorId(selectableFragmentIds[0] ?? null);
+  function selectAllMatchingFragments() {
+    dispatchSelection({
+      type: "select-all",
+      scopeKey: selectionScopeKey,
+      matchingIds: selectableFragmentIds,
+    });
   }
 
   function deselectAllFragments() {
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    dispatchSelection({ type: "clear", scopeKey: selectionScopeKey });
   }
 
   function deleteRetentionDays(): number | null {
@@ -714,21 +794,16 @@ export default function App() {
   ) {
     if (event.shiftKey) {
       event.preventDefault();
-      selectFragmentRange(fragment.id);
+      selectFragmentRange(fragment.id, event.metaKey || event.ctrlKey);
       return;
     }
-    if (
-      event.metaKey ||
-      event.ctrlKey ||
-      selectedFragmentIds.length > 0
-    ) {
+    if (event.metaKey || event.ctrlKey || selectedFragmentIds.length > 0) {
       event.preventDefault();
       toggleFragmentSelection(fragment.id);
       return;
     }
 
     if (!isDemoFragment(fragment)) {
-      setSelectionAnchorId(fragment.id);
       setSelectedFragment(fragment);
     }
   }
@@ -755,7 +830,10 @@ export default function App() {
       );
       let importedCount = 0;
       for (const item of batch) {
-        const duplicate = await checkImportDuplicate(selectedFrameId, item.path);
+        const duplicate = await checkImportDuplicate(
+          selectedFrameId,
+          item.path,
+        );
         let titleOverride: string | null | undefined;
         if (duplicate.duplicate) {
           if (duplicate.kind === "same_image_in_vault") {
@@ -840,8 +918,7 @@ export default function App() {
   function changeView(view: RailView) {
     setSelectedFragment(null);
     setFrameModal(null);
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    dispatchSelection({ type: "clear", scopeKey: "" });
     if (view === "trash" || view === "settings") {
       setSelectedFrameId(null);
     }
@@ -939,8 +1016,7 @@ export default function App() {
     }
     await deleteFragmentEverywhere(selectedFragment.id);
     setSelectedFragment(null);
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    deselectAllFragments();
     setStatus("Deleted everywhere");
     await refresh();
   }
@@ -959,8 +1035,7 @@ export default function App() {
     await Promise.all(
       ids.map((id) => deleteFragment(id, deleteRetentionDays())),
     );
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    deselectAllFragments();
     await refresh();
   }
 
@@ -970,10 +1045,11 @@ export default function App() {
       return;
     }
     await Promise.all(ids.map((id) => restoreFragment(id)));
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    deselectAllFragments();
     setStatus(
-      ids.length === 1 ? "Restored Fragment" : `Restored ${ids.length} Fragments`,
+      ids.length === 1
+        ? "Restored Fragment"
+        : `Restored ${ids.length} Fragments`,
     );
     await refresh();
   }
@@ -1002,7 +1078,10 @@ export default function App() {
 
   function handleTrashDragLeave(event: DragEvent<HTMLElement>) {
     const nextTarget = event.relatedTarget;
-    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+    if (
+      nextTarget instanceof Node &&
+      event.currentTarget.contains(nextTarget)
+    ) {
       return;
     }
     setTrashDropState("idle");
@@ -1019,6 +1098,46 @@ export default function App() {
     window.setTimeout(() => setTrashDropState("idle"), 620);
   }
 
+  function dismissTrashUndo() {
+    if (trashUndoTimer.current !== null) {
+      window.clearTimeout(trashUndoTimer.current);
+      trashUndoTimer.current = null;
+    }
+    setTrashUndo(null);
+  }
+
+  function offerTrashUndo(ids: string[]) {
+    dismissTrashUndo();
+    setTrashUndo({
+      ids,
+      label: `${ids.length} ${ids.length === 1 ? "Fragment" : "Fragments"} moved to Trash`,
+    });
+    trashUndoTimer.current = window.setTimeout(() => {
+      trashUndoTimer.current = null;
+      setTrashUndo(null);
+    }, 6000);
+  }
+
+  async function undoLastTrashMove() {
+    if (!trashUndo) {
+      return;
+    }
+    const ids = trashUndo.ids;
+    dismissTrashUndo();
+    try {
+      await Promise.all(ids.map((id) => restoreFragment(id)));
+      setStatus(
+        ids.length === 1
+          ? "Restored Fragment"
+          : `Restored ${ids.length} Fragments`,
+      );
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Restore failed");
+    }
+  }
+
   function handleFragmentDragStart(
     fragment: Fragment,
     event: DragEvent<HTMLElement>,
@@ -1028,7 +1147,8 @@ export default function App() {
       return;
     }
     const selectedIds =
-      selectedFragmentIds.includes(fragment.id) && selectedFragmentIds.length > 0
+      selectedFragmentIds.includes(fragment.id) &&
+      selectedFragmentIds.length > 0
         ? selectedFragmentIds
         : [fragment.id];
     const ids = Array.from(
@@ -1078,12 +1198,13 @@ export default function App() {
     await Promise.all(
       realIds.map((id) => deleteFragment(id, deleteRetentionDays())),
     );
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    deselectAllFragments();
     setSelectedFragment((current) =>
       current && realIds.includes(current.id) ? null : current,
     );
-    setActiveView(deletePolicy === "forever" ? "home" : "trash");
+    if (deletePolicy !== "forever") {
+      offerTrashUndo(realIds);
+    }
     setStatus(
       deletePolicy === "forever"
         ? "Deleted Fragment"
@@ -1104,7 +1225,7 @@ export default function App() {
     }
     const count = counts.get(frame.id) ?? 0;
     const confirmed = window.confirm(
-      `Drop "${frame.name}" into Trash? This removes the Frame${count > 0 ? ` and its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""}.`,
+      `Delete "${frame.name}" permanently${count > 0 ? ` with its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""}? Frame restore is not available yet.`,
     );
     if (!confirmed) {
       return false;
@@ -1113,8 +1234,7 @@ export default function App() {
     if (selectedFrameId === frame.id) {
       setSelectedFrameId(null);
     }
-    setSelectedFragmentIds([]);
-    setSelectionAnchorId(null);
+    dispatchSelection({ type: "clear", scopeKey: "" });
     setSelectedFragment(null);
     setActiveView("frames");
     setStatus("Deleted Frame");
@@ -1191,9 +1311,7 @@ export default function App() {
                 if (demo) {
                   return;
                 }
-                setSelectedFragment(null);
-                setSelectedFrameId(frame.id);
-                setActiveView("home");
+                selectFrame(frame.id);
               }}
               onRename={() =>
                 demo || protectedFrame
@@ -1206,6 +1324,22 @@ export default function App() {
       </div>
     </section>
   );
+
+  const detailFragments = (
+    activeView === "trash" ? visibleTrashedFragments : galleryFragments
+  ).filter((fragment) => !isDemoFragment(fragment));
+  const selectedDetailIndex = selectedFragment
+    ? detailFragments.findIndex(
+        (fragment) => fragment.id === selectedFragment.id,
+      )
+    : -1;
+
+  function navigateDetail(direction: -1 | 1) {
+    const nextFragment = detailFragments[selectedDetailIndex + direction];
+    if (nextFragment) {
+      setSelectedFragment(nextFragment);
+    }
+  }
 
   return (
     <AppShell
@@ -1224,6 +1358,13 @@ export default function App() {
         onImport={() => void chooseImages()}
         onSortChange={setSortMode}
         onSourceFilterChange={setSourceFilter}
+        onSelectAll={
+          (activeView === "home" || activeView === "trash") &&
+          selectedVisibleCount === 0 &&
+          selectableFragmentIds.length > 0
+            ? selectAllMatchingFragments
+            : undefined
+        }
         showLibraryTools={
           activeView === "home" ||
           activeView === "frames" ||
@@ -1236,7 +1377,7 @@ export default function App() {
       />
 
       <div className="content-stage" data-drag-active={dragActive}>
-        {activeView === "home" || activeView === "frames" ? (
+        {activeView === "home" ? (
           <FrameChipBar
             counts={displayCounts}
             frames={displayFrames}
@@ -1245,42 +1386,19 @@ export default function App() {
           />
         ) : null}
 
-        {activeView === "home" && galleryFragments.length > 0 ? (
-          <div className="selection-toolbar" aria-label="Fragment selection">
-            <button
-              aria-label="Select All"
-              className="button compact"
-              disabled={visibleFragmentIds.length === 0}
-              onClick={selectAllVisibleFragments}
-              type="button"
-            >
-              <CheckSquare aria-hidden="true" size={15} />
-              <span>Select All</span>
-            </button>
-            <button
-              aria-label="Deselect All"
-              className="button compact"
-              disabled={selectedFragmentIds.length === 0}
-              onClick={deselectAllFragments}
-              type="button"
-            >
-              <X aria-hidden="true" size={15} />
-              <span>Deselect All</span>
-            </button>
-            <button
-              aria-label="Delete selected Fragments"
-              className="button compact danger"
-              disabled={selectedFragmentIds.length === 0}
-              onClick={() => void removeSelectedFragments()}
-              type="button"
-            >
-              <Trash2 aria-hidden="true" size={15} />
-              <span>Delete</span>
-            </button>
-            <span className="selection-count">
-              {selectedVisibleCount} selected
-            </span>
-          </div>
+        {activeView === "home" ? (
+          <SelectionToolbar
+            allMatching={
+              selection.mode === "all-matching" &&
+              selection.scopeKey === selectionScopeKey
+            }
+            context="vault"
+            count={selectedVisibleCount}
+            totalCount={selectableFragmentIds.length}
+            onClear={deselectAllFragments}
+            onDelete={() => void removeSelectedFragments()}
+            onSelectAll={selectAllMatchingFragments}
+          />
         ) : null}
 
         {error ? <div className="error-banner">{error}</div> : null}
@@ -1311,50 +1429,23 @@ export default function App() {
                 </span>
               </div>
             </div>
-            {visibleTrashedFragments.length > 0 ? (
-              <div className="selection-toolbar" aria-label="Trash selection">
-                <button
-                  aria-label="Select All Trash"
-                  className="button compact"
-                  disabled={visibleTrashedFragmentIds.length === 0}
-                  onClick={selectAllVisibleFragments}
-                  type="button"
-                >
-                  <CheckSquare aria-hidden="true" size={15} />
-                  <span>Select All</span>
-                </button>
-                <button
-                  aria-label="Deselect All Trash"
-                  className="button compact"
-                  disabled={selectedFragmentIds.length === 0}
-                  onClick={deselectAllFragments}
-                  type="button"
-                >
-                  <X aria-hidden="true" size={15} />
-                  <span>Deselect All</span>
-                </button>
-                <button
-                  aria-label="Restore selected Fragments"
-                  className="button compact"
-                  disabled={selectedFragmentIds.length === 0}
-                  onClick={() => void restoreSelectedFragments()}
-                  type="button"
-                >
-                  <RotateCcw aria-hidden="true" size={15} />
-                  <span>Restore</span>
-                </button>
-                <span className="selection-count">
-                  {selectedVisibleCount} selected
-                </span>
-              </div>
-            ) : null}
+            <SelectionToolbar
+              allMatching={
+                selection.mode === "all-matching" &&
+                selection.scopeKey === selectionScopeKey
+              }
+              context="trash"
+              count={selectedVisibleCount}
+              totalCount={selectableFragmentIds.length}
+              onClear={deselectAllFragments}
+              onRestore={() => void restoreSelectedFragments()}
+              onSelectAll={selectAllMatchingFragments}
+            />
             {visibleTrashedFragments.length === 0 ? (
               <EmptyState
                 actionLabel="Back to Vault"
                 title={
-                  query.trim()
-                    ? "No matching Trash items"
-                    : "Trash is empty"
+                  query.trim() ? "No matching Trash items" : "Trash is empty"
                 }
                 onAction={() => changeView("home")}
               />
@@ -1367,6 +1458,7 @@ export default function App() {
                   draggable={false}
                   fragments={visibleTrashedFragments}
                   onAssetFallback={resolveAssetFallback}
+                  selectionActive={selectedVisibleCount > 0}
                   selectedIds={selectedFragmentIdSet}
                   onSelect={handleFragmentCardSelect}
                 />
@@ -1396,10 +1488,15 @@ export default function App() {
                     ? "Delete forever"
                     : `Trash for ${deletePolicy} days`}
                 </strong>
-                <div className="theme-toggle" aria-label="Delete behavior">
+                <div
+                  className="theme-toggle"
+                  aria-label="Delete behavior"
+                  role="group"
+                >
                   {(["forever", "7", "14", "24", "31"] as DeletePolicy[]).map(
                     (policy) => (
                       <button
+                        aria-pressed={deletePolicy === policy}
                         className="theme-option"
                         data-active={deletePolicy === policy}
                         key={policy}
@@ -1416,8 +1513,13 @@ export default function App() {
                 <Sun size={19} />
                 <span>Appearance</span>
                 <strong>Window theme</strong>
-                <div className="theme-toggle" aria-label="Appearance">
+                <div
+                  className="theme-toggle"
+                  aria-label="Appearance"
+                  role="group"
+                >
                   <button
+                    aria-pressed={theme === "system"}
                     className="theme-option"
                     data-active={theme === "system"}
                     onClick={() => setTheme("system")}
@@ -1427,6 +1529,7 @@ export default function App() {
                     System
                   </button>
                   <button
+                    aria-pressed={theme === "light"}
                     className="theme-option"
                     data-active={theme === "light"}
                     onClick={() => setTheme("light")}
@@ -1436,6 +1539,7 @@ export default function App() {
                     Light
                   </button>
                   <button
+                    aria-pressed={theme === "dark"}
                     className="theme-option"
                     data-active={theme === "dark"}
                     onClick={() => setTheme("dark")}
@@ -1479,17 +1583,40 @@ export default function App() {
                     onAssetFallback={resolveAssetFallback}
                     onDragEnd={handleDragEnd}
                     onDragStart={handleFragmentDragStart}
+                    selectionActive={selectedVisibleCount > 0}
                     selectedIds={selectedFragmentIdSet}
                     onSelect={handleFragmentCardSelect}
                   />
                 </div>
               )}
             </section>
-
-            {!selectedDisplayFrame ? frameCards : null}
           </>
         )}
       </div>
+
+      {trashUndo ? (
+        <div aria-label="Trash action" className="undo-toast" role="region">
+          <Trash2 aria-hidden="true" size={17} />
+          <strong aria-live="polite">{trashUndo.label}</strong>
+          <button
+            className="button compact"
+            onClick={() => void undoLastTrashMove()}
+            type="button"
+          >
+            <Undo2 aria-hidden="true" size={15} />
+            <span>Undo</span>
+          </button>
+          <button
+            aria-label="Dismiss Undo"
+            className="icon-button compact-icon"
+            onClick={dismissTrashUndo}
+            title="Dismiss"
+            type="button"
+          >
+            <X aria-hidden="true" size={15} />
+          </button>
+        </div>
+      ) : null}
 
       {frameModal ? (
         <CreateFrameModal
@@ -1516,6 +1643,15 @@ export default function App() {
           onOpenSource={() => openFragmentSource(selectedFragment.id)}
           onReveal={() => revealFragmentInFinder(selectedFragment.id)}
           onSave={saveSelectedFragment}
+          onNext={
+            selectedDetailIndex >= 0 &&
+            selectedDetailIndex < detailFragments.length - 1
+              ? () => navigateDetail(1)
+              : undefined
+          }
+          onPrevious={
+            selectedDetailIndex > 0 ? () => navigateDetail(-1) : undefined
+          }
         />
       ) : null}
     </AppShell>

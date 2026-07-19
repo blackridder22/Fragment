@@ -13,6 +13,7 @@ type FragmentCardProps = {
   assetSources: AssetSource[];
   selected: boolean;
   draggable?: boolean;
+  selectionActive?: boolean;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
   onDragEnd?: DragEventHandler<HTMLElement>;
   onDragStart?: DragEventHandler<HTMLElement>;
@@ -23,6 +24,7 @@ export function FragmentCard({
   fragment,
   assetSources,
   draggable = true,
+  selectionActive = false,
   selected,
   onAssetFallback,
   onDragEnd,
@@ -73,8 +75,10 @@ export function FragmentCard({
       onDragStart={draggable ? onDragStart : undefined}
     >
       <button
+        aria-label={`${selected ? "Deselect" : selectionActive ? "Select" : "Open"} ${fragment.title ?? "Fragment"}`}
         aria-pressed={selected}
         className="fragment-image-button"
+        data-fragment-id={fragment.id}
         onClick={onSelect}
         style={aspectRatio ? { aspectRatio } : undefined}
         type="button"
@@ -87,6 +91,7 @@ export function FragmentCard({
         ) : (
           <img
             alt={fragment.title ?? "Saved Fragment"}
+            decoding="async"
             draggable={false}
             loading="lazy"
             onError={handleImageError}

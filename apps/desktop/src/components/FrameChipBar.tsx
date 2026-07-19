@@ -11,11 +11,12 @@ export function FrameChipBar({
   frames,
   selectedFrameId,
   counts,
-  onSelect
+  onSelect,
 }: FrameChipBarProps) {
   return (
-    <div className="frame-chip-bar" aria-label="Frame filters">
+    <div className="frame-chip-bar" aria-label="Frame filters" role="toolbar">
       <button
+        aria-pressed={selectedFrameId === null}
         className="frame-chip"
         data-active={selectedFrameId === null}
         onClick={() => onSelect(null)}
@@ -25,6 +26,7 @@ export function FrameChipBar({
       </button>
       {frames.map((frame) => (
         <button
+          aria-pressed={selectedFrameId === frame.id}
           className="frame-chip"
           data-active={selectedFrameId === frame.id}
           key={frame.id}

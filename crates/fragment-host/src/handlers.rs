@@ -1,6 +1,9 @@
 use fragment_core::{CaptureFragmentRequest, FragmentCore};
 use serde_json::{json, Value};
 
+pub const NATIVE_PROTOCOL_VERSION: u64 = 2;
+pub const MINIMUM_NATIVE_PROTOCOL_VERSION: u64 = 1;
+
 pub fn handle_message(core: &FragmentCore, message: Value) -> Value {
     let request_id = message
         .get("requestId")
@@ -8,13 +11,7 @@ pub fn handle_message(core: &FragmentCore, message: Value) -> Value {
         .map(ToString::to_string);
 
     match message.get("type").and_then(Value::as_str) {
-        Some("ping") => json!({
-            "type": "pong",
-            "requestId": request_id.unwrap_or_default(),
-            "ok": true,
-            "app": "Fragment",
-            "version": env!("CARGO_PKG_VERSION")
-        }),
+        Some("ping") => ping_response(request_id, &message),
         Some("frames.list") => match core.list_frames() {
             Ok(frames) => json!({
                 "type": "frames.list.result",
@@ -58,6 +55,29 @@ pub fn handle_message(core: &FragmentCore, message: Value) -> Value {
     }
 }
 
+fn ping_response(request_id: Option<String>, message: &Value) -> Value {
+    let client_protocol_version = message.get("protocolVersion").and_then(Value::as_u64);
+    let client_minimum_protocol_version = message
+        .get("minimumProtocolVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(client_protocol_version.unwrap_or(MINIMUM_NATIVE_PROTOCOL_VERSION));
+    let compatible = client_protocol_version.is_none_or(|version| {
+        version >= MINIMUM_NATIVE_PROTOCOL_VERSION
+            && client_minimum_protocol_version <= NATIVE_PROTOCOL_VERSION
+    });
+
+    json!({
+        "type": "pong",
+        "requestId": request_id.unwrap_or_default(),
+        "ok": true,
+        "app": "Fragment",
+        "version": env!("CARGO_PKG_VERSION"),
+        "protocolVersion": NATIVE_PROTOCOL_VERSION,
+        "minimumProtocolVersion": MINIMUM_NATIVE_PROTOCOL_VERSION,
+        "compatible": compatible
+    })
+}
+
 fn error_response(
     request_id: Option<String>,
     code: impl Into<String>,
@@ -72,4 +92,53 @@ fn error_response(
             "message": message.into()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ping_negotiates_current_protocol() {
+        let response = ping_response(
+            Some("ping-current".to_string()),
+            &json!({
+                "type": "ping",
+                "protocolVersion": NATIVE_PROTOCOL_VERSION,
+                "minimumProtocolVersion": MINIMUM_NATIVE_PROTOCOL_VERSION
+            }),
+        );
+
+        assert_eq!(response["requestId"], "ping-current");
+        assert_eq!(response["protocolVersion"], NATIVE_PROTOCOL_VERSION);
+        assert_eq!(
+            response["minimumProtocolVersion"],
+            MINIMUM_NATIVE_PROTOCOL_VERSION
+        );
+        assert_eq!(response["compatible"], true);
+    }
+
+    #[test]
+    fn ping_keeps_previous_protocol_compatible() {
+        let response = ping_response(
+            Some("ping-legacy".to_string()),
+            &json!({ "type": "ping", "protocolVersion": 1 }),
+        );
+
+        assert_eq!(response["compatible"], true);
+    }
+
+    #[test]
+    fn ping_marks_future_incompatible_protocols() {
+        let response = ping_response(
+            Some("ping-future".to_string()),
+            &json!({
+                "type": "ping",
+                "protocolVersion": NATIVE_PROTOCOL_VERSION + 2,
+                "minimumProtocolVersion": NATIVE_PROTOCOL_VERSION + 1
+            }),
+        );
+
+        assert_eq!(response["compatible"], false);
+    }
 }

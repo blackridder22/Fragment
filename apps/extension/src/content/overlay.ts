@@ -4,6 +4,10 @@ import type {
   ImageCandidate,
 } from "@fragment/shared";
 import { requestId, type BackgroundReply } from "../shared/messages";
+import {
+  runCaptureBatch,
+  type CaptureBatchItemResult,
+} from "./capture-batch";
 
 type FrameLoadState =
   | { ok: true; frames: Frame[] }
@@ -19,10 +23,13 @@ type SaveBatchResult =
       ok: true;
       saved: number;
       existing: number;
+      failures: number;
       attempted: number;
       batchToken: number;
+      failedCandidates: ImageCandidate[];
+      items: CaptureBatchItemResult[];
     }
-  | { ok: false };
+  | { ok: false; cancelled: true };
 
 export class CaptureOverlay {
   private host = document.createElement("fragment-capture-overlay");
@@ -74,6 +81,7 @@ export class CaptureOverlay {
     this.openCandidateId = undefined;
     this.hoverCandidateId = undefined;
     this.saveBatchToken += 1;
+    this.resetMarkerState();
     this.markerById.clear();
     this.cleanupCallbacks.forEach((cleanup) => cleanup());
     this.cleanupCallbacks = [];
@@ -114,7 +122,7 @@ export class CaptureOverlay {
     };
     const refresh = () => this.onRequestRefresh();
     const pointerDown = (event: PointerEvent) => {
-      if (!this.openCandidateId || this.isEventInsideOpenMarker(event)) {
+      if (!this.hasOpenPicker() || this.isEventInsideOverlayPanel(event)) {
         return;
       }
       this.closePicker();
@@ -296,15 +304,24 @@ export class CaptureOverlay {
     );
   }
 
-  private isEventInsideOpenMarker(event: Event) {
-    if (!this.openCandidateId) {
-      return false;
-    }
+  private hasOpenPicker() {
+    return Boolean(
+      this.openCandidateId ||
+        this.shadow.querySelector(".picker") ||
+        this.shadow.querySelector(".batch-picker"),
+    );
+  }
+
+  private isEventInsideOverlayPanel(event: Event) {
     return event.composedPath().some((node) => {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
       return (
-        node instanceof HTMLElement &&
-        node.classList.contains("marker") &&
-        node.dataset.candidateId === this.openCandidateId
+        node.classList.contains("marker") ||
+        node.classList.contains("picker") ||
+        node.classList.contains("batch-picker") ||
+        node.classList.contains("multi-tray")
       );
     });
   }
@@ -325,10 +342,7 @@ export class CaptureOverlay {
     this.shadow
       .querySelectorAll(".batch-picker")
       .forEach((picker) => picker.remove());
-    this.shadow.querySelectorAll(".marker").forEach((marker) => {
-      marker.classList.remove("is-open");
-      marker.classList.remove("saved");
-    });
+    this.resetMarkerState();
     this.openCandidateId = undefined;
     if (closingCandidateId) {
       const marker = this.markerById.get(closingCandidateId);
@@ -341,6 +355,16 @@ export class CaptureOverlay {
     }
     this.render();
     return true;
+  }
+
+  private resetMarkerState() {
+    this.shadow.querySelectorAll<HTMLElement>(".marker").forEach((marker) => {
+      marker.classList.remove("is-open", "saved", "saving");
+      const button = marker.querySelector<HTMLButtonElement>(".save-button");
+      if (button) {
+        button.disabled = false;
+      }
+    });
   }
 
   private createMarker() {
@@ -385,6 +409,7 @@ export class CaptureOverlay {
     if (!button) {
       return;
     }
+    button.disabled = false;
     button.setAttribute("aria-label", "Save Fragment");
     button.title = "Save Fragment";
     button.innerHTML = `
@@ -435,6 +460,7 @@ export class CaptureOverlay {
       <div class="picker-row picker-row-status">
         <span class="picker-status"></span>
       </div>
+      <div class="batch-results" role="status" aria-live="polite"></div>
       <p class="setup-hint"></p>
     `;
     picker.addEventListener("click", (event) => event.stopPropagation());
@@ -444,6 +470,8 @@ export class CaptureOverlay {
       picker.querySelector<HTMLDivElement>("[data-frame-picker]");
     const status = picker.querySelector<HTMLSpanElement>(".picker-status");
     const setupHint = picker.querySelector<HTMLParagraphElement>(".setup-hint");
+    const batchResults =
+      picker.querySelector<HTMLDivElement>(".batch-results");
     const saveButton = picker.querySelector<HTMLButtonElement>(".picker-save");
     const saveVisibleButton =
       picker.querySelector<HTMLButtonElement>(".picker-save-visible");
@@ -457,6 +485,7 @@ export class CaptureOverlay {
       !framePicker ||
       !status ||
       !setupHint ||
+      !batchResults ||
       !saveButton ||
       !saveVisibleButton ||
       !cancelButton ||
@@ -514,12 +543,15 @@ export class CaptureOverlay {
     const setBusy = (busy: boolean) => {
       saveButton.disabled = busy || !frameState.ok;
       saveVisibleButton.disabled = busy || !frameState.ok;
-      cancelButton.disabled = busy;
+      cancelButton.disabled = false;
       setFrameChoicesDisabled(framePicker, busy || !frameState.ok);
       selectAllButton.disabled = busy || !frameState.ok;
       selectNoneButton.disabled =
         busy || !frameState.ok || framePickerCheckboxes(framePicker).length <= 1;
     };
+
+    let singleRetryCandidates: ImageCandidate[] | undefined;
+    let visibleRetryCandidates: ImageCandidate[] | undefined;
 
     picker.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -529,48 +561,61 @@ export class CaptureOverlay {
 
       status.textContent = "Saving";
       setBusy(true);
+      marker.classList.add("saving");
       const { frameIds, note, tags } = formValues();
       if (frameIds.length === 0) {
         status.textContent = "Select at least one Frame";
+        marker.classList.remove("saving");
         setBusy(false);
         return;
       }
       const result = await this.saveCandidatesToFrames(
-        [candidate],
+        singleRetryCandidates ?? [candidate],
         frameIds,
         note,
         tags,
         status,
         setupHint,
+        batchResults,
         () => picker.isConnected,
       );
-      if (result.ok) {
-        status.textContent = batchSummary(
-          result.saved,
-          result.existing,
-          result.attempted,
-        );
-        marker.classList.add("saved");
-        window.setTimeout(() => {
-          if (this.saveBatchToken === result.batchToken) {
-            picker.remove();
-            marker.classList.remove("is-open");
-            if (this.openCandidateId === candidate.id) {
-              this.openCandidateId = undefined;
-            }
-            this.updateMarker(marker, candidate);
-          }
-        }, 900);
-      } else {
-        setBusy(false);
+      if (!result.ok) {
+        return;
       }
+      marker.classList.remove("saving");
+      status.textContent = batchSummary(
+        result.saved,
+        result.existing,
+        result.attempted,
+        result.failures,
+      );
+      if (result.failures > 0) {
+        singleRetryCandidates = result.failedCandidates;
+        saveButton.textContent = `Retry ${result.failures} failed`;
+        setBusy(false);
+        return;
+      }
+
+      singleRetryCandidates = undefined;
+      marker.classList.add("saved");
+      window.setTimeout(() => {
+        if (this.saveBatchToken === result.batchToken) {
+          picker.remove();
+          marker.classList.remove("is-open");
+          if (this.openCandidateId === candidate.id) {
+            this.openCandidateId = undefined;
+          }
+          this.updateMarker(marker, candidate);
+        }
+      }, 900);
     });
 
     saveVisibleButton.addEventListener("click", async () => {
       if (!frameState.ok) {
         return;
       }
-      const visibleCandidates = this.viewportCandidates(80);
+      const visibleCandidates =
+        visibleRetryCandidates ?? this.viewportCandidates(80);
       if (visibleCandidates.length === 0) {
         status.textContent = "No visible images";
         return;
@@ -579,9 +624,11 @@ export class CaptureOverlay {
       const { frameIds, note, tags } = formValues();
       if (frameIds.length === 0) {
         status.textContent = "Select at least one Frame";
+        marker.classList.remove("saving");
         return;
       }
       setBusy(true);
+      marker.classList.add("saving");
       const result = await this.saveCandidatesToFrames(
         visibleCandidates,
         frameIds,
@@ -589,19 +636,29 @@ export class CaptureOverlay {
         tags,
         status,
         setupHint,
+        batchResults,
         () => picker.isConnected,
       );
       if (!result.ok) {
-        setBusy(false);
         return;
       }
 
-      marker.classList.add("saved");
+      marker.classList.remove("saving");
       status.textContent = batchSummary(
         result.saved,
         result.existing,
         result.attempted,
+        result.failures,
       );
+      if (result.failures > 0) {
+        visibleRetryCandidates = result.failedCandidates;
+        saveVisibleButton.textContent = `Retry ${result.failures} failed`;
+        setBusy(false);
+        return;
+      }
+
+      visibleRetryCandidates = undefined;
+      marker.classList.add("saved");
       window.setTimeout(() => {
         if (this.saveBatchToken === result.batchToken) {
           this.closePicker();
@@ -649,6 +706,7 @@ export class CaptureOverlay {
       <div class="picker-row picker-row-status">
         <span class="picker-status"></span>
       </div>
+      <div class="batch-results" role="status" aria-live="polite"></div>
       <p class="setup-hint"></p>
     `;
     picker.addEventListener("click", (event) => event.stopPropagation());
@@ -658,6 +716,8 @@ export class CaptureOverlay {
       picker.querySelector<HTMLDivElement>("[data-frame-picker]");
     const status = picker.querySelector<HTMLSpanElement>(".picker-status");
     const setupHint = picker.querySelector<HTMLParagraphElement>(".setup-hint");
+    const batchResults =
+      picker.querySelector<HTMLDivElement>(".batch-results");
     const saveButton = picker.querySelector<HTMLButtonElement>(".picker-save");
     const cancelButton =
       picker.querySelector<HTMLButtonElement>(".picker-cancel");
@@ -669,6 +729,7 @@ export class CaptureOverlay {
       !framePicker ||
       !status ||
       !setupHint ||
+      !batchResults ||
       !saveButton ||
       !cancelButton ||
       !selectAllButton ||
@@ -677,11 +738,7 @@ export class CaptureOverlay {
       return;
     }
 
-    const closeBatchPicker = () => {
-      this.saveBatchToken += 1;
-      picker.remove();
-    };
-    cancelButton.addEventListener("click", closeBatchPicker);
+    cancelButton.addEventListener("click", () => this.closePicker());
 
     status.textContent = "Loading Frames";
     const frameState = await this.loadFrames();
@@ -730,6 +787,7 @@ export class CaptureOverlay {
       visibleCandidates.length,
       selectedFrameIds(framePicker).length,
     );
+    let pendingCandidates = visibleCandidates;
 
     picker.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -746,26 +804,22 @@ export class CaptureOverlay {
         return;
       }
       saveButton.disabled = true;
-      cancelButton.disabled = true;
+      cancelButton.disabled = false;
       selectAllButton.disabled = true;
       selectNoneButton.disabled = true;
       setFrameChoicesDisabled(framePicker, true);
 
       const result = await this.saveCandidatesToFrames(
-        visibleCandidates,
+        pendingCandidates,
         frameIds,
         note,
         tags,
         status,
         setupHint,
+        batchResults,
         () => picker.isConnected,
       );
       if (!result.ok) {
-        saveButton.disabled = false;
-        cancelButton.disabled = false;
-        selectAllButton.disabled = false;
-        selectNoneButton.disabled = framePickerCheckboxes(framePicker).length <= 1;
-        setFrameChoicesDisabled(framePicker, false);
         return;
       }
 
@@ -773,7 +827,19 @@ export class CaptureOverlay {
         result.saved,
         result.existing,
         result.attempted,
+        result.failures,
       );
+      if (result.failures > 0) {
+        pendingCandidates = result.failedCandidates;
+        saveButton.textContent = `Retry ${result.failures} failed`;
+        saveButton.disabled = false;
+        selectAllButton.disabled = false;
+        selectNoneButton.disabled =
+          framePickerCheckboxes(framePicker).length <= 1;
+        setFrameChoicesDisabled(framePicker, false);
+        return;
+      }
+
       window.setTimeout(() => {
         if (this.saveBatchToken === result.batchToken) {
           picker.remove();
@@ -789,49 +855,52 @@ export class CaptureOverlay {
     tags: string[],
     status: HTMLElement,
     setupHint: HTMLElement,
+    resultsContainer: HTMLElement,
     isConnected: () => boolean,
   ): Promise<SaveBatchResult> {
     const batchToken = this.saveBatchToken + 1;
     this.saveBatchToken = batchToken;
-    let saved = 0;
-    let existing = 0;
     const total = candidates.length * frameIds.length;
-    let attempted = 0;
+    const isCancelled = () =>
+      this.saveBatchToken !== batchToken || !isConnected();
+    const result = await runCaptureBatch({
+      candidates,
+      isCancelled,
+      send: (candidate) => this.saveCandidate(candidate, frameIds, note, tags),
+      onProgress: ({ completed, total: candidateTotal }) => {
+        if (isCancelled()) {
+          return;
+        }
+        const completedRelations = Math.min(
+          (completed + 1) * frameIds.length,
+          total,
+        );
+        status.textContent =
+          frameIds.length > 1
+            ? `Saving ${completedRelations}/${total} · ${frameIds.length} Frames`
+            : `Saving ${Math.min(completed + 1, candidateTotal)}/${candidateTotal}`;
+      },
+    });
 
-    for (const [index, item] of candidates.entries()) {
-      if (this.saveBatchToken !== batchToken || !isConnected()) {
-        return { ok: false };
-      }
-      attempted += frameIds.length;
-      status.textContent =
-        frameIds.length > 1
-          ? `Saving ${attempted}/${total} · ${frameIds.length} Frames`
-          : `Saving ${index + 1}/${candidates.length}`;
-      const response = await this.saveCandidate(item, frameIds, note, tags);
-      if (!response.ok) {
-        status.textContent = response.error.message;
-        setupHint.textContent =
-          response.error.code === "native_host_unavailable"
-            ? nativeHostSetupHint()
-            : "";
-        return { ok: false };
-      }
-      const result = response.payload as
-        | {
-            duplicateOfFragmentId?: string;
-            duplicateOfFragmentIds?: string[];
-            fragmentId?: string;
-            fragmentIds?: string[];
-          }
-        | undefined;
-      existing +=
-        result?.duplicateOfFragmentIds?.length ??
-        (result?.duplicateOfFragmentId ? 1 : 0);
-      saved +=
-        result?.fragmentIds?.length ?? (result?.fragmentId ? 1 : 0);
+    if (result.cancelled || isCancelled()) {
+      return { ok: false, cancelled: true };
     }
 
-    return { ok: true, saved, existing, attempted, batchToken };
+    renderCaptureBatchResults(resultsContainer, result.items);
+    const unavailableItem = result.items.find(
+      (item) => item.error?.code === "native_host_unavailable",
+    );
+    setupHint.textContent = unavailableItem ? nativeHostSetupHint() : "";
+    return {
+      ok: true,
+      saved: result.saved,
+      existing: result.existing,
+      failures: result.failures,
+      attempted: result.items.length * frameIds.length,
+      batchToken,
+      failedCandidates: result.failedCandidates,
+      items: result.items,
+    };
   }
 
   private async saveCandidate(
@@ -960,6 +1029,36 @@ function setFrameChoicesDisabled(container: HTMLElement, disabled: boolean) {
   }
 }
 
+function renderCaptureBatchResults(
+  container: HTMLElement,
+  items: CaptureBatchItemResult[],
+) {
+  container.replaceChildren(
+    ...items.map((item) => {
+      const row = document.createElement("div");
+      row.className = `batch-result is-${item.status}`;
+
+      const title = document.createElement("span");
+      title.className = "batch-result-title";
+      title.textContent =
+        item.candidate.title ??
+        item.candidate.alt ??
+        sourceHost(item.candidate.src);
+
+      const state = document.createElement("span");
+      state.className = "batch-result-state";
+      state.textContent =
+        item.status === "failed"
+          ? item.error?.message ?? "Failed"
+          : item.status === "existing"
+            ? "Already saved"
+            : "Saved";
+      row.append(title, state);
+      return row;
+    }),
+  );
+}
+
 export function saveBatchButtonLabel(
   imageCount: number,
   frameCount: number,
@@ -991,7 +1090,19 @@ export function batchSummary(
   saved: number,
   existing: number,
   attempted = saved + existing,
+  failures = 0,
 ): string {
+  if (failures > 0) {
+    const parts: string[] = [];
+    if (saved > 0) {
+      parts.push(`Saved ${saved}`);
+    }
+    if (existing > 0) {
+      parts.push(`${existing} already existed`);
+    }
+    parts.push(`${failures} failed`);
+    return parts.join(", ");
+  }
   if (existing > 0 && saved === 0) {
     return attempted > 1
       ? `Already saved in ${existing} places`
@@ -1322,6 +1433,40 @@ const styles = `
     font-size: 11px;
     font-weight: 820;
     line-height: 1.25;
+  }
+  .batch-results {
+    display: grid;
+    gap: 5px;
+    max-height: 112px;
+    overflow-y: auto;
+  }
+  .batch-results:empty {
+    display: none;
+  }
+  .batch-result {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 5px 7px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    font-size: 10px;
+  }
+  .batch-result-title {
+    overflow: hidden;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .batch-result-state {
+    color: var(--accent);
+    font-weight: 820;
+  }
+  .batch-result.is-failed .batch-result-state {
+    color: #ff9d99;
   }
   .setup-hint {
     margin: 0;

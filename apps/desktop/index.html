@@ -12,14 +12,24 @@
     />
     <script>
       (() => {
+        const systemPrefersDark = window.matchMedia(
+          "(prefers-color-scheme: dark)",
+        ).matches;
+        let preference = "system";
         try {
-          document.documentElement.dataset.theme =
-            localStorage.getItem("fragment-theme") === "dark"
+          const stored = localStorage.getItem("fragment-theme");
+          preference =
+            stored === "light" || stored === "dark" ? stored : "system";
+        } catch {}
+        const resolved =
+          preference === "system"
+            ? systemPrefersDark
               ? "dark"
-              : "light";
-        } catch {
-          document.documentElement.dataset.theme = "light";
-        }
+              : "light"
+            : preference;
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.style.colorScheme = resolved;
       })();
     </script>
     <title>Fragment</title>

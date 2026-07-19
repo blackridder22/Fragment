@@ -25,5 +25,8 @@ describe("capture picker batch labels", () => {
     expect(batchSummary(0, 3, 3)).toBe("Already saved in 3 places");
     expect(batchSummary(2, 1, 3)).toBe("Saved 2, 1 already existed");
     expect(batchSummary(3, 0, 3)).toBe("Saved 3");
+    expect(batchSummary(2, 1, 4, 1)).toBe(
+      "Saved 2, 1 already existed, 1 failed",
+    );
   });
 });

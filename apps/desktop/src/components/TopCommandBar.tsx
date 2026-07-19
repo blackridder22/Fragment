@@ -1,4 +1,4 @@
-import { Download, Plus, Search } from "lucide-react";
+import { CheckSquare, Download, Plus, Search } from "lucide-react";
 
 export type SortMode = "newest" | "oldest" | "name" | "largest";
 export type SourceFilter = "all" | "source" | "local" | "png";
@@ -10,6 +10,7 @@ type TopCommandBarProps = {
   onImport: () => void;
   onSortChange: (value: SortMode) => void;
   onSourceFilterChange: (value: SourceFilter) => void;
+  onSelectAll?: () => void;
   showLibraryTools: boolean;
   sourceFilter: SourceFilter;
   sortMode: SortMode;
@@ -24,6 +25,7 @@ export function TopCommandBar({
   onImport,
   onSortChange,
   onSourceFilterChange,
+  onSelectAll,
   showLibraryTools,
   sourceFilter,
   sortMode,
@@ -41,16 +43,22 @@ export function TopCommandBar({
           <label className="search-field">
             <Search aria-hidden="true" size={18} />
             <input
+              aria-label="Search your Vault"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="Search your vault"
             />
             <kbd>⌘K</kbd>
           </label>
-          <div className="library-controls" aria-label="Library controls">
+          <div
+            className="library-controls"
+            aria-label="Library controls"
+            role="group"
+          >
             <label>
               <span>Sort</span>
               <select
+                aria-label="Sort Fragments"
                 value={sortMode}
                 onChange={(event) =>
                   onSortChange(event.target.value as SortMode)
@@ -65,6 +73,7 @@ export function TopCommandBar({
             <label>
               <span>Filter</span>
               <select
+                aria-label="Filter Fragments"
                 value={sourceFilter}
                 onChange={(event) =>
                   onSourceFilterChange(event.target.value as SourceFilter)
@@ -78,6 +87,17 @@ export function TopCommandBar({
             </label>
           </div>
           <div className="command-actions">
+            {onSelectAll ? (
+              <button
+                aria-label="Select all matching Fragments"
+                className="icon-button command-select-button"
+                onClick={onSelectAll}
+                title="Select all matching Fragments (Command+A)"
+                type="button"
+              >
+                <CheckSquare aria-hidden="true" size={17} />
+              </button>
+            ) : null}
             <button
               className="button primary"
               onClick={onCreateFrame}

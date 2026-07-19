@@ -64,6 +64,8 @@ export function IconRail({
                 onDrop={onTrashDrop}
               >
                 <button
+                  aria-current={activeView === item.id ? "page" : undefined}
+                  aria-label={item.label}
                   className="rail-button"
                   data-active={activeView === item.id}
                   data-trash-target="true"
@@ -80,6 +82,8 @@ export function IconRail({
           }
           return (
             <button
+              aria-current={activeView === item.id ? "page" : undefined}
+              aria-label={item.label}
               className="rail-button"
               data-active={activeView === item.id}
               key={item.id}

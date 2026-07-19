@@ -65,4 +65,21 @@ mod tests {
         let decoded = read_message(&mut cursor).expect("read").expect("message");
         assert_eq!(decoded, payload);
     }
+
+    #[test]
+    fn native_message_stream_supports_multiple_requests() {
+        let first = json!({ "type": "ping", "requestId": "first" });
+        let second = json!({ "type": "frames.list", "requestId": "second" });
+        let mut buffer = Vec::new();
+        write_message(&mut buffer, &first).expect("write first");
+        write_message(&mut buffer, &second).expect("write second");
+
+        let mut cursor = std::io::Cursor::new(buffer);
+        assert_eq!(read_message(&mut cursor).expect("read first"), Some(first));
+        assert_eq!(
+            read_message(&mut cursor).expect("read second"),
+            Some(second)
+        );
+        assert_eq!(read_message(&mut cursor).expect("read eof"), None);
+    }
 }

@@ -6,6 +6,8 @@ import { pinterestTitle } from "./adapters/pinterest";
 const MIN_SIZE = 120;
 const IMAGE_EXTENSIONS = /\.(avif|bmp|gif|jpe?g|png|webp)(\?.*)?$/i;
 const elementCandidateIds = new WeakMap<Element, string>();
+const candidateElements = new Map<string, Element>();
+const elementBackedCandidateIds = new Set<string>();
 let nextCandidateId = 0;
 
 export function selectBestImageUrl(image: HTMLImageElement): string {
@@ -102,12 +104,14 @@ export function isCredibleCandidate(
   );
 }
 
-export function findImageCandidates(): ImageCandidate[] {
+export function findImageCandidates(
+  root: ParentNode = document,
+): ImageCandidate[] {
   const candidates = new Map<string, ImageCandidate>();
   const source = genericSourceForLocation(location);
   const siteName = pageSiteName();
 
-  for (const image of document.querySelectorAll<HTMLImageElement>("img")) {
+  for (const image of queryElements<HTMLImageElement>(root, "img")) {
     if (!isVisibleElement(image)) {
       continue;
     }
@@ -138,13 +142,12 @@ export function findImageCandidates(): ImageCandidate[] {
     if (image.naturalWidth) candidate.naturalWidth = image.naturalWidth;
     if (image.naturalHeight) candidate.naturalHeight = image.naturalHeight;
     if (isCredibleCandidate(candidate)) {
+      registerCandidateElement(candidate.id, image);
       candidates.set(candidate.id, candidate);
     }
   }
 
-  for (const video of document.querySelectorAll<HTMLVideoElement>(
-    "video[poster]",
-  )) {
+  for (const video of queryElements<HTMLVideoElement>(root, "video[poster]")) {
     if (!isVisibleElement(video)) {
       continue;
     }
@@ -164,10 +167,12 @@ export function findImageCandidates(): ImageCandidate[] {
       source,
     };
     if (siteName) candidate.siteName = siteName;
+    registerCandidateElement(candidate.id, video);
     candidates.set(candidate.id, candidate);
   }
 
-  for (const element of document.querySelectorAll<HTMLElement>(
+  for (const element of queryElements<HTMLElement>(
+    root,
     "a[href], div, section, article",
   )) {
     if (!isVisibleElement(element)) {
@@ -210,6 +215,7 @@ export function findImageCandidates(): ImageCandidate[] {
     const title = element.getAttribute("aria-label");
     if (title) candidate.title = title;
     if (isCredibleCandidate(candidate)) {
+      registerCandidateElement(candidate.id, element);
       candidates.set(candidate.id, candidate);
     }
   }
@@ -217,7 +223,7 @@ export function findImageCandidates(): ImageCandidate[] {
   const ogImage = document.querySelector<HTMLMetaElement>(
     'meta[property="og:image"]',
   )?.content;
-  if (ogImage && candidates.size === 0) {
+  if (root === document && ogImage && candidates.size === 0) {
     const src = new URL(ogImage, location.href).href;
     const candidate: ImageCandidate = {
       id: src,
@@ -234,6 +240,48 @@ export function findImageCandidates(): ImageCandidate[] {
   }
 
   return [...candidates.values()];
+}
+
+export function candidateElementForId(candidateId: string): Element | undefined {
+  const element = candidateElements.get(candidateId);
+  if (element && !element.isConnected) {
+    candidateElements.delete(candidateId);
+    elementBackedCandidateIds.delete(candidateId);
+    return undefined;
+  }
+  return element;
+}
+
+export function releaseCandidateElement(candidateId: string): void {
+  candidateElements.delete(candidateId);
+  elementBackedCandidateIds.delete(candidateId);
+}
+
+export function refreshCandidateRects(
+  candidates: ImageCandidate[],
+): ImageCandidate[] {
+  const refreshed: ImageCandidate[] = [];
+  for (const candidate of candidates) {
+    if (!elementBackedCandidateIds.has(candidate.id)) {
+      refreshed.push(candidate);
+      continue;
+    }
+    const element = candidateElementForId(candidate.id);
+    if (!element || !isVisibleElement(element)) {
+      continue;
+    }
+    const rect = element.getBoundingClientRect();
+    if (!isCredibleRect(rect)) {
+      continue;
+    }
+    refreshed.push({
+      ...candidate,
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      rect: rectToPlain(rect),
+    });
+  }
+  return refreshed;
 }
 
 function imageUrlCandidatesForImage(
@@ -292,6 +340,23 @@ function stableElementId(element: Element, src: string): string {
   const id = `fragment-candidate-${nextCandidateId}-${hashString(src)}`;
   elementCandidateIds.set(element, id);
   return id;
+}
+
+function registerCandidateElement(candidateId: string, element: Element): void {
+  candidateElements.set(candidateId, element);
+  elementBackedCandidateIds.add(candidateId);
+}
+
+function queryElements<T extends Element>(
+  root: ParentNode,
+  selector: string,
+): T[] {
+  const elements: T[] = [];
+  if (root instanceof Element && root.matches(selector)) {
+    elements.push(root as T);
+  }
+  elements.push(...Array.from(root.querySelectorAll<T>(selector)));
+  return elements;
 }
 
 function hashString(value: string): string {

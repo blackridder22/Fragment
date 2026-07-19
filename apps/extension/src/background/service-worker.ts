@@ -1,5 +1,8 @@
 import { captureFragmentRequestSchema } from "@fragment/shared";
-import { sendNativeMessage } from "./native-client";
+import {
+  NativeClientError,
+  sendNativeMessage,
+} from "./native-client";
 import type { BackgroundMessage, BackgroundReply } from "../shared/messages";
 import type { CaptureFragmentRequest } from "../shared/types";
 
@@ -37,6 +40,8 @@ chrome.runtime.onMessage.addListener(
             }
           });
         }
+      }).catch((error: unknown) => {
+        sendResponse(nativeFailureReply(error));
       });
       return true;
     }
@@ -76,6 +81,8 @@ chrome.runtime.onMessage.addListener(
             }
           });
         }
+      }).catch((error: unknown) => {
+        sendResponse(nativeFailureReply(error));
       });
       return true;
     }
@@ -83,3 +90,21 @@ chrome.runtime.onMessage.addListener(
     return false;
   }
 );
+
+function nativeFailureReply(error: unknown): BackgroundReply {
+  if (error instanceof NativeClientError) {
+    return {
+      ok: false,
+      error: { code: error.code, message: error.message }
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      code: "native_host_unavailable",
+      message: error instanceof Error
+        ? error.message
+        : "Fragment native host is unavailable"
+    }
+  };
+}

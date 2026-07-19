@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Fragment } from "@fragment/shared";
 import {
   Clipboard,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   FolderOpen,
   ImageOff,
@@ -23,6 +25,8 @@ type FragmentDetailSheetProps = {
   onOpenSource: () => Promise<void>;
   onDelete: () => Promise<void>;
   onDeleteEverywhere?: () => Promise<void>;
+  onNext?: () => void;
+  onPrevious?: () => void;
   sharedReferenceCount?: number;
 };
 
@@ -37,6 +41,8 @@ export function FragmentDetailSheet({
   onOpenSource,
   onDelete,
   onDeleteEverywhere,
+  onNext,
+  onPrevious,
   sharedReferenceCount = 1,
 }: FragmentDetailSheetProps) {
   const [title, setTitle] = useState(fragment.title ?? "");
@@ -45,6 +51,7 @@ export function FragmentDetailSheet({
   const [copyStatus, setCopyStatus] = useState("Copy Image");
   const [previewFailed, setPreviewFailed] = useState(assetSources.length === 0);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const copyResetTimer = useRef<number | null>(null);
   const assetKey = assetSources
     .map((source) => `${source.url}:${source.relativePath ?? ""}`)
     .join("\u0000");
@@ -52,6 +59,10 @@ export function FragmentDetailSheet({
   const assetUrl = assetSource?.url ?? "";
 
   useEffect(() => {
+    if (copyResetTimer.current !== null) {
+      window.clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = null;
+    }
     setTitle(fragment.title ?? "");
     setNote(fragment.note ?? "");
     setCopyStatus("Copy Image");
@@ -61,6 +72,39 @@ export function FragmentDetailSheet({
     setPreviewFailed(assetSources.length === 0);
     setPreviewIndex(0);
   }, [assetKey, assetSources.length, fragment]);
+
+  useEffect(
+    () => () => {
+      if (copyResetTimer.current !== null) {
+        window.clearTimeout(copyResetTimer.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    function handleDetailNavigation(event: KeyboardEvent) {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA")
+      ) {
+        return;
+      }
+      if (event.key === "ArrowLeft" && onPrevious) {
+        event.preventDefault();
+        onPrevious();
+      } else if (event.key === "ArrowRight" && onNext) {
+        event.preventDefault();
+        onNext();
+      }
+    }
+
+    window.addEventListener("keydown", handleDetailNavigation);
+    return () => window.removeEventListener("keydown", handleDetailNavigation);
+  }, [onNext, onPrevious]);
 
   async function save() {
     setBusy(true);
@@ -89,7 +133,13 @@ export function FragmentDetailSheet({
         new ClipboardItem({ [blob.type || "image/png"]: blob }),
       ]);
       setCopyStatus("Copied");
-      window.setTimeout(() => setCopyStatus("Copy Image"), 1500);
+      if (copyResetTimer.current !== null) {
+        window.clearTimeout(copyResetTimer.current);
+      }
+      copyResetTimer.current = window.setTimeout(() => {
+        copyResetTimer.current = null;
+        setCopyStatus("Copy Image");
+      }, 1500);
     } catch {
       setCopyStatus("Copy failed");
     }
@@ -115,6 +165,30 @@ export function FragmentDetailSheet({
     <Modal
       title="Fragment Details"
       className="fragment-detail-modal"
+      headerActions={
+        <div className="detail-navigation" aria-label="Fragment navigation">
+          <button
+            aria-label="Previous Fragment"
+            className="icon-button"
+            disabled={!onPrevious}
+            onClick={onPrevious}
+            title="Previous Fragment"
+            type="button"
+          >
+            <ChevronLeft aria-hidden="true" size={18} />
+          </button>
+          <button
+            aria-label="Next Fragment"
+            className="icon-button"
+            disabled={!onNext}
+            onClick={onNext}
+            title="Next Fragment"
+            type="button"
+          >
+            <ChevronRight aria-hidden="true" size={18} />
+          </button>
+        </div>
+      }
       onClose={onClose}
     >
       <div className="detail-sheet">
@@ -128,6 +202,7 @@ export function FragmentDetailSheet({
             <img
               src={assetUrl}
               alt={fragment.title ?? "Selected Fragment"}
+              decoding="async"
               onError={handlePreviewError}
             />
           )}
@@ -175,7 +250,7 @@ export function FragmentDetailSheet({
           <div className="detail-actions">
             <button className="button" onClick={copyImage} type="button">
               <Clipboard size={16} />
-              {copyStatus}
+              <span aria-live="polite">{copyStatus}</span>
             </button>
             <button
               className="button primary"

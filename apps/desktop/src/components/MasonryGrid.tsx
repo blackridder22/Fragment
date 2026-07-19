@@ -7,6 +7,7 @@ type MasonryGridProps = {
   fragments: Fragment[];
   assetSourcesFor: (fragment: Fragment) => AssetSource[];
   draggable?: boolean;
+  selectionActive?: boolean;
   selectedIds: Set<string>;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
   onDragEnd?: DragEventHandler<HTMLElement>;
@@ -18,6 +19,7 @@ export function MasonryGrid({
   fragments,
   assetSourcesFor,
   draggable = true,
+  selectionActive = false,
   selectedIds,
   onAssetFallback,
   onDragEnd,
@@ -32,6 +34,7 @@ export function MasonryGrid({
           draggable={draggable && !fragment.id.startsWith("demo-")}
           fragment={fragment}
           key={fragment.id}
+          selectionActive={selectionActive}
           onAssetFallback={onAssetFallback}
           onDragEnd={onDragEnd}
           onDragStart={
