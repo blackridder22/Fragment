@@ -1,0 +1,23 @@
+[package]
+name = "fragment-desktop"
+version = "0.0.2"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "fragment_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64.workspace = true
+fragment-core = { path = "../../../crates/fragment-core" }
+serde.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true

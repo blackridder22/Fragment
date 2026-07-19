@@ -1,0 +1,9 @@
+{
+  "name": "com.autoscale.fragment",
+  "description": "Fragment native messaging host",
+  "path": "/absolute/path/to/fragment-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ]
+}

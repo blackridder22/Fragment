@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Fragment Capture",
+  "description": "Save selected visual references as Fragments into local Frames.",
+  "version": "0.0.2",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlo85tbkvO/1Hm/eC8Pr2YsEAurBS8GE+ygincCTuqqxo51eCCB9dvr8JElWqtbhW+pBaCDiJMiMuDpoOMNWpU9rKXsE1AsXtuDBucld+MgghyUweK+/Kta+eI+HCNFKHgXfZ2eeuBJDXzG0Uz/p/zchHYn2f5RbhdJAUXFSRCbRt7Tcmr7lFp0Im3NbPpwjnvUqguCBEletS0aZ/ZJ14SPXin347ex+Vy1vo2mqZlbTaiyaiHwpN3AkzBidVOdaHhry+hkMicOmsuYgjdAC+zJCRvBbvQ37NjsrHiA6bmej9QHtMD8ngpppnMoRQUPI/IZ4WYBbBa2YKWerjdrUgoQIDAQAB",
+  "action": {
+    "default_title": "Fragment Capture",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": ["activeTab", "scripting", "storage", "nativeMessaging"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/capture-mode.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
