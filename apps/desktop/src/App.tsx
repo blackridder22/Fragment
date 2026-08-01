@@ -5,8 +5,8 @@ import {
   useReducer,
   useRef,
   useState,
-  type DragEvent,
   type MouseEvent,
+  type PointerEvent,
 } from "react";
 import type { Fragment, Frame } from "@fragment/shared";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -16,7 +16,7 @@ import { AppShell } from "./app/AppShell";
 import { EmptyState } from "./components/EmptyState";
 import type { RailView } from "./components/IconRail";
 import { FrameCard } from "./components/FrameCard";
-import { FrameChipBar } from "./components/FrameChipBar";
+import { LoadMoreSentinel } from "./components/LoadMoreSentinel";
 import { MasonryGrid } from "./components/MasonryGrid";
 import {
   type SortMode,
@@ -24,12 +24,29 @@ import {
   TopCommandBar,
 } from "./components/TopCommandBar";
 import { CreateFrameModal } from "./features/frames/CreateFrameModal";
+import { FrameBreadcrumbs } from "./features/frames/FrameBreadcrumbs";
+import { FrameNavigator } from "./features/frames/FrameNavigator";
+import {
+  DEFAULT_FRAME_NAVIGATOR_PREFERENCES,
+  aggregateFrameCounts,
+  descendantFrameIds,
+  frameBreadcrumbs,
+  parseFrameNavigatorPreferences,
+  resolveFrameDrop,
+  type FrameDropTarget,
+  type FrameNavigatorPreferences,
+} from "./features/frames/frame-tree";
+import { DragGhost } from "./features/dragdrop/DragGhost";
+import {
+  usePointerDragSession,
+  type PointerDragPayload,
+} from "./features/dragdrop/usePointerDragSession";
 import { FragmentDetailSheet } from "./features/fragments/FragmentDetailSheet";
 import {
   importQueueReducer,
+  summarizeImportResults,
   type ImportQueueItem,
 } from "./features/import/import-state";
-import { DuplicateImportModal } from "./features/import/DuplicateImportModal";
 import {
   PendingImportCards,
   PendingImportStatus,
@@ -39,12 +56,14 @@ import {
   readSnapshotMetadata,
 } from "./features/library/library-state";
 import { SelectionToolbar } from "./features/selection/SelectionToolbar";
+import { MarqueeOverlay } from "./features/selection/MarqueeOverlay";
 import {
   createSelectionState,
   resolveSelectedIds,
   selectionKeyboardIntent,
   selectionReducer,
 } from "./features/selection/selection-model";
+import { useMarqueeSelection } from "./features/selection/useMarqueeSelection";
 import {
   SettingsPage,
   type DeletePolicy,
@@ -56,13 +75,13 @@ import {
   addExistingFragmentToFrame,
   assetUrl,
   cancelImportJob,
+  copyFragmentImage,
   createFrame,
   deleteFragment,
   deleteFragmentEverywhere,
   deleteFragments,
   deleteFrame,
   fragmentMembershipCount,
-  getFragmentAny,
   getLibraryRevision,
   importImageBatch,
   isTauriRuntime,
@@ -71,6 +90,7 @@ import {
   listTrashedFrames,
   loadLibrarySnapshot,
   loadAssetDataUrl,
+  moveFrame,
   openFragmentSource,
   renameFrame,
   revealFragmentInFinder,
@@ -82,28 +102,21 @@ import {
 import { demoFrames, demoFragments, isDemoFragment } from "./lib/demo-vault";
 
 type FrameModalState =
-  | { mode: "create" }
+  | { mode: "create"; parentId: string | null }
   | { mode: "rename"; frame: Frame }
   | null;
 
 type ThemeMode = Exclude<ThemePreference, "system">;
 type TrashDropState = "idle" | "armed" | "success";
-type TrashDragPayload =
-  | { kind: "fragments"; ids: string[] }
-  | { kind: "frame"; id: string };
 type TrashUndoState =
   | { kind: "fragments"; ids: string[]; label: string }
   | { kind: "frame"; frameId: string; label: string }
+  | { kind: "import-summary"; ids: string[]; label: string }
   | null;
-type DuplicateImportPrompt = {
-  item: ImportQueueItem;
-  existing: Fragment;
-};
 
 const THEME_STORAGE_KEY = "fragment-theme";
 const DELETE_POLICY_STORAGE_KEY = "fragment-delete-policy";
-const FRAGMENT_DRAG_MIME = "application/x-fragment-fragment-ids";
-const FRAME_DRAG_MIME = "application/x-fragment-frame-id";
+const FRAME_NAVIGATOR_STORAGE_KEY = "fragment-frame-navigator-v1";
 const LIBRARY_PAGE_SIZE = 60;
 
 function initialTheme(): ThemePreference {
@@ -135,6 +148,15 @@ function initialDeletePolicy(): DeletePolicy {
     stored === "31"
     ? stored
     : "31";
+}
+
+function initialFrameNavigatorPreferences(): FrameNavigatorPreferences {
+  if (typeof window === "undefined") {
+    return DEFAULT_FRAME_NAVIGATOR_PREFERENCES;
+  }
+  return parseFrameNavigatorPreferences(
+    window.localStorage.getItem(FRAME_NAVIGATOR_STORAGE_KEY),
+  );
 }
 
 function resolvedThemePreference(
@@ -251,9 +273,6 @@ export default function App() {
     importQueueReducer,
     [],
   );
-  const [duplicateImports, setDuplicateImports] = useState<
-    DuplicateImportPrompt[]
-  >([]);
   const [assetDataUrls, setAssetDataUrls] = useState<Record<string, string>>(
     {},
   );
@@ -265,6 +284,7 @@ export default function App() {
   const activeNextOffsetRef = useRef(0);
   const selectedFrameIdRef = useRef<string | null>(null);
   const activePageFrameIdRef = useRef<string | null>(null);
+  const includeDescendantsRef = useRef(false);
   const fragmentsRef = useRef<Fragment[]>([]);
   const trashedFragmentsRef = useRef<Fragment[]>([]);
   const trashLoadedRef = useRef(false);
@@ -272,9 +292,12 @@ export default function App() {
   const snapshotLoadingRef = useRef(false);
   const activePageRequestRef = useRef(0);
   const trashPageRequestRef = useRef(0);
+  const activePageLoadingRef = useRef(false);
+  const trashPageLoadingRef = useRef(false);
+  const activeHasMoreRef = useRef(false);
+  const trashHasMoreRef = useRef(false);
   const trashNextOffsetRef = useRef(0);
   const completedImportRequests = useRef(new Set<string>());
-  const trashDragPayload = useRef<TrashDragPayload | null>(null);
   const importPathsRef = useRef<(paths: string[]) => Promise<void>>(() =>
     Promise.resolve(),
   );
@@ -295,6 +318,9 @@ export default function App() {
   const [theme, setTheme] = useState<ThemePreference>(initialTheme);
   const [deletePolicy, setDeletePolicy] =
     useState<DeletePolicy>(initialDeletePolicy);
+  const [frameNavigator, setFrameNavigator] = useState(
+    initialFrameNavigatorPreferences,
+  );
   const [systemPrefersDark, setSystemPrefersDark] = useState(
     initialSystemPrefersDark,
   );
@@ -302,6 +328,7 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   const [dragActive, setDragActive] = useState(false);
   const [trashDropState, setTrashDropState] = useState<TrashDropState>("idle");
+  const [frameDropTarget, setFrameDropTarget] = useState<string | null>(null);
   const [trashUndo, setTrashUndo] = useState<TrashUndoState>(null);
   const trashUndoTimer = useRef<number | null>(null);
   const previewMode = !isTauriRuntime();
@@ -312,22 +339,32 @@ export default function App() {
   }, []);
 
   const loadActivePage = useCallback(
-    async (frameId: string | null, reset: boolean) => {
-      if (!isTauriRuntime()) {
+    async (
+      frameId: string | null,
+      reset: boolean,
+      includeDescendants = includeDescendantsRef.current,
+    ) => {
+      if (
+        !isTauriRuntime() ||
+        (!reset && (!activeHasMoreRef.current || activePageLoadingRef.current))
+      ) {
         return;
       }
+      activePageLoadingRef.current = true;
       const requestId = ++activePageRequestRef.current;
       const offset = reset ? 0 : activeNextOffsetRef.current;
       setActivePageLoading(true);
       try {
         const page = await listFragmentPage({
           frameId,
+          includeDescendants: Boolean(frameId && includeDescendants),
           offset,
           limit: LIBRARY_PAGE_SIZE,
         });
         if (
           requestId !== activePageRequestRef.current ||
-          selectedFrameIdRef.current !== frameId
+          selectedFrameIdRef.current !== frameId ||
+          includeDescendantsRef.current !== includeDescendants
         ) {
           return;
         }
@@ -340,6 +377,7 @@ export default function App() {
         activeNextOffsetRef.current = page.offset + page.items.length;
         activeTotalRef.current = page.total;
         setActiveTotal(page.total);
+        activeHasMoreRef.current = page.hasMore;
         setActiveHasMore(page.hasMore);
         rememberRevision(page.revision);
       } catch (caught) {
@@ -347,6 +385,7 @@ export default function App() {
         setStatus("Library page failed");
       } finally {
         if (requestId === activePageRequestRef.current) {
+          activePageLoadingRef.current = false;
           setActivePageLoading(false);
         }
       }
@@ -356,9 +395,13 @@ export default function App() {
 
   const loadTrashPage = useCallback(
     async (reset: boolean) => {
-      if (!isTauriRuntime()) {
+      if (
+        !isTauriRuntime() ||
+        (!reset && (!trashHasMoreRef.current || trashPageLoadingRef.current))
+      ) {
         return;
       }
+      trashPageLoadingRef.current = true;
       const requestId = ++trashPageRequestRef.current;
       const offset = reset ? 0 : trashNextOffsetRef.current;
       setTrashLoading(true);
@@ -381,6 +424,7 @@ export default function App() {
         setTrashedFragments(nextFragments);
         trashNextOffsetRef.current = page.offset + page.items.length;
         setTrashTotal(page.total);
+        trashHasMoreRef.current = page.hasMore;
         setTrashHasMore(page.hasMore);
         if (deletedFrames) {
           setTrashedFrames(deletedFrames);
@@ -393,12 +437,21 @@ export default function App() {
         setStatus("Trash failed to load");
       } finally {
         if (requestId === trashPageRequestRef.current) {
+          trashPageLoadingRef.current = false;
           setTrashLoading(false);
         }
       }
     },
     [rememberRevision],
   );
+
+  const loadNextActivePage = useCallback(() => {
+    void loadActivePage(selectedFrameIdRef.current, false);
+  }, [loadActivePage]);
+
+  const loadNextTrashPage = useCallback(() => {
+    void loadTrashPage(false);
+  }, [loadTrashPage]);
 
   const refreshSnapshot = useCallback(async () => {
     if (!isTauriRuntime()) {
@@ -419,7 +472,10 @@ export default function App() {
       setDefaultFrameId(null);
       activeTotalRef.current = 0;
       setActiveTotal(0);
+      activeHasMoreRef.current = false;
       setActiveHasMore(false);
+      trashHasMoreRef.current = false;
+      setTrashHasMore(false);
       setError(null);
       setStatus("Browser preview");
       return;
@@ -450,7 +506,9 @@ export default function App() {
         activeNextOffsetRef.current = snapshot.fragments.length;
         activeTotalRef.current = snapshot.fragmentTotal;
         setActiveTotal(snapshot.fragmentTotal);
-        setActiveHasMore(snapshot.fragments.length < snapshot.fragmentTotal);
+        const hasMore = snapshot.fragments.length < snapshot.fragmentTotal;
+        activeHasMoreRef.current = hasMore;
+        setActiveHasMore(hasMore);
       } else {
         await loadActivePage(activeFrameId, true);
       }
@@ -494,6 +552,18 @@ export default function App() {
       // Delete still works when storage is unavailable.
     }
   }, [deletePolicy]);
+
+  useEffect(() => {
+    includeDescendantsRef.current = frameNavigator.includeDescendants;
+    try {
+      window.localStorage.setItem(
+        FRAME_NAVIGATOR_STORAGE_KEY,
+        JSON.stringify(frameNavigator),
+      );
+    } catch {
+      // Navigation remains usable when storage is unavailable.
+    }
+  }, [frameNavigator]);
 
   useEffect(() => {
     revisionRef.current = libraryRevision;
@@ -649,11 +719,25 @@ export default function App() {
     return next;
   }, []);
 
+  const activeFrameUniverse =
+    frames.length > 0 ? frames : previewMode ? demoFrames : [];
+  const selectedFrameScopeIds = useMemo(() => {
+    if (!selectedFrameId) return null;
+    return new Set(
+      frameNavigator.includeDescendants
+        ? descendantFrameIds(activeFrameUniverse, selectedFrameId)
+        : [selectedFrameId],
+    );
+  }, [activeFrameUniverse, frameNavigator.includeDescendants, selectedFrameId]);
+
   const filteredFragments = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return fragments
       .filter((fragment) => {
-        if (selectedFrameId && fragment.frameId !== selectedFrameId) {
+        if (
+          selectedFrameScopeIds &&
+          !selectedFrameScopeIds.has(fragment.frameId)
+        ) {
           return false;
         }
         if (!matchesSourceFilter(fragment, sourceFilter)) {
@@ -674,7 +758,14 @@ export default function App() {
           .some((value) => value!.toLowerCase().includes(normalized));
       })
       .sort((left, right) => compareFragments(left, right, sortMode));
-  }, [fragments, frameById, query, selectedFrameId, sortMode, sourceFilter]);
+  }, [
+    fragments,
+    frameById,
+    query,
+    selectedFrameScopeIds,
+    sortMode,
+    sourceFilter,
+  ]);
 
   const demoFrameById = useMemo(
     () => new Map(demoFrames.map((frame) => [frame.id, frame])),
@@ -682,42 +773,57 @@ export default function App() {
   );
 
   const showDemoGallery = previewMode && filteredFragments.length === 0;
-  const galleryFragments = showDemoGallery
-    ? demoFragments
-        .filter((fragment) => {
-          const normalized = query.trim().toLowerCase();
-          if (
-            selectedFrameId?.startsWith("demo-") &&
-            fragment.frameId !== selectedFrameId
-          ) {
-            return false;
-          }
-          if (!normalized) {
-            return matchesSourceFilter(fragment, sourceFilter);
-          }
-          if (!matchesSourceFilter(fragment, sourceFilter)) {
-            return false;
-          }
-          return [
-            fragment.title,
-            demoFrameById.get(fragment.frameId)?.name,
-            fragment.siteName,
-          ]
-            .filter(Boolean)
-            .some((value) => value!.toLowerCase().includes(normalized));
-        })
-        .sort((left, right) => compareFragments(left, right, sortMode))
-    : filteredFragments;
+  const galleryFragments = useMemo(
+    () =>
+      showDemoGallery
+        ? demoFragments
+            .filter((fragment) => {
+              const normalized = query.trim().toLowerCase();
+              if (
+                selectedFrameScopeIds &&
+                !selectedFrameScopeIds.has(fragment.frameId)
+              ) {
+                return false;
+              }
+              if (!normalized) {
+                return matchesSourceFilter(fragment, sourceFilter);
+              }
+              if (!matchesSourceFilter(fragment, sourceFilter)) {
+                return false;
+              }
+              return [
+                fragment.title,
+                demoFrameById.get(fragment.frameId)?.name,
+                fragment.siteName,
+              ]
+                .filter(Boolean)
+                .some((value) => value!.toLowerCase().includes(normalized));
+            })
+            .sort((left, right) => compareFragments(left, right, sortMode))
+        : filteredFragments,
+    [
+      demoFrameById,
+      filteredFragments,
+      query,
+      selectedFrameScopeIds,
+      showDemoGallery,
+      sortMode,
+      sourceFilter,
+    ],
+  );
 
   const selectedDisplayFrame = selectedFrameId
     ? (frameById.get(selectedFrameId) ??
       (previewMode ? demoFrameById.get(selectedFrameId) : undefined) ??
       null)
     : null;
-  const displayFrames =
-    frames.length > 0 ? frames : previewMode ? demoFrames : [];
+  const displayFrames = activeFrameUniverse;
   const displayCounts =
     frames.length > 0 ? counts : previewMode ? demoCounts : new Map();
+  const recursiveDisplayCounts = useMemo(
+    () => aggregateFrameCounts(displayFrames, displayCounts),
+    [displayCounts, displayFrames],
+  );
   const visibleFrames = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     const sourceFragments = frames.length > 0 ? cachedFragments : demoFragments;
@@ -855,10 +961,17 @@ export default function App() {
       [
         activeView,
         selectedFrameId ?? "all-frames",
+        frameNavigator.includeDescendants ? "with-subframes" : "direct",
         query.trim().toLowerCase(),
         sourceFilter,
       ].join("\u0000"),
-    [activeView, query, selectedFrameId, sourceFilter],
+    [
+      activeView,
+      frameNavigator.includeDescendants,
+      query,
+      selectedFrameId,
+      sourceFilter,
+    ],
   );
   const selectedFragmentIds = useMemo(
     () =>
@@ -885,6 +998,23 @@ export default function App() {
     : activeView === "trash"
       ? trashTotal > 0
       : activeView === "home" && activeTotal > 0;
+  const pointerDrag = usePointerDragSession({
+    getPayload: pointerDragPayloadFor,
+    onDrop: handlePointerDrop,
+    onTargetChange: handlePointerDropTargetChange,
+  });
+  const marquee = useMarqueeSelection({
+    matchingIds: selectableFragmentIds,
+    selectedIds: selectedFragmentIds,
+    onReplace: (ids, visualOrder) => {
+      dispatchSelection({
+        type: "replace-many",
+        scopeKey: selectionScopeKey,
+        matchingIds: visualOrder,
+        ids,
+      });
+    },
+  });
 
   useEffect(() => {
     dispatchSelection({
@@ -914,6 +1044,7 @@ export default function App() {
           focusedId && selectableFragmentIds.includes(focusedId),
         ),
         metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
       });
       if (!intent) {
         return;
@@ -934,12 +1065,20 @@ export default function App() {
       if (intent === "toggle-focused" && !focusedId) {
         return;
       }
+      if (
+        intent === "delete-selection" &&
+        (activeView !== "home" || selectedFragmentIds.length === 0)
+      ) {
+        return;
+      }
 
       event.preventDefault();
       if (intent === "select-all") {
         void selectAllMatchingFragments();
       } else if (intent === "clear") {
         dispatchSelection({ type: "clear", scopeKey: selectionScopeKey });
+      } else if (intent === "delete-selection") {
+        void moveFragmentsToTrash(selectedFragmentIds);
       } else {
         dispatchSelection({
           type: "toggle",
@@ -964,27 +1103,42 @@ export default function App() {
     trashTotal,
   ]);
 
-  const clearDuplicateImportPrompts = useCallback(() => {
-    for (const prompt of duplicateImports) {
-      dispatchImportQueue({ type: "skip", id: prompt.item.id });
-    }
-    setDuplicateImports([]);
-  }, [duplicateImports]);
-
   const selectFrame = useCallback(
     (frameId: string | null) => {
       setSelectedFragment(null);
-      clearDuplicateImportPrompts();
       selectedFrameIdRef.current = frameId;
       setSelectedFrameId(frameId);
       dispatchSelection({ type: "clear", scopeKey: "" });
       setActiveView("home");
+      if (frameId) {
+        const ancestorIds = frameBreadcrumbs(activeFrameUniverse, frameId)
+          .slice(0, -1)
+          .map((frame) => frame.id);
+        if (ancestorIds.length > 0) {
+          setFrameNavigator((current) => ({
+            ...current,
+            expandedIds: [...new Set([...current.expandedIds, ...ancestorIds])],
+          }));
+        }
+      }
       if (isTauriRuntime()) {
         void loadActivePage(frameId, true);
       }
     },
-    [clearDuplicateImportPrompts, loadActivePage],
+    [activeFrameUniverse, loadActivePage],
   );
+
+  function setIncludeDescendants(value: boolean) {
+    includeDescendantsRef.current = value;
+    setFrameNavigator((current) => ({
+      ...current,
+      includeDescendants: value,
+    }));
+    dispatchSelection({ type: "clear", scopeKey: "" });
+    if (activeView === "home" && selectedFrameId && isTauriRuntime()) {
+      void loadActivePage(selectedFrameId, true, value);
+    }
+  }
 
   function assetPathCandidates(fragment: Fragment, mode: "detail" | "gallery") {
     const paths =
@@ -1105,6 +1259,10 @@ export default function App() {
     try {
       const matchingIds = await listFragmentIds({
         frameId: activeView === "home" ? selectedFrameId : null,
+        includeDescendants:
+          activeView === "home" && Boolean(selectedFrameId)
+            ? frameNavigator.includeDescendants
+            : false,
         trashed: activeView === "trash",
         query,
         sourceFilter,
@@ -1186,39 +1344,9 @@ export default function App() {
       const nextTotal = activeTotalRef.current + 1;
       activeTotalRef.current = nextTotal;
       setActiveTotal(nextTotal);
-      setActiveHasMore(nextFragments.length < nextTotal);
-    }
-  }
-
-  async function queueDuplicateImport(
-    item: ImportQueueItem,
-    errorCode: string,
-    existingFragmentId?: string | null,
-    existingTrashed?: boolean | null,
-  ) {
-    if (!existingFragmentId) {
-      return;
-    }
-    try {
-      const existing = await getFragmentAny(existingFragmentId);
-      setDuplicateImports((current) =>
-        current.some((prompt) => prompt.item.id === item.id)
-          ? current
-          : [
-              ...current,
-              {
-                item: {
-                  ...item,
-                  errorCode,
-                  existingFragmentId,
-                  existingTrashed: existingTrashed ?? false,
-                },
-                existing,
-              },
-            ],
-      );
-    } catch {
-      // The failed import card remains available if the existing record changed.
+      const hasMore = nextFragments.length < nextTotal;
+      activeHasMoreRef.current = hasMore;
+      setActiveHasMore(hasMore);
     }
   }
 
@@ -1258,22 +1386,11 @@ export default function App() {
                 existingTrashed: event.existingTrashed ?? undefined,
               },
             });
-            if (
-              event.errorCode === "duplicate_membership" ||
-              event.errorCode === "duplicate_asset_elsewhere"
-            ) {
-              const item = items.find(
-                (candidate) => candidate.id === event.requestId,
-              );
-              if (item) {
-                void queueDuplicateImport(
-                  item,
-                  event.errorCode,
-                  event.existingFragmentId,
-                  event.existingTrashed,
-                );
-              }
-            }
+          } else if (event.event === "skipped") {
+            dispatchImportQueue({
+              type: "event",
+              event: { event: "skipped", requestId: event.requestId },
+            });
           } else {
             dispatchImportQueue({ type: "event", event });
           }
@@ -1290,6 +1407,11 @@ export default function App() {
             type: "event",
             event: { event: "complete", requestId: result.requestId },
           });
+        } else if (result.outcome === "skipped") {
+          dispatchImportQueue({
+            type: "event",
+            event: { event: "skipped", requestId: result.requestId },
+          });
         } else if (result.error) {
           dispatchImportQueue({
             type: "event",
@@ -1302,34 +1424,21 @@ export default function App() {
               existingTrashed: result.existingTrashed ?? undefined,
             },
           });
-          if (
-            result.errorCode === "duplicate_membership" ||
-            result.errorCode === "duplicate_asset_elsewhere"
-          ) {
-            const item = items.find(
-              (candidate) => candidate.id === result.requestId,
-            );
-            if (item) {
-              void queueDuplicateImport(
-                item,
-                result.errorCode,
-                result.existingFragmentId,
-                result.existingTrashed,
-              );
-            }
-          }
         }
       }
 
-      const completed = results.filter((result) => result.ok).length;
-      const failed = results.length - completed;
-      setStatus(
-        failed > 0
-          ? `${failed} ${failed === 1 ? "import needs" : "imports need"} attention`
-          : completed === 1
-            ? "Imported Fragment"
-            : `Imported ${completed} Fragments`,
-      );
+      const summary = summarizeImportResults(results);
+      const summaryParts = [
+        summary.imported > 0 ? `${summary.imported} imported` : null,
+        summary.linkedFragmentIds.length > 0
+          ? `${summary.linkedFragmentIds.length} already in your Vault — linked into ${items[0]?.frameName ?? "Inbox"}`
+          : null,
+        summary.skipped > 0 ? `${summary.skipped} skipped` : null,
+        summary.failed > 0 ? `${summary.failed} failed` : null,
+      ].filter((part): part is string => Boolean(part));
+      const summaryLabel = summaryParts.join(" · ") || "Import complete";
+      offerImportSummary(summary.linkedFragmentIds, summaryLabel);
+      setStatus(summaryLabel);
       try {
         rememberRevision(await getLibraryRevision());
       } catch {
@@ -1362,65 +1471,6 @@ export default function App() {
   function skipImport(item: ImportQueueItem) {
     dispatchImportQueue({ type: "skip", id: item.id });
     setStatus(`Skipped ${item.name}`);
-  }
-
-  function dismissDuplicateImport() {
-    const prompt = duplicateImports[0];
-    if (!prompt) {
-      return;
-    }
-    dispatchImportQueue({ type: "skip", id: prompt.item.id });
-    setDuplicateImports((current) => current.slice(1));
-    setStatus(`Kept existing ${prompt.existing.title ?? "Fragment"}`);
-  }
-
-  async function openDuplicateImport() {
-    const prompt = duplicateImports[0];
-    if (!prompt) {
-      return;
-    }
-    if (prompt.item.existingTrashed) {
-      changeView("trash");
-      await loadTrashPage(true);
-    } else {
-      selectFrame(prompt.existing.frameId);
-    }
-    setSelectedFragment(prompt.existing);
-    dispatchImportQueue({ type: "skip", id: prompt.item.id });
-    setDuplicateImports((current) => current.slice(1));
-  }
-
-  async function renameDuplicateImport(title: string) {
-    const prompt = duplicateImports[0];
-    if (!prompt) {
-      return;
-    }
-    const updated = await updateFragment(
-      prompt.existing.id,
-      title,
-      prompt.existing.note ?? null,
-    );
-    dispatchImportQueue({ type: "skip", id: prompt.item.id });
-    setDuplicateImports((current) => current.slice(1));
-    setSelectedFragment(updated);
-    setStatus("Renamed existing Fragment");
-    await refreshSnapshot();
-  }
-
-  async function addDuplicateImportToFrame() {
-    const prompt = duplicateImports[0];
-    if (!prompt) {
-      return;
-    }
-    const fragment = await addExistingFragmentToFrame(
-      prompt.existing.id,
-      prompt.item.frameId,
-    );
-    addImportedFragment(prompt.item.id, fragment);
-    dispatchImportQueue({ type: "skip", id: prompt.item.id });
-    setDuplicateImports((current) => current.slice(1));
-    setStatus(`Added existing Fragment to ${prompt.item.frameName}`);
-    rememberRevision(await getLibraryRevision());
   }
 
   async function importPaths(paths: string[]) {
@@ -1468,7 +1518,6 @@ export default function App() {
   function changeView(view: RailView) {
     setSelectedFragment(null);
     setFrameModal(null);
-    clearDuplicateImportPrompts();
     dispatchSelection({ type: "clear", scopeKey: "" });
     if (view === "trash" || view === "settings") {
       selectedFrameIdRef.current = null;
@@ -1484,6 +1533,43 @@ export default function App() {
     }
   }
 
+  function openCreateFrame(parentId: string | null) {
+    setFrameModal({ mode: "create", parentId });
+  }
+
+  function toggleFrameExpanded(frameId: string) {
+    setFrameNavigator((current) => {
+      const expanded = new Set(current.expandedIds);
+      if (expanded.has(frameId)) expanded.delete(frameId);
+      else expanded.add(frameId);
+      return { ...current, expandedIds: [...expanded] };
+    });
+  }
+
+  function toggleFramePinned(frameId: string) {
+    setFrameNavigator((current) => {
+      const pinned = new Set(current.pinnedIds);
+      if (pinned.has(frameId)) pinned.delete(frameId);
+      else pinned.add(frameId);
+      return { ...current, pinnedIds: [...pinned] };
+    });
+  }
+
+  async function renameFrameFromNavigator(frame: Frame, name: string) {
+    if (isProtectedFrame(frame)) {
+      setError("Inbox is a protected Frame.");
+      return;
+    }
+    try {
+      await renameFrame(frame.id, name);
+      setStatus(`Renamed Frame to ${name}`);
+      await refreshSnapshot();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Frame rename failed");
+    }
+  }
+
   async function submitFrame(name: string) {
     if (frameModal?.mode === "rename") {
       if (isProtectedFrame(frameModal.frame)) {
@@ -1493,7 +1579,14 @@ export default function App() {
       }
       await renameFrame(frameModal.frame.id, name);
     } else {
-      const created = await createFrame(name);
+      const parentId = frameModal?.parentId ?? null;
+      const created = await createFrame(name, parentId);
+      if (parentId) {
+        setFrameNavigator((current) => ({
+          ...current,
+          expandedIds: [...new Set([...current.expandedIds, parentId])],
+        }));
+      }
       selectedFrameIdRef.current = created.id;
       setSelectedFrameId(created.id);
       setSelectedFragment(null);
@@ -1508,7 +1601,7 @@ export default function App() {
       setError("Inbox is a protected Frame.");
       return;
     }
-    const count = counts.get(frame.id) ?? 0;
+    const count = recursiveDisplayCounts.get(frame.id) ?? 0;
     const confirmed = window.confirm(
       `${deletePolicy === "forever" ? "Delete" : "Move"} "${frame.name}"${count > 0 ? ` with its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""} ${deletePolicy === "forever" ? "forever" : `to Trash for ${deletePolicy} days`}?`,
     );
@@ -1516,7 +1609,10 @@ export default function App() {
       return;
     }
     await deleteFrame(frame.id, deleteRetentionDays());
-    if (selectedFrameId === frame.id) {
+    if (
+      selectedFrameId &&
+      descendantFrameIds(frames, frame.id).includes(selectedFrameId)
+    ) {
       selectedFrameIdRef.current = null;
       setSelectedFrameId(null);
     }
@@ -1622,43 +1718,188 @@ export default function App() {
     await refreshSnapshot();
   }
 
-  function dragTypes(event: DragEvent<HTMLElement>) {
-    return Array.from(event.dataTransfer.types);
-  }
-
-  function hasTrashPayload(event: DragEvent<HTMLElement>) {
-    const types = dragTypes(event);
-    return (
-      trashDragPayload.current !== null ||
-      types.includes(FRAGMENT_DRAG_MIME) ||
-      types.includes(FRAME_DRAG_MIME)
+  function pointerDragPayloadFor(target: Element): PointerDragPayload | null {
+    const fragmentCard = target.closest<HTMLElement>(
+      ".fragment-card[data-fragment-id]",
     );
+    if (fragmentCard && activeView === "home") {
+      const fragmentId = fragmentCard.dataset.fragmentId;
+      if (!fragmentId || fragmentId.startsWith("demo-")) {
+        return null;
+      }
+      const ids =
+        selectedFragmentIdSet.has(fragmentId) && selectedFragmentIds.length > 0
+          ? selectedFragmentIds.filter((id) => !id.startsWith("demo-"))
+          : [fragmentId];
+      const available = new Map(
+        [...cachedFragments, ...trashedFragments].map((fragment) => [
+          fragment.id,
+          fragment,
+        ]),
+      );
+      const imageUrls = ids
+        .map((id) => available.get(id))
+        .filter((fragment): fragment is Fragment => Boolean(fragment))
+        .map((fragment) => assetSourcesFor(fragment, "gallery")[0]?.url ?? "")
+        .filter(Boolean)
+        .slice(0, 3);
+      return {
+        kind: "fragments",
+        ids,
+        imageUrls,
+        label: `${ids.length} ${ids.length === 1 ? "Fragment" : "Fragments"}`,
+      };
+    }
+
+    const frameCard = target.closest<HTMLElement>("[data-frame-drag-id]");
+    if (!frameCard || target.closest("[data-no-frame-drag], input")) {
+      return null;
+    }
+    const frameId = frameCard.dataset.frameDragId;
+    const frame = frames.find((item) => item.id === frameId);
+    if (!frame || isProtectedFrame(frame)) {
+      return null;
+    }
+    const imageUrls = cachedFragments
+      .filter((fragment) => fragment.frameId === frame.id)
+      .slice(0, 3)
+      .map((fragment) => assetSourcesFor(fragment, "gallery")[0]?.url ?? "")
+      .filter(Boolean);
+    return {
+      kind: "frame",
+      id: frame.id,
+      imageUrls,
+      label: frame.name,
+    };
   }
 
-  function armTrashDrop(event: DragEvent<HTMLElement>) {
-    if (!hasTrashPayload(event)) {
+  function handleGalleryPointerDown(event: PointerEvent<HTMLElement>) {
+    if (pointerDrag.handlePointerDown(event)) {
       return;
     }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setTrashDropState("armed");
+    marquee.handlePointerDown(event);
   }
 
-  function handleTrashDragLeave(event: DragEvent<HTMLElement>) {
-    const nextTarget = event.relatedTarget;
-    if (
-      nextTarget instanceof Node &&
-      event.currentTarget.contains(nextTarget)
-    ) {
-      return;
+  function handlePointerDropTargetChange(target: string | null) {
+    setTrashDropState((current) =>
+      target === "trash" ? "armed" : current === "success" ? current : "idle",
+    );
+    setFrameDropTarget(target);
+  }
+
+  async function handlePointerDrop(
+    payload: PointerDragPayload,
+    target: string,
+  ) {
+    try {
+      setError(null);
+      if (target === "trash") {
+        const changed =
+          payload.kind === "frame"
+            ? await moveFrameToTrash(payload.id)
+            : await moveFragmentsToTrash(payload.ids);
+        if (changed) {
+          flashTrashSuccess();
+        }
+        return;
+      }
+      if (
+        payload.kind === "fragments" &&
+        (target.startsWith("frame-tree:") ||
+          target.startsWith("frame-before:") ||
+          target.startsWith("frame-after:") ||
+          target.startsWith("frame-chip:"))
+      ) {
+        const separator = target.indexOf(":");
+        await linkFragmentsToFrame(payload.ids, target.slice(separator + 1));
+        return;
+      }
+      if (payload.kind === "frame") {
+        const parsedTarget = parseFrameDropTarget(target);
+        if (!parsedTarget) return;
+        const placement = resolveFrameDrop(frames, payload.id, parsedTarget);
+        if (!placement) {
+          setError(
+            "A Frame cannot move inside itself or one of its Sub-frames.",
+          );
+          return;
+        }
+        await moveFrame(payload.id, placement.parentId, placement.position);
+        if (placement.parentId) {
+          setFrameNavigator((current) => ({
+            ...current,
+            expandedIds: [
+              ...new Set([...current.expandedIds, placement.parentId!]),
+            ],
+          }));
+        }
+        const movedFrame = frames.find((frame) => frame.id === payload.id);
+        setStatus(
+          placement.parentId
+            ? `Moved ${movedFrame?.name ?? "Frame"} into ${frames.find((frame) => frame.id === placement.parentId)?.name ?? "Frame"}`
+            : `Moved ${movedFrame?.name ?? "Frame"} to the Vault root`,
+        );
+        await refreshSnapshot();
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Drop failed");
+      setTrashDropState("idle");
+      setFrameDropTarget(null);
     }
-    setTrashDropState("idle");
   }
 
-  function handleDragEnd(event: DragEvent<HTMLElement>) {
-    event.currentTarget.removeAttribute("data-dragging");
-    trashDragPayload.current = null;
-    setTrashDropState("idle");
+  function parseFrameDropTarget(target: string): FrameDropTarget | null {
+    if (target === "frame-root") return { kind: "root" };
+    const [prefix, frameId] = target.split(":", 2);
+    if (!frameId) return null;
+    if (prefix === "frame-tree") return { kind: "inside", frameId };
+    if (prefix === "frame-before") return { kind: "before", frameId };
+    if (prefix === "frame-after") return { kind: "after", frameId };
+    return null;
+  }
+
+  async function linkFragmentsToFrame(ids: string[], frameId: string) {
+    const frame = frames.find((item) => item.id === frameId);
+    if (!frame) {
+      throw new Error("Destination Frame was not found");
+    }
+    let linked = 0;
+    let skipped = 0;
+    let failed = 0;
+    let lastError = "";
+    for (const id of new Set(
+      ids.filter((value) => !value.startsWith("demo-")),
+    )) {
+      try {
+        await addExistingFragmentToFrame(id, frameId);
+        linked += 1;
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : String(caught);
+        if (message.includes("asset already belongs to Frame")) {
+          skipped += 1;
+        } else {
+          failed += 1;
+          lastError = message;
+        }
+      }
+    }
+    if (linked > 0) {
+      await refreshSnapshot();
+    }
+    if (lastError) {
+      setError(lastError);
+    }
+    const label = [
+      `Added ${linked} to ${frame.name}`,
+      skipped > 0 ? `${skipped} already there` : null,
+      failed > 0 ? `${failed} failed` : null,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(" · ");
+    offerImportSummary([], label);
+    setStatus(label);
   }
 
   function flashTrashSuccess() {
@@ -1700,6 +1941,15 @@ export default function App() {
     }, 6000);
   }
 
+  function offerImportSummary(ids: string[], label: string) {
+    dismissTrashUndo();
+    setTrashUndo({ kind: "import-summary", ids, label });
+    trashUndoTimer.current = window.setTimeout(() => {
+      trashUndoTimer.current = null;
+      setTrashUndo(null);
+    }, 6000);
+  }
+
   async function undoLastTrashMove() {
     if (!trashUndo) {
       return;
@@ -1710,6 +1960,15 @@ export default function App() {
       if (undo.kind === "frame") {
         await restoreFrame(undo.frameId);
         setStatus("Restored Frame");
+      } else if (undo.kind === "import-summary") {
+        if (undo.ids.length > 0) {
+          await deleteFragments(undo.ids, 0);
+        }
+        setStatus(
+          undo.ids.length === 1
+            ? "Removed linked Fragment"
+            : `Removed ${undo.ids.length} linked Fragments`,
+        );
       } else {
         await restoreFragments(undo.ids);
         setStatus(
@@ -1723,48 +1982,6 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : String(caught));
       setStatus("Restore failed");
     }
-  }
-
-  function handleFragmentDragStart(
-    fragment: Fragment,
-    event: DragEvent<HTMLElement>,
-  ) {
-    if (isDemoFragment(fragment)) {
-      event.preventDefault();
-      return;
-    }
-    const selectedIds =
-      selectedFragmentIds.includes(fragment.id) &&
-      selectedFragmentIds.length > 0
-        ? selectedFragmentIds
-        : [fragment.id];
-    const ids = Array.from(
-      new Set(selectedIds.filter((id) => !id.startsWith("demo-"))),
-    );
-    if (ids.length === 0) {
-      event.preventDefault();
-      return;
-    }
-    event.currentTarget.setAttribute("data-dragging", "true");
-    trashDragPayload.current = { kind: "fragments", ids };
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(FRAGMENT_DRAG_MIME, JSON.stringify(ids));
-    event.dataTransfer.setData(
-      "text/plain",
-      `${ids.length} ${ids.length === 1 ? "Fragment" : "Fragments"}`,
-    );
-  }
-
-  function handleFrameDragStart(frame: Frame, event: DragEvent<HTMLElement>) {
-    if (frame.id.startsWith("demo-") || isProtectedFrame(frame)) {
-      event.preventDefault();
-      return;
-    }
-    event.currentTarget.setAttribute("data-dragging", "true");
-    trashDragPayload.current = { kind: "frame", id: frame.id };
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(FRAME_DRAG_MIME, frame.id);
-    event.dataTransfer.setData("text/plain", frame.name);
   }
 
   async function moveFragmentsToTrash(ids: string[]) {
@@ -1808,7 +2025,7 @@ export default function App() {
       setError("Inbox is a protected Frame.");
       return false;
     }
-    const count = counts.get(frame.id) ?? 0;
+    const count = recursiveDisplayCounts.get(frame.id) ?? 0;
     const confirmed = window.confirm(
       `${deletePolicy === "forever" ? "Delete" : "Move"} "${frame.name}"${count > 0 ? ` with its ${count} ${count === 1 ? "Fragment" : "Fragments"}` : ""} ${deletePolicy === "forever" ? "forever" : `to Trash for ${deletePolicy} days`}?`,
     );
@@ -1816,7 +2033,10 @@ export default function App() {
       return false;
     }
     await deleteFrame(frame.id, deleteRetentionDays());
-    if (selectedFrameId === frame.id) {
+    if (
+      selectedFrameId &&
+      descendantFrameIds(frames, frame.id).includes(selectedFrameId)
+    ) {
       selectedFrameIdRef.current = null;
       setSelectedFrameId(null);
     }
@@ -1843,51 +2063,16 @@ export default function App() {
     }
   }
 
-  async function handleTrashDrop(event: DragEvent<HTMLElement>) {
-    if (!hasTrashPayload(event)) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    setTrashDropState("armed");
-    try {
-      setError(null);
-      const frameId = event.dataTransfer.getData(FRAME_DRAG_MIME);
-      const fragmentPayload = event.dataTransfer.getData(FRAGMENT_DRAG_MIME);
-      const fallbackPayload = trashDragPayload.current;
-      let changed = false;
-      if (frameId) {
-        changed = await moveFrameToTrash(frameId);
-      } else if (fallbackPayload?.kind === "frame") {
-        changed = await moveFrameToTrash(fallbackPayload.id);
-      } else {
-        const ids = fragmentPayload
-          ? JSON.parse(fragmentPayload)
-          : fallbackPayload?.kind === "fragments"
-            ? fallbackPayload.ids
-            : [];
-        changed = await moveFragmentsToTrash(ids);
-      }
-      trashDragPayload.current = null;
-      if (changed) {
-        flashTrashSuccess();
-      } else {
-        setTrashDropState("idle");
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-      setStatus("Trash failed");
-      setTrashDropState("idle");
-    }
-  }
-
   const frameCards = (
     <section className="frame-section">
       <div className="section-heading">
         <h2>Frames</h2>
         <span>{visibleFrames.length} total</span>
       </div>
-      <div className="frame-card-grid">
+      <div
+        className="frame-card-grid"
+        onPointerDown={pointerDrag.handlePointerDown}
+      >
         {visibleFrames.map((frame) => {
           const frameFragments = (
             frames.length > 0 ? cachedFragments : demoFragments
@@ -1906,8 +2091,6 @@ export default function App() {
               protectedFrame={protectedFrame}
               readonly={demo}
               onDelete={() => (demo ? undefined : void removeFrame(frame))}
-              onDragEnd={handleDragEnd}
-              onDragStart={(event) => handleFrameDragStart(frame, event)}
               onOpen={() => {
                 if (demo) {
                   return;
@@ -1944,18 +2127,51 @@ export default function App() {
 
   return (
     <AppShell
-      activeView={activeView}
-      trashDropState={trashDropState}
-      onTrashDragEnter={armTrashDrop}
-      onTrashDragLeave={handleTrashDragLeave}
-      onTrashDragOver={armTrashDrop}
-      onTrashDrop={(event) => void handleTrashDrop(event)}
-      onViewChange={changeView}
+      navigator={
+        <FrameNavigator
+          activeView={activeView}
+          collapsed={frameNavigator.collapsed}
+          defaultFrameId={
+            defaultFrameId ??
+            displayFrames.find(
+              (frame) => frame.name === "Inbox" && frame.parentId === null,
+            )?.id ??
+            null
+          }
+          directCounts={displayCounts}
+          dropTarget={frameDropTarget}
+          expandedIds={new Set(frameNavigator.expandedIds)}
+          frames={displayFrames}
+          pinnedIds={new Set(frameNavigator.pinnedIds)}
+          recursiveCounts={recursiveDisplayCounts}
+          selectedFrameId={selectedFrameId}
+          trashDropState={trashDropState}
+          width={frameNavigator.width}
+          onCollapsedChange={(collapsed) =>
+            setFrameNavigator((current) => ({ ...current, collapsed }))
+          }
+          onCreateFrame={openCreateFrame}
+          onDeleteFrame={(frame) => void removeFrame(frame)}
+          onPointerDown={(event) => {
+            pointerDrag.handlePointerDown(event);
+          }}
+          onRenameFrame={renameFrameFromNavigator}
+          onSelectFrame={selectFrame}
+          onToggleExpanded={toggleFrameExpanded}
+          onTogglePinned={toggleFramePinned}
+          onViewChange={changeView}
+          onWidthChange={(width) =>
+            setFrameNavigator((current) => ({ ...current, width }))
+          }
+        />
+      }
+      navigatorCollapsed={frameNavigator.collapsed}
+      navigatorWidth={frameNavigator.width}
     >
       <TopCommandBar
         query={query}
         onQueryChange={setQuery}
-        onCreateFrame={() => setFrameModal({ mode: "create" })}
+        onCreateFrame={() => openCreateFrame(null)}
         onImport={() => void chooseImages()}
         onSortChange={setSortMode}
         onSourceFilterChange={setSourceFilter}
@@ -1979,11 +2195,12 @@ export default function App() {
 
       <div className="content-stage" data-drag-active={dragActive}>
         {activeView === "home" ? (
-          <FrameChipBar
-            counts={displayCounts}
+          <FrameBreadcrumbs
             frames={displayFrames}
+            includeDescendants={frameNavigator.includeDescendants}
             selectedFrameId={selectedFrameId}
-            onSelect={selectFrame}
+            onIncludeDescendantsChange={setIncludeDescendants}
+            onSelectFrame={selectFrame}
           />
         ) : null}
 
@@ -2054,32 +2271,28 @@ export default function App() {
                 onAction={() => changeView("home")}
               />
             ) : visibleTrashedFragments.length > 0 ? (
-              <div className="gallery-wrap trash-gallery">
+              <div
+                className="gallery-wrap trash-gallery"
+                onPointerDown={handleGalleryPointerDown}
+              >
                 <MasonryGrid
                   assetSourcesFor={(fragment) =>
                     assetSourcesFor(fragment, "gallery")
                   }
-                  draggable={false}
                   fragments={visibleTrashedFragments}
                   onAssetFallback={resolveAssetFallback}
                   selectionActive={selectedVisibleCount > 0}
                   selectedIds={selectedFragmentIdSet}
                   onSelect={handleFragmentCardSelect}
                 />
-                {trashHasMore ? (
-                  <div className="section-heading" aria-live="polite">
-                    <span>
-                      Showing {trashedFragments.length} of {trashTotal}
-                    </span>
-                    <button
-                      className="button compact"
-                      disabled={trashLoading}
-                      onClick={() => void loadTrashPage(false)}
-                      type="button"
-                    >
-                      {trashLoading ? "Loading" : "Load More"}
-                    </button>
-                  </div>
+                {trashHasMore || trashLoading ? (
+                  <LoadMoreSentinel
+                    hasMore={trashHasMore}
+                    loadedCount={trashedFragments.length}
+                    loading={trashLoading}
+                    totalCount={trashTotal}
+                    onLoadMore={loadNextTrashPage}
+                  />
                 ) : null}
               </div>
             ) : null}
@@ -2109,36 +2322,29 @@ export default function App() {
                   onAction={emptyStateAction}
                 />
               ) : (
-                <div className="gallery-wrap" data-demo={showDemoGallery}>
+                <div
+                  className="gallery-wrap"
+                  data-demo={showDemoGallery}
+                  onPointerDown={handleGalleryPointerDown}
+                >
                   <MasonryGrid
                     assetSourcesFor={(fragment) =>
                       assetSourcesFor(fragment, "gallery")
                     }
                     fragments={galleryFragments}
                     onAssetFallback={resolveAssetFallback}
-                    onDragEnd={handleDragEnd}
-                    onDragStart={handleFragmentDragStart}
                     selectionActive={selectedVisibleCount > 0}
                     selectedIds={selectedFragmentIdSet}
                     onSelect={handleFragmentCardSelect}
                   />
                   {!showDemoGallery && (activeHasMore || activePageLoading) ? (
-                    <div className="section-heading" aria-live="polite">
-                      <span>
-                        Showing {fragments.length} of {activeTotal}
-                      </span>
-                      <button
-                        aria-label={`Load more Fragments. Showing ${fragments.length} of ${activeTotal}`}
-                        className="button compact"
-                        disabled={activePageLoading || !activeHasMore}
-                        onClick={() =>
-                          void loadActivePage(selectedFrameIdRef.current, false)
-                        }
-                        type="button"
-                      >
-                        {activePageLoading ? "Loading" : "Load More"}
-                      </button>
-                    </div>
+                    <LoadMoreSentinel
+                      hasMore={activeHasMore}
+                      loadedCount={fragments.length}
+                      loading={activePageLoading}
+                      totalCount={activeTotal}
+                      onLoadMore={loadNextActivePage}
+                    />
                   ) : null}
                 </div>
               )}
@@ -2147,18 +2353,27 @@ export default function App() {
         )}
       </div>
 
+      <DragGhost session={pointerDrag.session} />
+      <MarqueeOverlay rect={marquee.rect} />
+
       {trashUndo ? (
-        <div aria-label="Trash action" className="undo-toast" role="region">
-          <Trash2 aria-hidden="true" size={17} />
+        <div aria-label="Undoable action" className="undo-toast" role="region">
+          {trashUndo.kind === "import-summary" ? (
+            <Undo2 aria-hidden="true" size={17} />
+          ) : (
+            <Trash2 aria-hidden="true" size={17} />
+          )}
           <strong aria-live="polite">{trashUndo.label}</strong>
-          <button
-            className="button compact"
-            onClick={() => void undoLastTrashMove()}
-            type="button"
-          >
-            <Undo2 aria-hidden="true" size={15} />
-            <span>Undo</span>
-          </button>
+          {trashUndo.kind !== "import-summary" || trashUndo.ids.length > 0 ? (
+            <button
+              className="button compact"
+              onClick={() => void undoLastTrashMove()}
+              type="button"
+            >
+              <Undo2 aria-hidden="true" size={15} />
+              <span>Undo</span>
+            </button>
+          ) : null}
           <button
             aria-label="Dismiss Undo"
             className="icon-button compact-icon"
@@ -2177,31 +2392,15 @@ export default function App() {
           initialName={
             frameModal.mode === "rename" ? frameModal.frame.name : ""
           }
-          title={frameModal.mode === "rename" ? "Rename" : "New Frame"}
+          title={
+            frameModal.mode === "rename"
+              ? "Rename"
+              : frameModal.parentId
+                ? "New Sub-frame"
+                : "New Frame"
+          }
           onCancel={() => setFrameModal(null)}
           onSubmit={submitFrame}
-        />
-      ) : null}
-
-      {duplicateImports[0] ? (
-        <DuplicateImportModal
-          canAddToFrame={
-            duplicateImports[0].item.errorCode === "duplicate_asset_elsewhere"
-          }
-          existingFrameName={
-            frameById.get(duplicateImports[0].existing.frameId)?.name ??
-            "another Frame"
-          }
-          existingTitle={
-            duplicateImports[0].existing.title ?? duplicateImports[0].item.name
-          }
-          fileName={duplicateImports[0].item.name}
-          frameName={duplicateImports[0].item.frameName}
-          trashed={duplicateImports[0].item.existingTrashed ?? false}
-          onAddToFrame={addDuplicateImportToFrame}
-          onCancel={dismissDuplicateImport}
-          onOpenExisting={openDuplicateImport}
-          onRenameExisting={renameDuplicateImport}
         />
       ) : null}
 
@@ -2213,6 +2412,11 @@ export default function App() {
           sharedReferenceCount={selectedFragmentReferenceCount}
           onAssetFallback={resolveAssetFallback}
           onClose={() => setSelectedFragment(null)}
+          onCopyImage={
+            isTauriRuntime()
+              ? () => copyFragmentImage(selectedFragment.id)
+              : undefined
+          }
           onDelete={removeSelectedFragment}
           onDeleteEverywhere={removeSelectedFragmentEverywhere}
           onOpenSource={() => openFragmentSource(selectedFragment.id)}

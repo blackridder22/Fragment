@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
 use crate::hashing::sha256_hex;
-use crate::models::{FileCleanupReport, Fragment, ImportDuplicateCheck, PurgeReport};
+use crate::models::{FileCleanupReport, Fragment, PurgeReport};
 use crate::storage::{extension_for_format, mime_for_format, safe_existing_file, write_atomic};
 use crate::thumbnails::{decode_image, dimensions, generate_preview, generate_thumbnail};
 
@@ -31,6 +31,17 @@ pub(crate) struct NewFragmentAsset {
 pub(crate) struct MembershipBatchResult {
     pub(crate) fragments: Vec<Fragment>,
     pub(crate) duplicates: Vec<(String, bool)>,
+    pub(crate) reused_existing_asset: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportOutcome {
+    New(Fragment),
+    Linked(Fragment),
+    SkippedDuplicate {
+        existing_fragment_id: String,
+        trashed: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +212,17 @@ impl FragmentCore {
         offset: usize,
         limit: usize,
     ) -> CoreResult<(Vec<Fragment>, u64)> {
+        self.list_fragment_page_scoped(frame_id, false, trashed, offset, limit)
+    }
+
+    pub fn list_fragment_page_scoped(
+        &self,
+        frame_id: Option<String>,
+        include_descendants: bool,
+        trashed: bool,
+        offset: usize,
+        limit: usize,
+    ) -> CoreResult<(Vec<Fragment>, u64)> {
         if let Some(frame_id) = frame_id.as_deref() {
             self.require_frame(frame_id)?;
         }
@@ -208,7 +230,20 @@ impl FragmentCore {
         let mut conditions = Vec::with_capacity(3);
         let mut values = Vec::with_capacity(3);
         if let Some(frame_id) = frame_id {
-            conditions.push("fragments.frame_id = ?");
+            conditions.push(if include_descendants {
+                "fragments.frame_id IN (
+                   WITH RECURSIVE frame_tree(id) AS (
+                     SELECT id FROM frames WHERE id = ?
+                     UNION ALL
+                     SELECT frames.id FROM frames
+                     INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
+                     WHERE frames.deleted_at IS NULL
+                   )
+                   SELECT id FROM frame_tree
+                 )"
+            } else {
+                "fragments.frame_id = ?"
+            });
             values.push(Value::Text(frame_id));
         }
         conditions.push(if trashed {
@@ -260,6 +295,17 @@ impl FragmentCore {
         query: Option<String>,
         source_filter: Option<String>,
     ) -> CoreResult<Vec<String>> {
+        self.list_fragment_ids_scoped(frame_id, false, trashed, query, source_filter)
+    }
+
+    pub fn list_fragment_ids_scoped(
+        &self,
+        frame_id: Option<String>,
+        include_descendants: bool,
+        trashed: bool,
+        query: Option<String>,
+        source_filter: Option<String>,
+    ) -> CoreResult<Vec<String>> {
         if let Some(frame_id) = frame_id.as_deref() {
             self.require_frame(frame_id)?;
         }
@@ -267,7 +313,20 @@ impl FragmentCore {
         let mut conditions = Vec::with_capacity(6);
         let mut values = Vec::with_capacity(3);
         if let Some(frame_id) = frame_id {
-            conditions.push("fragments.frame_id = ?");
+            conditions.push(if include_descendants {
+                "fragments.frame_id IN (
+                   WITH RECURSIVE frame_tree(id) AS (
+                     SELECT id FROM frames WHERE id = ?
+                     UNION ALL
+                     SELECT frames.id FROM frames
+                     INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
+                     WHERE frames.deleted_at IS NULL
+                   )
+                   SELECT id FROM frame_tree
+                 )"
+            } else {
+                "fragments.frame_id = ?"
+            });
             values.push(Value::Text(frame_id));
         }
         conditions.push(if trashed {
@@ -690,21 +749,6 @@ impl FragmentCore {
         Ok((usize_to_u64(expired.len()), removed_assets))
     }
 
-    pub fn check_import_duplicate(
-        &self,
-        frame_id: Option<String>,
-        file_path: String,
-    ) -> CoreResult<ImportDuplicateCheck> {
-        let frame_id = self.resolve_frame_id(frame_id)?;
-        let safe_path = safe_existing_file(Path::new(&file_path))?;
-        let bytes = fs::read(&safe_path)?;
-        let image = decode_image(&bytes)?;
-        let (width, height) = dimensions(&image);
-        let sha256 = sha256_hex(&bytes);
-        let title = file_title(&safe_path);
-        self.duplicate_check_for_asset(&frame_id, &sha256, title.as_deref(), width, height)
-    }
-
     pub fn import_image(
         &self,
         frame_id: Option<String>,
@@ -740,6 +784,59 @@ impl FragmentCore {
             },
             false,
         )
+    }
+
+    pub fn import_image_outcome(
+        &self,
+        frame_id: Option<String>,
+        file_path: String,
+        title_override: Option<String>,
+    ) -> CoreResult<ImportOutcome> {
+        let frame_id = self.resolve_frame_id(frame_id)?;
+        let safe_path = safe_existing_file(Path::new(&file_path))?;
+        let bytes = fs::read(&safe_path)?;
+        let format = image::guess_format(&bytes)?;
+        let fallback_title = file_title(&safe_path);
+        let title = title_override
+            .as_ref()
+            .and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
+            .or(fallback_title);
+
+        let result = self.insert_fragments_from_asset(
+            &[frame_id],
+            NewFragmentAsset {
+                bytes,
+                format,
+                title,
+                note: None,
+                source_url: None,
+                page_url: None,
+                site_name: None,
+                creator_name: None,
+                captured_from: Some("local_import".to_string()),
+            },
+            &[],
+            true,
+        )?;
+        if let Some(fragment) = result.fragments.into_iter().next() {
+            return Ok(if result.reused_existing_asset {
+                ImportOutcome::Linked(fragment)
+            } else {
+                ImportOutcome::New(fragment)
+            });
+        }
+        if let Some((existing_fragment_id, trashed)) = result.duplicates.into_iter().next() {
+            return Ok(ImportOutcome::SkippedDuplicate {
+                existing_fragment_id,
+                trashed,
+            });
+        }
+        Err(CoreError::InvalidInput(
+            "Fragment import produced no outcome".to_string(),
+        ))
     }
 
     pub(crate) fn insert_fragment_from_asset(
@@ -862,6 +959,7 @@ impl FragmentCore {
                 MembershipBatchResult {
                     fragments,
                     duplicates,
+                    reused_existing_asset,
                 },
                 inserted_staged_asset,
             ))
@@ -939,165 +1037,6 @@ impl FragmentCore {
         };
         self.require_frame(&frame_id)?;
         Ok(frame_id)
-    }
-
-    fn duplicate_check_for_asset(
-        &self,
-        frame_id: &str,
-        sha256: &str,
-        title: Option<&str>,
-        width: i64,
-        height: i64,
-    ) -> CoreResult<ImportDuplicateCheck> {
-        let conn = self.conn()?;
-        let same_image = conn
-            .query_row(
-                "
-                SELECT fragments.id, fragments.title, frames.id, frames.name,
-                       fragments.deleted_at
-                FROM fragments
-                LEFT JOIN assets ON assets.id = fragments.asset_id
-                LEFT JOIN frames ON frames.id = fragments.frame_id
-                WHERE fragments.frame_id = ?1
-                  AND COALESCE(assets.sha256, fragments.sha256) = ?2
-                ORDER BY (fragments.deleted_at IS NULL) DESC, fragments.captured_at ASC
-                LIMIT 1
-                ",
-                params![frame_id, sha256],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ))
-                },
-            )
-            .optional()?;
-        if let Some((
-            existing_id,
-            existing_title,
-            existing_frame_id,
-            existing_frame_name,
-            deleted_at,
-        )) = same_image
-        {
-            return Ok(ImportDuplicateCheck {
-                duplicate: true,
-                kind: Some(if deleted_at.is_some() {
-                    "same_image_in_trash".to_string()
-                } else {
-                    "same_image".to_string()
-                }),
-                existing_fragment_id: Some(existing_id),
-                existing_frame_id,
-                existing_frame_name,
-                existing_title,
-                suggested_title: title.map(suggest_copy_title),
-                width: Some(width),
-                height: Some(height),
-            });
-        }
-
-        let normalized_title = title.map(str::trim).filter(|value| !value.is_empty());
-        if let Some(title) = normalized_title {
-            let same_title_and_pixels = conn
-                .query_row(
-                    "
-                    SELECT fragments.id, fragments.title, frames.id, frames.name
-                    FROM fragments
-                    LEFT JOIN assets ON assets.id = fragments.asset_id
-                    LEFT JOIN frames ON frames.id = fragments.frame_id
-                    WHERE fragments.frame_id = ?1
-                      AND fragments.deleted_at IS NULL
-                      AND frames.deleted_at IS NULL
-                      AND lower(COALESCE(fragments.title, '')) = lower(?2)
-                      AND COALESCE(assets.width, fragments.width) = ?3
-                      AND COALESCE(assets.height, fragments.height) = ?4
-                    ORDER BY fragments.captured_at ASC
-                    LIMIT 1
-                    ",
-                    params![frame_id, title, width, height],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, Option<String>>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                        ))
-                    },
-                )
-                .optional()?;
-            if let Some((existing_id, existing_title, existing_frame_id, existing_frame_name)) =
-                same_title_and_pixels
-            {
-                return Ok(ImportDuplicateCheck {
-                    duplicate: true,
-                    kind: Some("same_name_and_pixels".to_string()),
-                    existing_fragment_id: Some(existing_id),
-                    existing_frame_id,
-                    existing_frame_name,
-                    existing_title,
-                    suggested_title: Some(suggest_copy_title(title)),
-                    width: Some(width),
-                    height: Some(height),
-                });
-            }
-        }
-
-        let same_image_elsewhere = conn
-            .query_row(
-                "
-                SELECT fragments.id, fragments.title, frames.id, frames.name
-                FROM fragments
-                LEFT JOIN assets ON assets.id = fragments.asset_id
-                LEFT JOIN frames ON frames.id = fragments.frame_id
-                WHERE fragments.frame_id <> ?1
-                  AND fragments.deleted_at IS NULL
-                  AND frames.deleted_at IS NULL
-                  AND COALESCE(assets.sha256, fragments.sha256) = ?2
-                ORDER BY fragments.captured_at ASC
-                LIMIT 1
-                ",
-                params![frame_id, sha256],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                },
-            )
-            .optional()?;
-        if let Some((existing_id, existing_title, existing_frame_id, existing_frame_name)) =
-            same_image_elsewhere
-        {
-            return Ok(ImportDuplicateCheck {
-                duplicate: true,
-                kind: Some("same_image_in_vault".to_string()),
-                existing_fragment_id: Some(existing_id),
-                existing_frame_id,
-                existing_frame_name,
-                existing_title,
-                suggested_title: title.map(suggest_copy_title),
-                width: Some(width),
-                height: Some(height),
-            });
-        }
-
-        Ok(ImportDuplicateCheck {
-            duplicate: false,
-            kind: None,
-            existing_fragment_id: None,
-            existing_frame_id: None,
-            existing_frame_name: None,
-            existing_title: None,
-            suggested_title: title.map(suggest_copy_title),
-            width: Some(width),
-            height: Some(height),
-        })
     }
 
     fn prepare_asset_files(
@@ -1457,15 +1396,6 @@ fn file_title(path: &Path) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn suggest_copy_title(title: &str) -> String {
-    let trimmed = title.trim();
-    if trimmed.is_empty() {
-        "Untitled copy".to_string()
-    } else {
-        format!("{trimmed} copy")
-    }
-}
-
 fn original_path(root: &Path, asset_id: &str, extension: &str, year: i32, month: u32) -> PathBuf {
     root.join("originals")
         .join(year.to_string())
@@ -1481,7 +1411,7 @@ mod tests {
     use rusqlite::params;
     use tempfile::tempdir;
 
-    use crate::{CoreError, FragmentCore};
+    use crate::{CoreError, FragmentCore, ImportOutcome};
 
     fn sample_png_bytes() -> Vec<u8> {
         let image = ImageBuffer::from_fn(24, 16, |x, y| {
@@ -1578,22 +1508,132 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_check_flags_same_frame_image() {
+    fn import_outcome_links_cross_frame_duplicate_without_error() {
         let temp = tempdir().expect("tempdir");
         let source_path = temp.path().join("source.png");
         std::fs::write(&source_path, sample_png_bytes()).expect("write source");
         let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
-        core.import_image(None, source_path.to_string_lossy().to_string(), None)
-            .expect("import");
+        let target = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
 
-        let check = core
-            .check_import_duplicate(None, source_path.to_string_lossy().to_string())
-            .expect("check");
+        let linked = match core
+            .import_image_outcome(
+                Some(target.id),
+                source_path.to_string_lossy().to_string(),
+                None,
+            )
+            .expect("link outcome")
+        {
+            ImportOutcome::Linked(fragment) => fragment,
+            outcome => panic!("expected linked outcome, got {outcome:?}"),
+        };
 
-        assert!(check.duplicate);
-        assert_eq!(check.kind.as_deref(), Some("same_image"));
-        assert_eq!(check.width, Some(24));
-        assert_eq!(check.height, Some(16));
+        assert_ne!(first.id, linked.id);
+        assert_eq!(first.asset_id, linked.asset_id);
+        let conn = core.conn().expect("conn");
+        let assets: i64 = conn
+            .query_row("SELECT count(*) FROM assets", [], |row| row.get(0))
+            .expect("asset count");
+        assert_eq!(assets, 1);
+    }
+
+    #[test]
+    fn import_outcome_skips_same_frame_duplicate() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+
+        let outcome = core
+            .import_image_outcome(None, source_path.to_string_lossy().to_string(), None)
+            .expect("skip outcome");
+
+        assert_eq!(
+            outcome,
+            ImportOutcome::SkippedDuplicate {
+                existing_fragment_id: first.id,
+                trashed: false,
+            }
+        );
+        assert_eq!(core.list_all_fragments().expect("fragments").len(), 1);
+    }
+
+    #[test]
+    fn import_outcome_skip_reports_trashed_membership() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        core.delete_fragment_with_policy(first.id.clone(), Some(7))
+            .expect("trash");
+
+        let outcome = core
+            .import_image_outcome(None, source_path.to_string_lossy().to_string(), None)
+            .expect("skip outcome");
+
+        assert_eq!(
+            outcome,
+            ImportOutcome::SkippedDuplicate {
+                existing_fragment_id: first.id,
+                trashed: true,
+            }
+        );
+    }
+
+    #[test]
+    fn hard_delete_of_linked_membership_preserves_shared_asset_files() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let target = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let linked = match core
+            .import_image_outcome(
+                Some(target.id),
+                source_path.to_string_lossy().to_string(),
+                None,
+            )
+            .expect("link outcome")
+        {
+            ImportOutcome::Linked(fragment) => fragment,
+            outcome => panic!("expected linked outcome, got {outcome:?}"),
+        };
+        let paths = [
+            Some(first.original_path.as_str()),
+            Some(first.thumbnail_path.as_str()),
+            first.preview_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|relative_path| {
+            core.paths()
+                .resolve_relative_path(relative_path)
+                .expect("resolve")
+        })
+        .collect::<Vec<_>>();
+
+        core.delete_fragment_with_policy(linked.id, Some(0))
+            .expect("hard delete linked membership");
+
+        assert!(core.get_fragment(first.id).is_ok());
+        for path in paths {
+            assert!(path.exists(), "{} should remain", path.display());
+        }
     }
 
     #[test]
@@ -1636,11 +1676,6 @@ mod tests {
             .expect("import");
         core.delete_fragment_with_policy(fragment.id.clone(), Some(7))
             .expect("trash");
-
-        let check = core
-            .check_import_duplicate(None, source_path.to_string_lossy().to_string())
-            .expect("duplicate check");
-        assert_eq!(check.kind.as_deref(), Some("same_image_in_trash"));
 
         let error = core
             .import_image(None, source_path.to_string_lossy().to_string(), None)
@@ -1744,41 +1779,6 @@ mod tests {
             .query_row("SELECT count(*) FROM assets", [], |row| row.get(0))
             .expect("asset count");
         assert_eq!(assets, 1);
-    }
-
-    #[test]
-    fn duplicate_check_flags_same_image_elsewhere_in_vault() {
-        let temp = tempdir().expect("tempdir");
-        let source_path = temp.path().join("source.png");
-        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
-        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
-        let source_frame = core
-            .create_frame(None, "Source Frame".to_string())
-            .expect("source frame");
-        let target_frame = core
-            .create_frame(None, "Target Frame".to_string())
-            .expect("target frame");
-        core.import_image(
-            Some(source_frame.id.clone()),
-            source_path.to_string_lossy().to_string(),
-            None,
-        )
-        .expect("import");
-
-        let check = core
-            .check_import_duplicate(
-                Some(target_frame.id),
-                source_path.to_string_lossy().to_string(),
-            )
-            .expect("check");
-
-        assert!(check.duplicate);
-        assert_eq!(check.kind.as_deref(), Some("same_image_in_vault"));
-        assert_eq!(
-            check.existing_frame_id.as_deref(),
-            Some(source_frame.id.as_str())
-        );
-        assert_eq!(check.existing_frame_name.as_deref(), Some("Source Frame"));
     }
 
     #[test]
@@ -2080,6 +2080,54 @@ mod tests {
             .active_fragment_counts_by_frame()
             .expect("frame counts");
         assert_eq!(counts.values().sum::<u64>(), 2);
+    }
+
+    #[test]
+    fn recursive_frame_scope_includes_descendant_memberships_only_when_requested() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let parent = core
+            .create_frame(None, "Parent".to_string())
+            .expect("create parent");
+        let child = core
+            .create_frame(Some(parent.id.clone()), "Child".to_string())
+            .expect("create child");
+        let unrelated = core
+            .create_frame(None, "Unrelated".to_string())
+            .expect("create unrelated");
+        let parent_fragment = core
+            .import_image(
+                Some(parent.id.clone()),
+                source_path.to_string_lossy().to_string(),
+                None,
+            )
+            .expect("import parent membership");
+        let child_fragment = core
+            .add_existing_fragment_to_frame(parent_fragment.id.clone(), Some(child.id))
+            .expect("add child membership");
+        core.add_existing_fragment_to_frame(parent_fragment.id.clone(), Some(unrelated.id))
+            .expect("add unrelated membership");
+
+        let (direct, direct_total) = core
+            .list_fragment_page_scoped(Some(parent.id.clone()), false, false, 0, 10)
+            .expect("direct page");
+        assert_eq!(direct_total, 1);
+        assert_eq!(direct[0].id, parent_fragment.id);
+
+        let (recursive, recursive_total) = core
+            .list_fragment_page_scoped(Some(parent.id.clone()), true, false, 0, 10)
+            .expect("recursive page");
+        assert_eq!(recursive_total, 2);
+        assert!(recursive
+            .iter()
+            .any(|fragment| fragment.id == child_fragment.id));
+
+        let recursive_ids = core
+            .list_fragment_ids_scoped(Some(parent.id), true, false, None, None)
+            .expect("recursive ids");
+        assert_eq!(recursive_ids.len(), 2);
     }
 
     #[test]

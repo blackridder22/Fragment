@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useState,
-  type DragEventHandler,
-  type MouseEvent,
-} from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import type { Fragment } from "@fragment/shared";
 import { Check, ImageOff, Maximize2 } from "lucide-react";
 import type { AssetSource } from "../lib/assets";
@@ -12,23 +7,17 @@ type FragmentCardProps = {
   fragment: Fragment;
   assetSources: AssetSource[];
   selected: boolean;
-  draggable?: boolean;
   selectionActive?: boolean;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
-  onDragEnd?: DragEventHandler<HTMLElement>;
-  onDragStart?: DragEventHandler<HTMLElement>;
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
 };
 
 export function FragmentCard({
   fragment,
   assetSources,
-  draggable = true,
   selectionActive = false,
   selected,
   onAssetFallback,
-  onDragEnd,
-  onDragStart,
   onSelect,
 }: FragmentCardProps) {
   const [displayIndex, setDisplayIndex] = useState(0);
@@ -70,9 +59,6 @@ export function FragmentCard({
       data-fragment-id={fragment.id}
       data-selected={selected}
       data-transparent={transparentAsset}
-      draggable={draggable}
-      onDragEnd={draggable ? onDragEnd : undefined}
-      onDragStart={draggable ? onDragStart : undefined}
     >
       <button
         aria-label={`${selected ? "Deselect" : selectionActive ? "Select" : "Open"} ${fragment.title ?? "Fragment"}`}

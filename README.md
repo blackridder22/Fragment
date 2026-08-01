@@ -4,9 +4,9 @@ Fragment by Auto Scale Agency is a macOS-first, local-first visual reference
 vault. Users save selected images as **Fragments** inside **Frames**, with
 original files and thumbnails stored on disk and metadata stored in SQLite.
 
-The desktop app is a visual vault, not an IDE or file explorer. The primary UI
-uses a top command bar, Frame chips/cards, and a masonry Fragment grid inspired
-by visual browsing products.
+The desktop app is a visual vault, not an IDE. The primary UI uses a compact,
+resizable Frame Navigator, a top command bar, visual Frame cards, breadcrumbs,
+and a masonry Fragment grid.
 
 ## Stack
 
@@ -54,10 +54,13 @@ pnpm test
 
 ## Desktop MVP
 
-The desktop app creates an **Inbox** Frame on first launch. It supports visual
-Frame browsing, local image import, thumbnail and preview generation, masonry
-display, Fragment detail editing, reveal in Finder, and opening Source URLs when
-present.
+The desktop app creates an undeletable **Inbox** Frame on first launch. The
+Vault is the virtual root; user Frames may be nested as Sub-frames and reordered
+without changing the Inbox role. The Frame Navigator supports search, Quick
+Access pins, inline rename, breadcrumbs, recursive browsing, and dropping
+Fragments onto a destination Frame. The app also supports local image import,
+thumbnail and preview generation, masonry display, Fragment detail editing,
+reveal in Finder, and opening Source URLs when present.
 
 Local data is stored by default at:
 
@@ -134,7 +137,8 @@ Included:
 
 - Desktop local Vault
 - Default Inbox Frame
-- Frame create, rename, delete
+- Frame and Sub-frame create, inline rename, reorder, reparent, and Trash
+- Collapsible/resizable Frame Navigator, breadcrumbs, search, and Quick Access
 - Local image import
 - Thumbnail generation
 - Masonry Fragment grid
@@ -158,7 +162,6 @@ Not included:
 
 - Blob, data, and protected image URLs return a clear capture error.
 - The first capture flow is URL-first only; screenshot fallback is not included.
-- Frame nesting is supported by the data model but not exposed deeply in the UI.
 - Extension popup is minimal because the toolbar click is reserved for Capture Mode.
 
 ## Checks

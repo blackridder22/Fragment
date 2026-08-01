@@ -1,7 +1,7 @@
 # Architecture
 
-Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.3 is
-in development on branch `v0.0.3`.
+Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.5 is
+developed on branch `vbeta0.0.5`.
 
 ## Runtime components
 
@@ -37,7 +37,7 @@ assets (one stored image)
 
 Capturing or importing the same bytes into another Frame reuses the asset and
 creates another membership. It must not copy the original or derived files.
-The v0.0.3 release invariant is one active membership for each
+The release invariant is one active membership for each
 `(frame_id, asset_id)` pair.
 
 Removing a Fragment from one Frame affects that membership only. Delete
@@ -52,8 +52,28 @@ retention choices are 7, 14, 24, or 31 days, plus Delete Forever. The v0.0.3
 product default is 31 days.
 
 Frame Trash, restart-safe expiry purge, and atomic Delete Everywhere are
-v0.0.3 implementation targets. Until those invariants land, documentation and
-tests must not describe direct Frame deletion as recoverable.
+implemented and covered by core tests.
+
+## Frame hierarchy and navigation
+
+`frames.parent_id` expresses a Frame tree and `sort_order` expresses order among
+siblings. The Vault is a virtual root rather than a database row. Inbox is the
+protected system Frame used by capture and imports when no destination is
+chosen; it stays at the Vault root but may contain user-created Sub-frames.
+
+Frame moves are transactional. The core rejects attempts to move Inbox, move a
+Frame into itself, or create a parent/descendant cycle. Moving a Frame rewrites
+both source and destination sibling order.
+
+The desktop Frame Navigator derives the visible tree from the flat Frame list.
+Expand state, Quick Access pins, width, collapsed state, and the recursive-view
+preference are local UI preferences. Frame search keeps matching Frames and
+their ancestors visible. Breadcrumbs expose the current path.
+
+Fragment listing stays paginated. When **Include Sub-frame Fragments** is on,
+the core uses a recursive Frame CTE for page and selection-ID queries; otherwise
+queries remain scoped to the selected Frame only. Snapshot `frame_counts` are
+direct counts, while the UI derives recursive totals from the Frame tree.
 
 ## Storage
 
@@ -101,8 +121,8 @@ host installer are development tools only.
 - `extensionVersion` in a capture request identifies the sending extension
   build; it is not a negotiated protocol revision.
 - `pong.version` identifies the running native host build.
-- Native protocol version negotiation is not implemented yet. It is a v0.0.3
-  release target and must retain one-version backward compatibility when added.
+- Native protocol version negotiation is not implemented yet. When added, it
+  must retain one-version backward compatibility.
 
 ## Performance fixtures
 

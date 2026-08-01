@@ -125,6 +125,49 @@ describe("selectionReducer", () => {
     ]);
   });
 
+  it("replaces multiple IDs in the supplied visual order", () => {
+    const state = selectionReducer(createSelectionState(vaultScope), {
+      type: "replace-many",
+      scopeKey: vaultScope,
+      matchingIds: ["d", "b", "a", "c"],
+      ids: ["a", "unknown", "d"],
+    });
+    expect(resolveSelectedIds(state, vaultScope, ["d", "b", "a", "c"])).toEqual(
+      ["d", "a"],
+    );
+  });
+
+  it("clears when a replace-many action has no valid IDs", () => {
+    const selected = selectionReducer(createSelectionState(vaultScope), {
+      type: "select-all",
+      scopeKey: vaultScope,
+      matchingIds: ids,
+    });
+    const state = selectionReducer(selected, {
+      type: "replace-many",
+      scopeKey: vaultScope,
+      matchingIds: ids,
+      ids: ["unknown"],
+    });
+    expect(resolveSelectedIds(state, vaultScope, ids)).toEqual([]);
+  });
+
+  it("uses the caller-provided union for additive marquee replacement", () => {
+    const state = selectionReducer(createSelectionState(vaultScope), {
+      type: "replace-many",
+      scopeKey: vaultScope,
+      matchingIds: ["offscreen-a", "offscreen-b", ...ids],
+      ids: ["offscreen-a", "offscreen-b", "b", "d", "e"],
+    });
+    expect(
+      resolveSelectedIds(state, vaultScope, [
+        "offscreen-a",
+        "offscreen-b",
+        ...ids,
+      ]),
+    ).toEqual(["offscreen-a", "offscreen-b", "b", "d", "e"]);
+  });
+
   it("clears with Escape and toggles the focused card with Space", () => {
     let state = selectionReducer(createSelectionState(vaultScope), {
       type: "toggle",
@@ -146,6 +189,10 @@ describe("selectionReducer", () => {
     expect(selectionKeyboardIntent("Escape")).toBe("clear");
     expect(selectionKeyboardIntent("a", { metaKey: true })).toBe("select-all");
     expect(selectionKeyboardIntent("a", { ctrlKey: true })).toBe("select-all");
+    expect(selectionKeyboardIntent("Backspace")).toBe("delete-selection");
+    expect(selectionKeyboardIntent("Delete")).toBe("delete-selection");
+    expect(selectionKeyboardIntent("Backspace", { metaKey: true })).toBeNull();
+    expect(selectionKeyboardIntent("Delete", { shiftKey: true })).toBeNull();
     expect(selectionKeyboardIntent(" ")).toBeNull();
   });
 });

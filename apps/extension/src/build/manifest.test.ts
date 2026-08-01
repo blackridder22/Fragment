@@ -11,7 +11,7 @@ function readJson(relativePath: string): unknown {
 }
 
 describe("extension manifest packaging", () => {
-  it("emits the canonical v0.0.3 Fragment manifest", () => {
+  it("emits the canonical v0.0.5 Fragment manifest", () => {
     const canonical = readJson("manifest.json") as Record<string, unknown>;
     const packageMetadata = readJson("package.json") as {
       version: string;
@@ -23,14 +23,14 @@ describe("extension manifest packaging", () => {
 
     expect(packaged).toEqual(canonical);
     expect(packaged.name).toBe("Fragment");
-    expect(packaged.version).toBe("0.0.3");
+    expect(packaged.version).toBe("0.0.5");
   });
 
   it("rejects version drift before packaging", () => {
     expect(() =>
       packageExtensionManifest(
-        { manifest_version: 3, name: "Fragment", version: "0.0.2" },
-        "0.0.3",
+        { manifest_version: 3, name: "Fragment", version: "0.0.4" },
+        "0.0.5",
       ),
     ).toThrow(/does not match package version/);
   });

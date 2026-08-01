@@ -4,6 +4,7 @@ type FrameChipBarProps = {
   frames: Frame[];
   selectedFrameId: string | null;
   counts: Map<string, number>;
+  dropFrameId?: string | null;
   onSelect: (frameId: string | null) => void;
 };
 
@@ -11,6 +12,7 @@ export function FrameChipBar({
   frames,
   selectedFrameId,
   counts,
+  dropFrameId = null,
   onSelect,
 }: FrameChipBarProps) {
   return (
@@ -29,6 +31,8 @@ export function FrameChipBar({
           aria-pressed={selectedFrameId === frame.id}
           className="frame-chip"
           data-active={selectedFrameId === frame.id}
+          data-drop-state={dropFrameId === frame.id ? "armed" : "idle"}
+          data-drop-target={`frame-chip:${frame.id}`}
           key={frame.id}
           onClick={() => onSelect(frame.id)}
           type="button"

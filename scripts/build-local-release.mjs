@@ -11,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,10 +56,21 @@ if (!existsSync(bundledHost)) {
   );
 }
 
-const distributableFiles = [
-  extensionZip,
-  ...findByExtension(bundleDir, ".dmg"),
-];
+const bundleDmgs = findByExtension(bundleDir, ".dmg");
+const intermediateDmgs = bundleDmgs.filter((path) =>
+  /^rw\.\d+\.Fragment_.*\.dmg$/.test(basename(path)),
+);
+for (const path of intermediateDmgs) {
+  rmSync(path, { force: true });
+}
+const finalDmgs = bundleDmgs.filter((path) => !intermediateDmgs.includes(path));
+if (finalDmgs.length !== 1) {
+  throw new Error(
+    `Expected one final DMG, found ${finalDmgs.length}: ${finalDmgs.join(", ")}`,
+  );
+}
+
+const distributableFiles = [extensionZip, ...finalDmgs];
 for (const file of distributableFiles) {
   copyIntoReleaseDirectory(file, releaseDir);
 }
@@ -81,10 +92,16 @@ const commit = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: root,
   encoding: "utf8",
 }).trim();
+const sourceDirty =
+  execFileSync("git", ["status", "--porcelain"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim().length > 0;
 const manifest = {
   product: "Fragment",
   version,
   commit,
+  sourceDirty,
   createdAt: new Date().toISOString(),
   appPath,
   bundledNativeHost: bundledHost,

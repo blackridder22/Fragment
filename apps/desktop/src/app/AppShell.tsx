@@ -1,38 +1,29 @@
-import type { DragEventHandler, ReactNode } from "react";
-import { IconRail, type RailView } from "../components/IconRail";
+import type { CSSProperties, ReactNode } from "react";
 
 type AppShellProps = {
-  activeView: RailView;
-  onViewChange: (view: RailView) => void;
-  onTrashDragEnter?: DragEventHandler<HTMLElement>;
-  onTrashDragLeave?: DragEventHandler<HTMLElement>;
-  onTrashDragOver?: DragEventHandler<HTMLElement>;
-  onTrashDrop?: DragEventHandler<HTMLElement>;
-  trashDropState?: "idle" | "armed" | "success";
   children: ReactNode;
+  navigator: ReactNode;
+  navigatorCollapsed: boolean;
+  navigatorWidth: number;
 };
 
 export function AppShell({
-  activeView,
-  onViewChange,
-  onTrashDragEnter,
-  onTrashDragLeave,
-  onTrashDragOver,
-  onTrashDrop,
-  trashDropState,
   children,
+  navigator,
+  navigatorCollapsed,
+  navigatorWidth,
 }: AppShellProps) {
   return (
-    <div className="app-shell">
-      <IconRail
-        activeView={activeView}
-        trashDropState={trashDropState}
-        onTrashDragEnter={onTrashDragEnter}
-        onTrashDragLeave={onTrashDragLeave}
-        onTrashDragOver={onTrashDragOver}
-        onTrashDrop={onTrashDrop}
-        onViewChange={onViewChange}
-      />
+    <div
+      className="app-shell"
+      data-navigator-collapsed={navigatorCollapsed}
+      style={
+        {
+          "--frame-navigator-width": `${navigatorCollapsed ? 68 : navigatorWidth}px`,
+        } as CSSProperties
+      }
+    >
+      {navigator}
       <main className="app-main">{children}</main>
     </div>
   );

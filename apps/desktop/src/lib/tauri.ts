@@ -36,6 +36,7 @@ export type ImportBatchResult = {
   errorCode?: string | null;
   existingFragmentId?: string | null;
   existingTrashed?: boolean | null;
+  outcome?: "new" | "linked" | "skipped" | null;
 };
 
 export type ImportBatchEvent =
@@ -46,6 +47,14 @@ export type ImportBatchEvent =
       jobId: string;
       requestId: string;
       fragment: Fragment;
+      linked: boolean;
+    }
+  | {
+      event: "skipped";
+      jobId: string;
+      requestId: string;
+      existingFragmentId: string;
+      existingTrashed: boolean;
     }
   | {
       event: "failed";
@@ -61,26 +70,11 @@ export type ImportBatchEvent =
       event: "finished";
       jobId: string;
       completed: number;
+      linked: number;
+      skipped: number;
       failed: number;
       cancelled: number;
     };
-
-export type ImportDuplicateCheck = {
-  duplicate: boolean;
-  kind?:
-    | "same_image"
-    | "same_image_in_vault"
-    | "same_name_and_pixels"
-    | string
-    | null;
-  existingFragmentId?: string | null;
-  existingFrameId?: string | null;
-  existingFrameName?: string | null;
-  existingTitle?: string | null;
-  suggestedTitle?: string | null;
-  width?: number | null;
-  height?: number | null;
-};
 
 export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -98,12 +92,14 @@ export async function loadLibrarySnapshot(
 
 export async function listFragmentPage(options: {
   frameId?: string | null;
+  includeDescendants?: boolean;
   trashed?: boolean;
   offset?: number;
   limit?: number;
 }): Promise<FragmentPage> {
   return invoke("list_fragment_page", {
     frameId: options.frameId ?? null,
+    includeDescendants: options.includeDescendants ?? false,
     trashed: options.trashed ?? false,
     offset: options.offset ?? 0,
     limit: options.limit ?? 60,
@@ -112,12 +108,14 @@ export async function listFragmentPage(options: {
 
 export async function listFragmentIds(options: {
   frameId?: string | null;
+  includeDescendants?: boolean;
   trashed?: boolean;
   query?: string;
   sourceFilter?: "all" | "source" | "local" | "png";
 }): Promise<string[]> {
   return invoke("list_fragment_ids", {
     frameId: options.frameId ?? null,
+    includeDescendants: options.includeDescendants ?? false,
     trashed: options.trashed ?? false,
     query: options.query?.trim() || null,
     sourceFilter: options.sourceFilter ?? "all",
@@ -132,12 +130,23 @@ export async function listFrames(): Promise<Frame[]> {
   return invoke("list_frames");
 }
 
-export async function createFrame(name: string): Promise<Frame> {
-  return invoke("create_frame", { parentId: null, name });
+export async function createFrame(
+  name: string,
+  parentId: string | null = null,
+): Promise<Frame> {
+  return invoke("create_frame", { parentId, name });
 }
 
 export async function renameFrame(id: string, name: string): Promise<Frame> {
   return invoke("rename_frame", { id, name });
+}
+
+export async function moveFrame(
+  id: string,
+  parentId: string | null,
+  position: number,
+): Promise<Frame> {
+  return invoke("move_frame", { id, parentId, position });
 }
 
 export async function deleteFrame(
@@ -225,13 +234,6 @@ export async function cancelImportJob(jobId: string): Promise<void> {
   return invoke("cancel_import_job", { jobId });
 }
 
-export async function checkImportDuplicate(
-  frameId: string | null,
-  filePath: string,
-): Promise<ImportDuplicateCheck> {
-  return invoke("check_import_duplicate", { frameId, filePath });
-}
-
 export async function deleteFragment(
   id: string,
   retentionDays?: number | null,
@@ -267,6 +269,10 @@ export async function revealFragmentInFinder(id: string): Promise<void> {
 
 export async function openFragmentSource(id: string): Promise<void> {
   return invoke("open_fragment_source", { id });
+}
+
+export async function copyFragmentImage(id: string): Promise<void> {
+  return invoke("copy_fragment_image", { id });
 }
 
 export async function loadAssetRoot(): Promise<string> {

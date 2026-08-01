@@ -43,20 +43,6 @@ pub struct Fragment {
     pub delete_after: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportDuplicateCheck {
-    pub duplicate: bool,
-    pub kind: Option<String>,
-    pub existing_fragment_id: Option<String>,
-    pub existing_frame_id: Option<String>,
-    pub existing_frame_name: Option<String>,
-    pub existing_title: Option<String>,
-    pub suggested_title: Option<String>,
-    pub width: Option<i64>,
-    pub height: Option<i64>,
-}
-
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileCleanupReport {

@@ -30,7 +30,7 @@ export function SettingsPage({
         <article>
           <Info size={19} />
           <span>About</span>
-          <strong>Fragment 0.0.3</strong>
+          <strong>Fragment 0.0.4</strong>
         </article>
         <article className="settings-theme-card">
           <Trash2 size={19} />

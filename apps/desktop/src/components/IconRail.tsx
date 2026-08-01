@@ -1,4 +1,3 @@
-import type { DragEventHandler } from "react";
 import { Aperture, Images, Settings, Trash2 } from "lucide-react";
 
 export type RailView = "home" | "frames" | "trash" | "settings";
@@ -6,10 +5,6 @@ export type RailView = "home" | "frames" | "trash" | "settings";
 type IconRailProps = {
   activeView: RailView;
   onViewChange: (view: RailView) => void;
-  onTrashDragEnter?: DragEventHandler<HTMLElement>;
-  onTrashDragLeave?: DragEventHandler<HTMLElement>;
-  onTrashDragOver?: DragEventHandler<HTMLElement>;
-  onTrashDrop?: DragEventHandler<HTMLElement>;
   trashDropState?: "idle" | "armed" | "success";
 };
 
@@ -27,10 +22,6 @@ const items: Array<{
 export function IconRail({
   activeView,
   onViewChange,
-  onTrashDragEnter,
-  onTrashDragLeave,
-  onTrashDragOver,
-  onTrashDrop,
   trashDropState = "idle",
 }: IconRailProps) {
   return (
@@ -56,12 +47,9 @@ export function IconRail({
               <div
                 className="rail-drop-zone"
                 data-drop-state={trashDropState}
+                data-drop-target="trash"
                 data-trash-zone="true"
                 key={item.id}
-                onDragEnter={onTrashDragEnter}
-                onDragLeave={onTrashDragLeave}
-                onDragOver={onTrashDragOver}
-                onDrop={onTrashDrop}
               >
                 <button
                   aria-current={activeView === item.id ? "page" : undefined}

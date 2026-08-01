@@ -17,6 +17,12 @@ export type SelectionAction =
   | { type: "clear"; scopeKey: string }
   | { type: "reconcile"; scopeKey: string; matchingIds: string[] }
   | { type: "select-all"; scopeKey: string; matchingIds: string[] }
+  | {
+      type: "replace-many";
+      scopeKey: string;
+      matchingIds: string[];
+      ids: string[];
+    }
   | { type: "toggle"; scopeKey: string; matchingIds: string[]; id: string }
   | {
       type: "range";
@@ -26,7 +32,11 @@ export type SelectionAction =
       additive?: boolean;
     };
 
-export type SelectionKeyboardIntent = "select-all" | "clear" | "toggle-focused";
+export type SelectionKeyboardIntent =
+  | "select-all"
+  | "clear"
+  | "toggle-focused"
+  | "delete-selection";
 
 export function createSelectionState(scopeKey = ""): SelectionState {
   return {
@@ -82,6 +92,22 @@ export function selectionReducer(
       matchingIds,
       excludedIds: [],
       anchorId: matchingIds[0],
+    };
+  }
+
+  if (action.type === "replace-many") {
+    const requested = new Set(action.ids);
+    const ids = matchingIds.filter(
+      (id) => validIds.has(id) && requested.has(id),
+    );
+    if (ids.length === 0) {
+      return createSelectionState(action.scopeKey);
+    }
+    return {
+      mode: "explicit",
+      scopeKey: action.scopeKey,
+      ids,
+      anchorId: ids[0] ?? null,
     };
   }
 
@@ -182,6 +208,7 @@ export function selectionKeyboardIntent(
     metaKey?: boolean;
     ctrlKey?: boolean;
     altKey?: boolean;
+    shiftKey?: boolean;
     hasFocusedItem?: boolean;
   } = {},
 ): SelectionKeyboardIntent | null {
@@ -191,6 +218,14 @@ export function selectionKeyboardIntent(
   }
   if (key === "Escape") {
     return "clear";
+  }
+  if (
+    !commandKey &&
+    !options.altKey &&
+    !options.shiftKey &&
+    (key === "Backspace" || key === "Delete")
+  ) {
+    return "delete-selection";
   }
   if ((key === " " || key === "Spacebar") && options.hasFocusedItem) {
     return "toggle-focused";

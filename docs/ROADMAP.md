@@ -10,7 +10,7 @@
 - Multi-Frame capture with one shared asset and multiple Fragment memberships.
 - Fragment Trash metadata and Restore entry points.
 
-## v0.0.3 - In progress
+## v0.0.3 - Completed
 
 This release is focused on reliability, measured speed, UIX polish, and a
 reproducible desktop-plus-extension release.
@@ -55,6 +55,23 @@ reproducible desktop-plus-extension release.
 - Consistent current branding and a canonical extension manifest.
 - Signed bundled native host and stable Chrome manifest installation.
 - Deterministic extension ZIP and coherent app/host/extension artifacts.
+
+## v0.0.4 - Completed
+
+- Finder-style marquee selection and pointer-driven multi-Fragment drag.
+- Drag selection to Trash or another Frame, plus keyboard deletion and Undo.
+- Silent indexed cross-Frame duplicate linking with one batch summary.
+- Native image clipboard copy, balanced detail navigation, and infinite scroll.
+
+## v0.0.5 - Frame Navigator
+
+- Resizable and collapsible sidebar with a real Frame/Sub-frame tree.
+- Vault as the virtual root and Inbox as the protected system Frame.
+- Root Frame and Sub-frame creation, inline rename, Frame search, breadcrumbs,
+  persisted expansion, and Quick Access pins.
+- Transactional sibling reorder and reparent with cycle protection.
+- Fragment drops onto any Frame row and Frame drag to Trash.
+- Direct/recursive counts and paginated **Include Sub-frame Fragments** scope.
 
 ## Explicitly later
 
