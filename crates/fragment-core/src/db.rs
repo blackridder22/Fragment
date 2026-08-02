@@ -13,7 +13,8 @@ use crate::errors::{CoreError, CoreResult};
 const INIT_MIGRATION: &str = include_str!("../migrations/0001_init.sql");
 const DATA_SAFETY_MIGRATION: &str = include_str!("../migrations/0002_data_safety.sql");
 const LIBRARY_REVISION_MIGRATION: &str = include_str!("../migrations/0003_library_revision.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const SMART_FRAMES_MIGRATION: &str = include_str!("../migrations/0004_smart_frames.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 #[derive(Clone)]
 pub struct FragmentCore {
@@ -114,6 +115,14 @@ fn run_migrations(connection: &mut Connection) -> CoreResult<()> {
     if version < 3 {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(LIBRARY_REVISION_MIGRATION)?;
+        tx.pragma_update(None, "user_version", 3_i64)?;
+        tx.commit()?;
+        version = 3;
+    }
+
+    if version < 4 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(SMART_FRAMES_MIGRATION)?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;
     }
@@ -410,7 +419,7 @@ mod tests {
         let conn = core.conn().expect("conn");
         let count: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('frames', 'assets', 'fragments', 'tags', 'fragment_tags', 'pending_file_deletions', 'vault_metadata')",
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('frames', 'assets', 'fragments', 'tags', 'fragment_tags', 'pending_file_deletions', 'vault_metadata', 'smart_frames')",
                 [],
                 |row| row.get(0),
             )
@@ -418,7 +427,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("schema version");
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 

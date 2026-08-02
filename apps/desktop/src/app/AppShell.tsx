@@ -19,7 +19,8 @@ export function AppShell({
       data-navigator-collapsed={navigatorCollapsed}
       style={
         {
-          "--frame-navigator-width": `${navigatorCollapsed ? 68 : navigatorWidth}px`,
+          "--frame-tree-width": `${navigatorWidth}px`,
+          "--app-sidebar-width": `${navigatorCollapsed ? 78 : navigatorWidth + 78}px`,
         } as CSSProperties
       }
     >

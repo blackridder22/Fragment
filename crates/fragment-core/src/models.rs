@@ -43,6 +43,41 @@ pub struct Fragment {
     pub delete_after: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FragmentFilter {
+    pub query: Option<String>,
+    pub tags: Vec<String>,
+    pub mime_types: Vec<String>,
+    pub source_domain: Option<String>,
+    pub source_kind: Option<String>,
+    pub captured_after: Option<String>,
+    pub captured_before: Option<String>,
+    pub min_width: Option<i64>,
+    pub max_width: Option<i64>,
+    pub min_height: Option<i64>,
+    pub max_height: Option<i64>,
+    pub orientation: Option<String>,
+    pub min_file_size: Option<i64>,
+    pub max_file_size: Option<i64>,
+    pub has_notes: Option<bool>,
+    pub note_contains: Option<String>,
+    pub title_contains: Option<String>,
+    pub site_contains: Option<String>,
+    pub creator_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartFrame {
+    pub id: String,
+    pub name: String,
+    pub filter: FragmentFilter,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileCleanupReport {

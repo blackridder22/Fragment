@@ -1,7 +1,7 @@
 # Architecture
 
-Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.5 is
-developed on branch `vbeta0.0.5`.
+Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.6 is
+developed on branch `vbeta0.0.6`.
 
 ## Runtime components
 

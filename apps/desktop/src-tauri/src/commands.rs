@@ -7,7 +7,9 @@ use std::time::Instant;
 
 use arboard::{Clipboard, ImageData};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use fragment_core::{CoreError, Fragment, Frame, ImportOutcome, PurgeReport};
+use fragment_core::{
+    CoreError, Fragment, FragmentFilter, Frame, ImportOutcome, PurgeReport, SmartFrame,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, State};
 use url::Url;
@@ -219,16 +221,20 @@ pub async fn list_fragment_page(
     trashed: Option<bool>,
     offset: Option<u32>,
     limit: Option<u32>,
+    filter: Option<FragmentFilter>,
+    sort_mode: Option<String>,
 ) -> CommandResult<FragmentPage> {
     let core = state.core.clone();
     let offset = offset.unwrap_or_default() as usize;
     let limit = page_size(limit);
     tauri::async_runtime::spawn_blocking(move || {
         let (items, total) = core
-            .list_fragment_page_scoped(
+            .list_fragment_page_filtered(
                 frame_id,
                 include_descendants.unwrap_or(false),
                 trashed.unwrap_or(false),
+                filter.unwrap_or_default(),
+                sort_mode,
                 offset,
                 limit,
             )
@@ -248,20 +254,62 @@ pub async fn list_fragment_ids(
     trashed: Option<bool>,
     query: Option<String>,
     source_filter: Option<String>,
+    filter: Option<FragmentFilter>,
+    sort_mode: Option<String>,
 ) -> CommandResult<Vec<String>> {
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        core.list_fragment_ids_scoped(
+        let filter = filter.unwrap_or_else(|| FragmentFilter {
+            query,
+            source_kind: source_filter,
+            ..FragmentFilter::default()
+        });
+        core.list_fragment_ids_filtered(
             frame_id,
             include_descendants.unwrap_or(false),
             trashed.unwrap_or(false),
-            query,
-            source_filter,
+            filter,
+            sort_mode,
         )
         .map_err(safe_error)
     })
     .await
     .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub fn list_smart_frames(state: State<'_, FragmentState>) -> CommandResult<Vec<SmartFrame>> {
+    state.core.list_smart_frames().map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn create_smart_frame(
+    state: State<'_, FragmentState>,
+    name: String,
+    filter: FragmentFilter,
+) -> CommandResult<SmartFrame> {
+    state
+        .core
+        .create_smart_frame(name, filter)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn update_smart_frame(
+    state: State<'_, FragmentState>,
+    id: String,
+    name: String,
+    filter: FragmentFilter,
+) -> CommandResult<SmartFrame> {
+    state
+        .core
+        .update_smart_frame(id, name, filter)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn delete_smart_frame(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
+    state.core.delete_smart_frame(id).map_err(safe_error)
 }
 
 #[tauri::command]
@@ -430,6 +478,28 @@ pub fn update_fragment(
         .core
         .update_fragment(id, title, note)
         .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn get_fragment_tags(
+    state: State<'_, FragmentState>,
+    id: String,
+) -> CommandResult<Vec<String>> {
+    state.core.fragment_tags(&id).map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn list_tags(state: State<'_, FragmentState>) -> CommandResult<Vec<String>> {
+    state.core.list_tags().map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn set_fragment_tags(
+    state: State<'_, FragmentState>,
+    id: String,
+    tags: Vec<String>,
+) -> CommandResult<Vec<String>> {
+    state.core.set_fragment_tags(id, tags).map_err(safe_error)
 }
 
 #[tauri::command]

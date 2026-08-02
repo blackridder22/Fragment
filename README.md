@@ -128,6 +128,13 @@ manifest:
 pnpm release:local
 ```
 
+After a signed Tauri bundle has already been verified, regenerate only the ZIP,
+checksums, and release manifest without rebuilding the app:
+
+```bash
+FRAGMENT_SKIP_BUILD=1 pnpm release:local
+```
+
 Artifacts are written under `target/release/artifacts/v<version>/`; the app
 bundle remains under `target/release/bundle/macos/Fragment.app`.
 

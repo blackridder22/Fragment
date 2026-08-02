@@ -168,24 +168,8 @@ describe("selectionReducer", () => {
     ).toEqual(["offscreen-a", "offscreen-b", "b", "d", "e"]);
   });
 
-  it("clears with Escape and toggles the focused card with Space", () => {
-    let state = selectionReducer(createSelectionState(vaultScope), {
-      type: "toggle",
-      scopeKey: vaultScope,
-      matchingIds: ids,
-      id: "c",
-    });
-    expect(selectionKeyboardIntent(" ", { hasFocusedItem: true })).toBe(
-      "toggle-focused",
-    );
-    state = selectionReducer(state, {
-      type: "toggle",
-      scopeKey: vaultScope,
-      matchingIds: ids,
-      id: "c",
-    });
-    expect(resolveSelectedIds(state, vaultScope, ids)).toEqual([]);
-
+  it("reserves Space for Quick Preview and keeps selection shortcuts", () => {
+    expect(selectionKeyboardIntent(" ", { hasFocusedItem: true })).toBeNull();
     expect(selectionKeyboardIntent("Escape")).toBe("clear");
     expect(selectionKeyboardIntent("a", { metaKey: true })).toBe("select-all");
     expect(selectionKeyboardIntent("a", { ctrlKey: true })).toBe("select-all");

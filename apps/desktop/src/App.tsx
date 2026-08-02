@@ -42,6 +42,21 @@ import {
   type PointerDragPayload,
 } from "./features/dragdrop/usePointerDragSession";
 import { FragmentDetailSheet } from "./features/fragments/FragmentDetailSheet";
+import { FragmentInspector } from "./features/fragments/FragmentInspector";
+import { FragmentQuickPreview } from "./features/fragments/FragmentQuickPreview";
+import {
+  FragmentContextMenu,
+  type FragmentContextMenuState,
+} from "./features/fragments/FragmentContextMenu";
+import { FilterPanel } from "./features/filters/FilterPanel";
+import {
+  EMPTY_FRAGMENT_FILTER,
+  activeFilterCount,
+  filterWithLibraryControls,
+  normalizeFragmentFilter,
+  type FragmentFilter,
+  type SmartFrame,
+} from "./features/filters/filter-model";
 import {
   importQueueReducer,
   summarizeImportResults,
@@ -55,6 +70,12 @@ import {
   mergeUniqueFragments,
   readSnapshotMetadata,
 } from "./features/library/library-state";
+import {
+  BrowsingModeControl,
+  type BrowsingDensity,
+  type BrowsingLayout,
+} from "./features/library/BrowsingModeControl";
+import { KeyboardShortcutsHelp } from "./features/library/KeyboardShortcutsHelp";
 import { SelectionToolbar } from "./features/selection/SelectionToolbar";
 import { MarqueeOverlay } from "./features/selection/MarqueeOverlay";
 import {
@@ -77,16 +98,21 @@ import {
   cancelImportJob,
   copyFragmentImage,
   createFrame,
+  createSmartFrame,
   deleteFragment,
   deleteFragmentEverywhere,
   deleteFragments,
   deleteFrame,
+  deleteSmartFrame,
   fragmentMembershipCount,
+  getFragmentTags,
   getLibraryRevision,
   importImageBatch,
   isTauriRuntime,
   listFragmentIds,
   listFragmentPage,
+  listSmartFrames,
+  listTags,
   listTrashedFrames,
   loadLibrarySnapshot,
   loadAssetDataUrl,
@@ -96,7 +122,9 @@ import {
   revealFragmentInFinder,
   restoreFragments,
   restoreFrame,
+  setFragmentTags,
   updateFragment,
+  updateSmartFrame,
   type ImportBatchEvent,
 } from "./lib/tauri";
 import { demoFrames, demoFragments, isDemoFragment } from "./lib/demo-vault";
@@ -118,6 +146,30 @@ const THEME_STORAGE_KEY = "fragment-theme";
 const DELETE_POLICY_STORAGE_KEY = "fragment-delete-policy";
 const FRAME_NAVIGATOR_STORAGE_KEY = "fragment-frame-navigator-v1";
 const LIBRARY_PAGE_SIZE = 60;
+const BROWSING_MODE_STORAGE_KEY = "fragment-browsing-mode-v1";
+
+function initialBrowsingMode(): {
+  layout: BrowsingLayout;
+  density: BrowsingDensity;
+} {
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(BROWSING_MODE_STORAGE_KEY) ?? "{}",
+    ) as { layout?: BrowsingLayout; density?: BrowsingDensity };
+    return {
+      layout: ["masonry", "grid", "list"].includes(value.layout ?? "")
+        ? value.layout!
+        : "masonry",
+      density: ["compact", "comfortable", "large"].includes(
+        value.density ?? "",
+      )
+        ? value.density!
+        : "comfortable",
+    };
+  } catch {
+    return { layout: "masonry", density: "comfortable" };
+  }
+}
 
 function initialTheme(): ThemePreference {
   if (typeof window === "undefined") {
@@ -283,6 +335,7 @@ export default function App() {
   const activeTotalRef = useRef(0);
   const activeNextOffsetRef = useRef(0);
   const selectedFrameIdRef = useRef<string | null>(null);
+  const selectedSmartFrameIdRef = useRef<string | null>(null);
   const activePageFrameIdRef = useRef<string | null>(null);
   const includeDescendantsRef = useRef(false);
   const fragmentsRef = useRef<Fragment[]>([]);
@@ -307,6 +360,7 @@ export default function App() {
   );
   const [selectedFragmentReferenceCount, setSelectedFragmentReferenceCount] =
     useState(1);
+  const [inspectorTags, setInspectorTags] = useState<string[]>([]);
   const [selection, dispatchSelection] = useReducer(
     selectionReducer,
     createSelectionState(),
@@ -315,6 +369,21 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("newest");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [fragmentFilter, setFragmentFilter] = useState<FragmentFilter>(
+    EMPTY_FRAGMENT_FILTER,
+  );
+  const [smartFrames, setSmartFrames] = useState<SmartFrame[]>([]);
+  const [selectedSmartFrameId, setSelectedSmartFrameId] = useState<
+    string | null
+  >(null);
+  const [knownTags, setKnownTags] = useState<string[]>([]);
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [browsingMode, setBrowsingMode] = useState(initialBrowsingMode);
+  const [quickPreviewFragment, setQuickPreviewFragment] =
+    useState<Fragment | null>(null);
+  const [fragmentContextMenu, setFragmentContextMenu] =
+    useState<FragmentContextMenuState | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(initialTheme);
   const [deletePolicy, setDeletePolicy] =
     useState<DeletePolicy>(initialDeletePolicy);
@@ -331,6 +400,10 @@ export default function App() {
   const [frameDropTarget, setFrameDropTarget] = useState<string | null>(null);
   const [trashUndo, setTrashUndo] = useState<TrashUndoState>(null);
   const trashUndoTimer = useRef<number | null>(null);
+  const fragmentFilterRef = useRef<FragmentFilter>(EMPTY_FRAGMENT_FILTER);
+  const queryRef = useRef("");
+  const sourceFilterRef = useRef<SourceFilter>("all");
+  const sortModeRef = useRef<SortMode>("newest");
   const previewMode = !isTauriRuntime();
 
   const rememberRevision = useCallback((revision: string) => {
@@ -360,6 +433,12 @@ export default function App() {
           includeDescendants: Boolean(frameId && includeDescendants),
           offset,
           limit: LIBRARY_PAGE_SIZE,
+          filter: filterWithLibraryControls(
+            fragmentFilterRef.current,
+            queryRef.current,
+            sourceFilterRef.current,
+          ),
+          sortMode: sortModeRef.current,
         });
         if (
           requestId !== activePageRequestRef.current ||
@@ -411,6 +490,12 @@ export default function App() {
             trashed: true,
             offset,
             limit: LIBRARY_PAGE_SIZE,
+            filter: filterWithLibraryControls(
+              fragmentFilterRef.current,
+              queryRef.current,
+              sourceFilterRef.current,
+            ),
+            sortMode: sortModeRef.current,
           }),
           reset ? listTrashedFrames() : Promise.resolve(null),
         ]);
@@ -487,7 +572,11 @@ export default function App() {
     snapshotLoadingRef.current = true;
     try {
       setError(null);
-      const snapshot = await loadLibrarySnapshot(LIBRARY_PAGE_SIZE);
+      const [snapshot, nextSmartFrames, nextTags] = await Promise.all([
+        loadLibrarySnapshot(LIBRARY_PAGE_SIZE),
+        listSmartFrames(),
+        listTags(),
+      ]);
       const metadata = readSnapshotMetadata(snapshot);
       setDefaultFrameId(snapshot.defaultFrame.id);
       setFrames(snapshot.frames);
@@ -495,10 +584,12 @@ export default function App() {
       setFrameFragmentCounts(metadata.frameCounts);
       setTrashTotal(metadata.trashTotal);
       setAssetRoot(snapshot.assetRoot);
+      setSmartFrames(nextSmartFrames);
+      setKnownTags(nextTags);
       rememberRevision(snapshot.revision);
 
       const activeFrameId = selectedFrameIdRef.current;
-      if (activeFrameId === null) {
+      if (activeFrameId === null && selectedSmartFrameIdRef.current === null) {
         const nextFragments = mergeUniqueFragments([], snapshot.fragments);
         fragmentsRef.current = nextFragments;
         setFragments(nextFragments);
@@ -572,6 +663,48 @@ export default function App() {
   useEffect(() => {
     selectedFrameIdRef.current = selectedFrameId;
   }, [selectedFrameId]);
+
+  useEffect(() => {
+    selectedSmartFrameIdRef.current = selectedSmartFrameId;
+  }, [selectedSmartFrameId]);
+
+  useEffect(() => {
+    fragmentFilterRef.current = fragmentFilter;
+    queryRef.current = query;
+    sourceFilterRef.current = sourceFilter;
+    sortModeRef.current = sortMode;
+  }, [fragmentFilter, query, sortMode, sourceFilter]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BROWSING_MODE_STORAGE_KEY,
+        JSON.stringify(browsingMode),
+      );
+    } catch {
+      // Browsing controls still work when storage is unavailable.
+    }
+  }, [browsingMode]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const timer = window.setTimeout(() => {
+      if (activeView === "home") {
+        void loadActivePage(selectedFrameIdRef.current, true);
+      } else if (activeView === "trash" && trashLoadedRef.current) {
+        void loadTrashPage(true);
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeView,
+    fragmentFilter,
+    loadActivePage,
+    loadTrashPage,
+    query,
+    sortMode,
+    sourceFilter,
+  ]);
 
   useEffect(() => {
     const fragment = selectedFragment;
@@ -877,7 +1010,8 @@ export default function App() {
   ]);
   const mainTitle = selectedDisplayFrame
     ? selectedDisplayFrame.name
-    : "Your Vault";
+    : (smartFrames.find((item) => item.id === selectedSmartFrameId)?.name ??
+      "Your Vault");
   const mainSubtitle = showDemoGallery
     ? previewMode
       ? "Sample wall"
@@ -960,16 +1094,20 @@ export default function App() {
     () =>
       [
         activeView,
+        selectedSmartFrameId ?? "no-smart-frame",
         selectedFrameId ?? "all-frames",
         frameNavigator.includeDescendants ? "with-subframes" : "direct",
         query.trim().toLowerCase(),
         sourceFilter,
+        JSON.stringify(normalizeFragmentFilter(fragmentFilter)),
       ].join("\u0000"),
     [
       activeView,
       frameNavigator.includeDescendants,
+      fragmentFilter,
       query,
       selectedFrameId,
+      selectedSmartFrameId,
       sourceFilter,
     ],
   );
@@ -982,6 +1120,22 @@ export default function App() {
     () => new Set(selectedFragmentIds),
     [selectedFragmentIds],
   );
+  const inspectedFragment = useMemo(() => {
+    if (selectedFragmentIds.length !== 1) {
+      return null;
+    }
+    const id = selectedFragmentIds[0];
+    return (
+      (activeView === "trash" ? visibleTrashedFragments : galleryFragments).find(
+        (fragment) => fragment.id === id,
+      ) ?? null
+    );
+  }, [
+    activeView,
+    galleryFragments,
+    selectedFragmentIds,
+    visibleTrashedFragments,
+  ]);
   const selectedVisibleCount = selectedFragmentIds.length;
   const selectedAllMatching =
     selection.mode === "all-matching" &&
@@ -1025,6 +1179,67 @@ export default function App() {
   }, [selectableFragmentIds, selectionScopeKey]);
 
   useEffect(() => {
+    if (!inspectedFragment || isDemoFragment(inspectedFragment)) {
+      setInspectorTags([]);
+      return;
+    }
+    let cancelled = false;
+    void getFragmentTags(inspectedFragment.id)
+      .then((tags) => {
+        if (!cancelled) setInspectorTags(tags);
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setInspectorTags([]);
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectedFragment]);
+
+  useEffect(() => {
+    function keyDown(event: KeyboardEvent) {
+      if (event.code === "Space" && !event.repeat) {
+        if (
+          !inspectedFragment ||
+          selectedFragment ||
+          frameModal ||
+          filterPanelOpen ||
+          isEditableTarget(event.target)
+        ) {
+          return;
+        }
+        event.preventDefault();
+        setQuickPreviewFragment(inspectedFragment);
+      } else if (event.key === "Enter" && quickPreviewFragment) {
+        event.preventDefault();
+        setQuickPreviewFragment(null);
+        openFragmentPreview(quickPreviewFragment);
+      } else if (event.key === "Escape" && quickPreviewFragment) {
+        event.preventDefault();
+        setQuickPreviewFragment(null);
+      }
+    }
+    function keyUp(event: KeyboardEvent) {
+      if (event.code === "Space") setQuickPreviewFragment(null);
+    }
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
+    return () => {
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("keyup", keyUp);
+    };
+  }, [
+    filterPanelOpen,
+    frameModal,
+    inspectedFragment,
+    quickPreviewFragment,
+    selectedFragment,
+  ]);
+
+  useEffect(() => {
     function handleSelectionKeyDown(event: KeyboardEvent) {
       if (
         (activeView !== "home" && activeView !== "trash") ||
@@ -1035,14 +1250,9 @@ export default function App() {
         return;
       }
 
-      const focusedElement = document.activeElement as HTMLElement | null;
-      const focusedId = focusedElement?.dataset.fragmentId ?? null;
       const intent = selectionKeyboardIntent(event.key, {
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
-        hasFocusedItem: Boolean(
-          focusedId && selectableFragmentIds.includes(focusedId),
-        ),
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
       });
@@ -1062,9 +1272,6 @@ export default function App() {
       ) {
         return;
       }
-      if (intent === "toggle-focused" && !focusedId) {
-        return;
-      }
       if (
         intent === "delete-selection" &&
         (activeView !== "home" || selectedFragmentIds.length === 0)
@@ -1079,13 +1286,6 @@ export default function App() {
         dispatchSelection({ type: "clear", scopeKey: selectionScopeKey });
       } else if (intent === "delete-selection") {
         void moveFragmentsToTrash(selectedFragmentIds);
-      } else {
-        dispatchSelection({
-          type: "toggle",
-          scopeKey: selectionScopeKey,
-          matchingIds: selectableFragmentIds,
-          id: focusedId!,
-        });
       }
     }
 
@@ -1103,11 +1303,94 @@ export default function App() {
     trashTotal,
   ]);
 
+  useEffect(() => {
+    function handleCommandKeyDown(event: KeyboardEvent) {
+      const command = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (command && key === "k") {
+        event.preventDefault();
+        document.querySelector<HTMLInputElement>(".search-field input")?.focus();
+        return;
+      }
+      if (isEditableTarget(event.target) || selectedFragment || frameModal) return;
+
+      if ((event.key === "?" && !command) || (command && key === "/")) {
+        event.preventDefault();
+        setShortcutsOpen(true);
+      } else if (command && event.shiftKey && key === "f") {
+        event.preventDefault();
+        setFilterPanelOpen(true);
+      } else if (command && !event.shiftKey && key === "n") {
+        event.preventDefault();
+        openCreateFrame(selectedFrameId);
+      } else if (command && !event.shiftKey && key === "i") {
+        event.preventDefault();
+        void chooseImages();
+      } else if (command && ["1", "2", "3"].includes(key)) {
+        event.preventDefault();
+        const layout = ({ "1": "masonry", "2": "grid", "3": "list" } as const)[
+          key as "1" | "2" | "3"
+        ];
+        setBrowsingMode((current) => ({ ...current, layout }));
+      } else if (command && key === "c" && inspectedFragment) {
+        if (isTauriRuntime() && !isDemoFragment(inspectedFragment)) {
+          event.preventDefault();
+          void copyFragmentImage(inspectedFragment.id).then(() =>
+            setStatus("Image copied"),
+          );
+        }
+      } else if (event.key === "Enter" && inspectedFragment) {
+        event.preventDefault();
+        openFragmentPreview(inspectedFragment);
+      } else if (
+        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+        selectedFragmentIds.length === 1
+      ) {
+        const currentIndex = selectableFragmentIds.indexOf(selectedFragmentIds[0]!);
+        const offset = event.key === "ArrowRight" ? 1 : -1;
+        const nextId = selectableFragmentIds[currentIndex + offset];
+        if (!nextId) return;
+        event.preventDefault();
+        dispatchSelection({
+          type: "replace-many",
+          scopeKey: selectionScopeKey,
+          matchingIds: selectableFragmentIds,
+          ids: [nextId],
+        });
+        window.setTimeout(() => {
+          document
+            .querySelector<HTMLElement>(`.fragment-card[data-fragment-id="${CSS.escape(nextId)}"]`)
+            ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }, 0);
+      }
+    }
+    window.addEventListener("keydown", handleCommandKeyDown);
+    return () => window.removeEventListener("keydown", handleCommandKeyDown);
+  }, [
+    frameModal,
+    inspectedFragment,
+    selectableFragmentIds,
+    selectedFragment,
+    selectedFragmentIds,
+    selectedFrameId,
+    selectionScopeKey,
+  ]);
+
   const selectFrame = useCallback(
     (frameId: string | null) => {
       setSelectedFragment(null);
       selectedFrameIdRef.current = frameId;
       setSelectedFrameId(frameId);
+      selectedSmartFrameIdRef.current = null;
+      setSelectedSmartFrameId(null);
+      if (selectedSmartFrameId) {
+        fragmentFilterRef.current = EMPTY_FRAGMENT_FILTER;
+        queryRef.current = "";
+        sourceFilterRef.current = "all";
+        setFragmentFilter(EMPTY_FRAGMENT_FILTER);
+        setQuery("");
+        setSourceFilter("all");
+      }
       dispatchSelection({ type: "clear", scopeKey: "" });
       setActiveView("home");
       if (frameId) {
@@ -1125,8 +1408,94 @@ export default function App() {
         void loadActivePage(frameId, true);
       }
     },
-    [activeFrameUniverse, loadActivePage],
+    [activeFrameUniverse, loadActivePage, selectedSmartFrameId],
   );
+
+  function selectSmartFrameValue(smartFrame: SmartFrame) {
+    const filter = normalizeFragmentFilter(smartFrame.filter);
+    const nextQuery = filter.query ?? "";
+    const nextSource = filter.sourceKind ?? "all";
+    fragmentFilterRef.current = filter;
+    queryRef.current = nextQuery;
+    sourceFilterRef.current = nextSource;
+    selectedFrameIdRef.current = null;
+    selectedSmartFrameIdRef.current = smartFrame.id;
+    setFragmentFilter(filter);
+    setQuery(nextQuery);
+    setSourceFilter(nextSource);
+    setSelectedFrameId(null);
+    setSelectedSmartFrameId(smartFrame.id);
+    setSelectedFragment(null);
+    dispatchSelection({ type: "clear", scopeKey: "" });
+    setActiveView("home");
+    if (isTauriRuntime()) void loadActivePage(null, true);
+  }
+
+  function applyFragmentFilter(filter: FragmentFilter) {
+    const normalized = normalizeFragmentFilter(filter);
+    fragmentFilterRef.current = normalized;
+    setFragmentFilter(normalized);
+    setSelectedSmartFrameId(null);
+    setFilterPanelOpen(false);
+    dispatchSelection({ type: "clear", scopeKey: "" });
+  }
+
+  async function saveSmartFrame(name: string, filter: FragmentFilter) {
+    const savedFilter = filterWithLibraryControls(filter, query, sourceFilter);
+    try {
+      const smartFrame = await createSmartFrame(name, savedFilter);
+      setSmartFrames((current) => [...current, smartFrame]);
+      setStatus(`Smart Frame “${smartFrame.name}” saved`);
+      selectSmartFrameValue(smartFrame);
+      setFilterPanelOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Smart Frame could not be saved");
+      throw caught;
+    }
+  }
+
+  async function saveSelectedSmartFrame(
+    id: string,
+    name: string,
+    filter: FragmentFilter,
+  ) {
+    const savedFilter = filterWithLibraryControls(filter, query, sourceFilter);
+    try {
+      const updated = await updateSmartFrame(id, name, savedFilter);
+      setSmartFrames((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setStatus(`Smart Frame “${updated.name}” updated`);
+      selectSmartFrameValue(updated);
+      setFilterPanelOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Smart Frame could not be updated");
+      throw caught;
+    }
+  }
+
+  async function removeSmartFrame(smartFrame: SmartFrame) {
+    if (
+      !window.confirm(
+        `Delete Smart Frame “${smartFrame.name}”?\n\nNo Fragments will be deleted.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteSmartFrame(smartFrame.id);
+      setSmartFrames((current) =>
+        current.filter((item) => item.id !== smartFrame.id),
+      );
+      if (selectedSmartFrameId === smartFrame.id) selectFrame(null);
+      setStatus(`Smart Frame “${smartFrame.name}” deleted`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStatus("Smart Frame could not be deleted");
+    }
+  }
 
   function setIncludeDescendants(value: boolean) {
     includeDescendantsRef.current = value;
@@ -1266,6 +1635,8 @@ export default function App() {
         trashed: activeView === "trash",
         query,
         sourceFilter,
+        filter: filterWithLibraryControls(fragmentFilter, query, sourceFilter),
+        sortMode,
       });
       dispatchSelection({
         type: "select-all",
@@ -1306,12 +1677,44 @@ export default function App() {
       selectFragmentRange(fragment.id, event.metaKey || event.ctrlKey);
       return;
     }
-    if (event.metaKey || event.ctrlKey || selectedFragmentIds.length > 0) {
+    if (event.metaKey || event.ctrlKey) {
       event.preventDefault();
       toggleFragmentSelection(fragment.id);
       return;
     }
+    dispatchSelection({
+      type: "replace-many",
+      scopeKey: selectionScopeKey,
+      matchingIds: selectableFragmentIds,
+      ids: [fragment.id],
+    });
+  }
 
+  function handleFragmentContextMenu(
+    fragment: Fragment,
+    event: MouseEvent<HTMLElement>,
+  ) {
+    event.preventDefault();
+    const ids = selectedFragmentIdSet.has(fragment.id)
+      ? selectedFragmentIds
+      : [fragment.id];
+    if (!selectedFragmentIdSet.has(fragment.id)) {
+      dispatchSelection({
+        type: "replace-many",
+        scopeKey: selectionScopeKey,
+        matchingIds: selectableFragmentIds,
+        ids,
+      });
+    }
+    setFragmentContextMenu({
+      fragment,
+      fragmentIds: ids,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  function openFragmentPreview(fragment: Fragment) {
     if (!isDemoFragment(fragment)) {
       setSelectedFragment(fragment);
     }
@@ -1629,6 +2032,47 @@ export default function App() {
     const updated = await updateFragment(selectedFragment.id, title, note);
     setSelectedFragment(updated);
     await refreshSnapshot();
+  }
+
+  async function saveInspectedFragment(
+    fragment: Fragment,
+    title: string | null,
+    note: string | null,
+  ) {
+    if (isDemoFragment(fragment)) {
+      return;
+    }
+    const updated = await updateFragment(fragment.id, title, note);
+    setFragments((current) =>
+      current.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    setTrashedFragments((current) =>
+      current.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    setFramePreviewFragments((current) =>
+      current.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    setSelectedFragment((current) =>
+      current?.id === updated.id ? updated : current,
+    );
+    setStatus("Fragment metadata saved");
+  }
+
+  async function saveInspectedFragmentTags(
+    fragment: Fragment,
+    tags: string[],
+  ) {
+    if (isDemoFragment(fragment)) {
+      return;
+    }
+    const updatedTags = await setFragmentTags(fragment.id, tags);
+    setInspectorTags(updatedTags);
+    setKnownTags((current) =>
+      [...new Set([...current, ...updatedTags])].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    );
+    setStatus("Fragment tags saved");
   }
 
   function loadedSharedReferenceCount(fragment: Fragment) {
@@ -2145,6 +2589,8 @@ export default function App() {
           pinnedIds={new Set(frameNavigator.pinnedIds)}
           recursiveCounts={recursiveDisplayCounts}
           selectedFrameId={selectedFrameId}
+          selectedSmartFrameId={selectedSmartFrameId}
+          smartFrames={smartFrames}
           trashDropState={trashDropState}
           width={frameNavigator.width}
           onCollapsedChange={(collapsed) =>
@@ -2157,6 +2603,11 @@ export default function App() {
           }}
           onRenameFrame={renameFrameFromNavigator}
           onSelectFrame={selectFrame}
+          onSelectSmartFrame={(id) => {
+            const smartFrame = smartFrames.find((item) => item.id === id);
+            if (smartFrame) selectSmartFrameValue(smartFrame);
+          }}
+          onDeleteSmartFrame={(smartFrame) => void removeSmartFrame(smartFrame)}
           onToggleExpanded={toggleFrameExpanded}
           onTogglePinned={toggleFramePinned}
           onViewChange={changeView}
@@ -2175,6 +2626,8 @@ export default function App() {
         onImport={() => void chooseImages()}
         onSortChange={setSortMode}
         onSourceFilterChange={setSourceFilter}
+        onOpenFilters={() => setFilterPanelOpen(true)}
+        filterCount={activeFilterCount(fragmentFilter)}
         onSelectAll={
           (activeView === "home" || activeView === "trash") &&
           selectedVisibleCount === 0 &&
@@ -2194,7 +2647,38 @@ export default function App() {
       />
 
       <div className="content-stage" data-drag-active={dragActive}>
-        {activeView === "home" ? (
+        {filterPanelOpen ? (
+          <FilterPanel
+            filter={fragmentFilter}
+            knownTags={knownTags}
+            onApply={applyFragmentFilter}
+            onClose={() => setFilterPanelOpen(false)}
+            onSaveSmartFrame={
+              selectedSmartFrameId
+                ? (name, filter) =>
+                    saveSelectedSmartFrame(selectedSmartFrameId, name, filter)
+                : saveSmartFrame
+            }
+            smartFrameName={
+              smartFrames.find((item) => item.id === selectedSmartFrameId)?.name
+            }
+          />
+        ) : null}
+
+        {activeView === "home" || activeView === "trash" ? (
+          <BrowsingModeControl
+            density={browsingMode.density}
+            layout={browsingMode.layout}
+            onDensityChange={(density) =>
+              setBrowsingMode((current) => ({ ...current, density }))
+            }
+            onLayoutChange={(layout) =>
+              setBrowsingMode((current) => ({ ...current, layout }))
+            }
+          />
+        ) : null}
+
+        {activeView === "home" && !selectedSmartFrameId ? (
           <FrameBreadcrumbs
             frames={displayFrames}
             includeDescendants={frameNavigator.includeDescendants}
@@ -2225,10 +2709,15 @@ export default function App() {
           />
         ) : null}
 
-        {activeView === "frames" ? (
-          frameCards
-        ) : activeView === "trash" ? (
-          <section className="trash-page fragment-section">
+        <div
+          className="canvas-workspace"
+          data-inspector-open={Boolean(inspectedFragment)}
+        >
+          <div className="canvas-workspace-main">
+            {activeView === "frames" ? (
+              frameCards
+            ) : activeView === "trash" ? (
+              <section className="trash-page fragment-section">
             <div className="trash-panel">
               <Trash2 aria-hidden="true" size={22} />
               <div>
@@ -2281,6 +2770,10 @@ export default function App() {
                   }
                   fragments={visibleTrashedFragments}
                   onAssetFallback={resolveAssetFallback}
+                  onOpen={openFragmentPreview}
+                  onContextMenu={handleFragmentContextMenu}
+                  density={browsingMode.density}
+                  layout={browsingMode.layout}
                   selectionActive={selectedVisibleCount > 0}
                   selectedIds={selectedFragmentIdSet}
                   onSelect={handleFragmentCardSelect}
@@ -2296,17 +2789,17 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
-          </section>
-        ) : activeView === "settings" ? (
-          <SettingsPage
-            deletePolicy={deletePolicy}
-            theme={theme}
-            onDeletePolicyChange={setDeletePolicy}
-            onThemeChange={setTheme}
-          />
-        ) : (
-          <>
-            <section className="fragment-section">
+              </section>
+            ) : activeView === "settings" ? (
+              <SettingsPage
+                deletePolicy={deletePolicy}
+                theme={theme}
+                onDeletePolicyChange={setDeletePolicy}
+                onThemeChange={setTheme}
+              />
+            ) : (
+              <>
+                <section className="fragment-section">
               {pendingImports.length > 0 ? (
                 <PendingImportCards
                   items={pendingImports}
@@ -2333,6 +2826,10 @@ export default function App() {
                     }
                     fragments={galleryFragments}
                     onAssetFallback={resolveAssetFallback}
+                    onOpen={openFragmentPreview}
+                    onContextMenu={handleFragmentContextMenu}
+                    density={browsingMode.density}
+                    layout={browsingMode.layout}
                     selectionActive={selectedVisibleCount > 0}
                     selectedIds={selectedFragmentIdSet}
                     onSelect={handleFragmentCardSelect}
@@ -2348,13 +2845,138 @@ export default function App() {
                   ) : null}
                 </div>
               )}
-            </section>
-          </>
-        )}
+                </section>
+              </>
+            )}
+          </div>
+
+          {inspectedFragment ? (
+            <FragmentInspector
+              assetSources={assetSourcesFor(inspectedFragment, "detail")}
+              fragment={inspectedFragment}
+              frames={displayFrames}
+              tags={inspectorTags}
+              onAddToFrame={
+                isDemoFragment(inspectedFragment)
+                  ? undefined
+                  : (frameId) =>
+                      linkFragmentsToFrame([inspectedFragment.id], frameId)
+              }
+              onClose={deselectAllFragments}
+              onCopyImage={
+                isTauriRuntime() && !isDemoFragment(inspectedFragment)
+                  ? () => copyFragmentImage(inspectedFragment.id)
+                  : undefined
+              }
+              onOpenPreview={() => openFragmentPreview(inspectedFragment)}
+              onOpenSource={
+                inspectedFragment.sourceUrl || inspectedFragment.pageUrl
+                  ? async () => {
+                      if (
+                        isTauriRuntime() &&
+                        !isDemoFragment(inspectedFragment)
+                      ) {
+                        await openFragmentSource(inspectedFragment.id);
+                      } else {
+                        window.open(
+                          inspectedFragment.sourceUrl ??
+                            inspectedFragment.pageUrl ??
+                            "",
+                          "_blank",
+                          "noopener,noreferrer",
+                        );
+                      }
+                    }
+                  : undefined
+              }
+              onReveal={
+                isTauriRuntime() && !isDemoFragment(inspectedFragment)
+                  ? () => revealFragmentInFinder(inspectedFragment.id)
+                  : undefined
+              }
+              onSave={(title, note) =>
+                saveInspectedFragment(inspectedFragment, title, note)
+              }
+              onSaveTags={(tags) =>
+                saveInspectedFragmentTags(inspectedFragment, tags)
+              }
+              onTrash={
+                activeView === "home" && !isDemoFragment(inspectedFragment)
+                  ? async () => {
+                      await moveFragmentsToTrash([inspectedFragment.id]);
+                    }
+                  : undefined
+              }
+            />
+          ) : null}
+        </div>
       </div>
 
       <DragGhost session={pointerDrag.session} />
       <MarqueeOverlay rect={marquee.rect} />
+
+      {quickPreviewFragment ? (
+        <FragmentQuickPreview
+          assetSources={assetSourcesFor(quickPreviewFragment, "detail")}
+          fragment={quickPreviewFragment}
+          onAssetFallback={resolveAssetFallback}
+          onClose={() => setQuickPreviewFragment(null)}
+        />
+      ) : null}
+
+      {fragmentContextMenu ? (
+        <FragmentContextMenu
+          {...fragmentContextMenu}
+          canTrash={activeView === "home"}
+          canUseNativeActions={
+            isTauriRuntime() && !isDemoFragment(fragmentContextMenu.fragment)
+          }
+          frames={displayFrames}
+          onAddToFrame={(frameId) =>
+            void linkFragmentsToFrame(fragmentContextMenu.fragmentIds, frameId)
+          }
+          onClose={() => setFragmentContextMenu(null)}
+          onCopy={() => {
+            void copyFragmentImage(fragmentContextMenu.fragment.id)
+              .then(() => setStatus("Image copied"))
+              .catch((caught) =>
+                setError(caught instanceof Error ? caught.message : String(caught)),
+              );
+          }}
+          onOpen={() => openFragmentPreview(fragmentContextMenu.fragment)}
+          onOpenSource={
+            fragmentContextMenu.fragment.sourceUrl ||
+            fragmentContextMenu.fragment.pageUrl
+              ? () => {
+                  if (
+                    isTauriRuntime() &&
+                    !isDemoFragment(fragmentContextMenu.fragment)
+                  ) {
+                    void openFragmentSource(fragmentContextMenu.fragment.id);
+                  } else {
+                    window.open(
+                      fragmentContextMenu.fragment.sourceUrl ??
+                        fragmentContextMenu.fragment.pageUrl ??
+                        "",
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
+                  }
+                }
+              : undefined
+          }
+          onReveal={() =>
+            void revealFragmentInFinder(fragmentContextMenu.fragment.id)
+          }
+          onTrash={() =>
+            void moveFragmentsToTrash(fragmentContextMenu.fragmentIds)
+          }
+        />
+      ) : null}
+
+      {shortcutsOpen ? (
+        <KeyboardShortcutsHelp onClose={() => setShortcutsOpen(false)} />
+      ) : null}
 
       {trashUndo ? (
         <div aria-label="Undoable action" className="undo-toast" role="region">

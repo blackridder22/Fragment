@@ -73,6 +73,17 @@ reproducible desktop-plus-extension release.
 - Fragment drops onto any Frame row and Frame drag to Trash.
 - Direct/recursive counts and paginated **Include Sub-frame Fragments** scope.
 
+## v0.0.6 - Retrieval and browsing
+
+- Single-selection canvas inspector with editable title, notes, and tags plus
+  source, creator, and technical image metadata.
+- SQLite-backed advanced filters and dynamic Smart Frames without duplicated
+  Fragment files or memberships.
+- Masonry, Grid, and List browsing with persistent density controls.
+- Space-bar Quick Preview, Fragment context actions, and keyboard-first library
+  navigation.
+- Restored Fragment rail/tree styling and canvas-bounded preview overlays.
+
 ## Explicitly later
 
 - Video storage and playback.

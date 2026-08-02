@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import type { Fragment } from "@fragment/shared";
 import { Check, ImageOff, Maximize2 } from "lucide-react";
 import type { AssetSource } from "../lib/assets";
+import { formatLabel, sourceDomain } from "../features/fragments/fragment-metadata";
 
 type FragmentCardProps = {
   fragment: Fragment;
@@ -9,7 +10,9 @@ type FragmentCardProps = {
   selected: boolean;
   selectionActive?: boolean;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
+  onOpen: () => void;
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu: (event: MouseEvent<HTMLElement>) => void;
 };
 
 export function FragmentCard({
@@ -18,7 +21,9 @@ export function FragmentCard({
   selectionActive = false,
   selected,
   onAssetFallback,
+  onOpen,
   onSelect,
+  onContextMenu,
 }: FragmentCardProps) {
   const [displayIndex, setDisplayIndex] = useState(0);
   const [imageFailed, setImageFailed] = useState(assetSources.length === 0);
@@ -59,13 +64,21 @@ export function FragmentCard({
       data-fragment-id={fragment.id}
       data-selected={selected}
       data-transparent={transparentAsset}
+      onContextMenu={onContextMenu}
     >
       <button
-        aria-label={`${selected ? "Deselect" : selectionActive ? "Select" : "Open"} ${fragment.title ?? "Fragment"}`}
+        aria-label={`${selected ? "Selected" : "Select"} ${fragment.title ?? "Fragment"}`}
         aria-pressed={selected}
         className="fragment-image-button"
         data-fragment-id={fragment.id}
         onClick={onSelect}
+        onDoubleClick={onOpen}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onOpen();
+          }
+        }}
         style={aspectRatio ? { aspectRatio } : undefined}
         type="button"
       >
@@ -88,13 +101,25 @@ export function FragmentCard({
         <span className="fragment-hover">
           <span>
             <Maximize2 size={16} />
-            Open
+            {selectionActive ? "Selected" : "Select"}
           </span>
         </span>
         <span className="fragment-select-indicator" aria-hidden="true">
           <Check size={14} />
         </span>
       </button>
+      <div className="fragment-card-meta">
+        <strong>{fragment.title ?? "Untitled Fragment"}</strong>
+        <span>
+          {formatLabel(fragment.mimeType, fragment.originalPath)}
+          {fragment.width && fragment.height
+            ? ` · ${fragment.width} × ${fragment.height}`
+            : ""}
+          {sourceDomain(fragment.sourceUrl ?? fragment.pageUrl)
+            ? ` · ${sourceDomain(fragment.sourceUrl ?? fragment.pageUrl)}`
+            : ""}
+        </span>
+      </div>
     </article>
   );
 }

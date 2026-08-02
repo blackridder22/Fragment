@@ -35,7 +35,6 @@ export type SelectionAction =
 export type SelectionKeyboardIntent =
   | "select-all"
   | "clear"
-  | "toggle-focused"
   | "delete-selection";
 
 export function createSelectionState(scopeKey = ""): SelectionState {
@@ -226,9 +225,6 @@ export function selectionKeyboardIntent(
     (key === "Backspace" || key === "Delete")
   ) {
     return "delete-selection";
-  }
-  if ((key === " " || key === "Spacebar") && options.hasFocusedItem) {
-    return "toggle-focused";
   }
   return null;
 }

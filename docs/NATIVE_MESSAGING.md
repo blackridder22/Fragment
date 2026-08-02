@@ -57,7 +57,7 @@ action.
 ## Version compatibility
 
 - The root, npm workspaces, Cargo packages, Tauri app, and extension manifests
-  use the current synchronized application version (`0.0.5` for this release).
+  use the current synchronized application version (`0.0.6` for this release).
 - `extensionVersion` reports the sender build.
 - `pong.version` reports the native host build.
 - Neither field is currently a protocol version.

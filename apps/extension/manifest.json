@@ -3,7 +3,7 @@
   "name": "Fragment",
   "short_name": "Fragment",
   "description": "Save selected visual references as Fragments into local Frames.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlo85tbkvO/1Hm/eC8Pr2YsEAurBS8GE+ygincCTuqqxo51eCCB9dvr8JElWqtbhW+pBaCDiJMiMuDpoOMNWpU9rKXsE1AsXtuDBucld+MgghyUweK+/Kta+eI+HCNFKHgXfZ2eeuBJDXzG0Uz/p/zchHYn2f5RbhdJAUXFSRCbRt7Tcmr7lFp0Im3NbPpwjnvUqguCBEletS0aZ/ZJ14SPXin347ex+Vy1vo2mqZlbTaiyaiHwpN3AkzBidVOdaHhry+hkMicOmsuYgjdAC+zJCRvBbvQ37NjsrHiA6bmej9QHtMD8ngpppnMoRQUPI/IZ4WYBbBa2YKWerjdrUgoQIDAQAB",
   "action": {
     "default_title": "Fragment",

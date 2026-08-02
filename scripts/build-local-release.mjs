@@ -23,8 +23,10 @@ const releaseDir = join(root, "target", "release", "artifacts", `v${version}`);
 const extensionDist = join(root, "apps", "extension", "dist");
 const extensionZip = join(releaseDir, `Fragment-Extension-v${version}.zip`);
 
-run("pnpm", ["build:extension"]);
-run("pnpm", ["build:desktop"], { APPLE_SIGNING_IDENTITY: "-" });
+if (process.env.FRAGMENT_SKIP_BUILD !== "1") {
+  run("pnpm", ["build:extension"]);
+  run("pnpm", ["build:desktop"], { APPLE_SIGNING_IDENTITY: "-" });
+}
 rmSync(releaseDir, { recursive: true, force: true });
 mkdirSync(releaseDir, { recursive: true });
 

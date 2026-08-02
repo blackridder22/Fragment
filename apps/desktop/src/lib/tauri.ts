@@ -1,5 +1,9 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Fragment, Frame } from "@fragment/shared";
+import type {
+  FragmentFilter,
+  SmartFrame,
+} from "../features/filters/filter-model";
 
 export type LibrarySnapshot = {
   defaultFrame: Frame;
@@ -96,6 +100,8 @@ export async function listFragmentPage(options: {
   trashed?: boolean;
   offset?: number;
   limit?: number;
+  filter?: FragmentFilter;
+  sortMode?: "newest" | "oldest" | "name" | "largest";
 }): Promise<FragmentPage> {
   return invoke("list_fragment_page", {
     frameId: options.frameId ?? null,
@@ -103,6 +109,8 @@ export async function listFragmentPage(options: {
     trashed: options.trashed ?? false,
     offset: options.offset ?? 0,
     limit: options.limit ?? 60,
+    filter: options.filter ?? null,
+    sortMode: options.sortMode ?? "newest",
   });
 }
 
@@ -112,6 +120,8 @@ export async function listFragmentIds(options: {
   trashed?: boolean;
   query?: string;
   sourceFilter?: "all" | "source" | "local" | "png";
+  filter?: FragmentFilter;
+  sortMode?: "newest" | "oldest" | "name" | "largest";
 }): Promise<string[]> {
   return invoke("list_fragment_ids", {
     frameId: options.frameId ?? null,
@@ -119,7 +129,32 @@ export async function listFragmentIds(options: {
     trashed: options.trashed ?? false,
     query: options.query?.trim() || null,
     sourceFilter: options.sourceFilter ?? "all",
+    filter: options.filter ?? null,
+    sortMode: options.sortMode ?? "newest",
   });
+}
+
+export async function listSmartFrames(): Promise<SmartFrame[]> {
+  return invoke("list_smart_frames");
+}
+
+export async function createSmartFrame(
+  name: string,
+  filter: FragmentFilter,
+): Promise<SmartFrame> {
+  return invoke("create_smart_frame", { name, filter });
+}
+
+export async function updateSmartFrame(
+  id: string,
+  name: string,
+  filter: FragmentFilter,
+): Promise<SmartFrame> {
+  return invoke("update_smart_frame", { id, name, filter });
+}
+
+export async function deleteSmartFrame(id: string): Promise<void> {
+  return invoke("delete_smart_frame", { id });
 }
 
 export async function getLibraryRevision(): Promise<string> {
@@ -192,6 +227,21 @@ export async function updateFragment(
   note: string | null,
 ): Promise<Fragment> {
   return invoke("update_fragment", { id, title, note });
+}
+
+export async function getFragmentTags(id: string): Promise<string[]> {
+  return invoke("get_fragment_tags", { id });
+}
+
+export async function listTags(): Promise<string[]> {
+  return invoke("list_tags");
+}
+
+export async function setFragmentTags(
+  id: string,
+  tags: string[],
+): Promise<string[]> {
+  return invoke("set_fragment_tags", { id, tags });
 }
 
 export async function getFragmentAny(id: string): Promise<Fragment> {

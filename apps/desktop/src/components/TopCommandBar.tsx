@@ -1,4 +1,10 @@
-import { CheckSquare, Download, Plus, Search } from "lucide-react";
+import {
+  CheckSquare,
+  Download,
+  Plus,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react";
 
 export type SortMode = "newest" | "oldest" | "name" | "largest";
 export type SourceFilter = "all" | "source" | "local" | "png";
@@ -11,6 +17,8 @@ type TopCommandBarProps = {
   onSortChange: (value: SortMode) => void;
   onSourceFilterChange: (value: SourceFilter) => void;
   onSelectAll?: () => void;
+  onOpenFilters: () => void;
+  filterCount: number;
   showLibraryTools: boolean;
   sourceFilter: SourceFilter;
   sortMode: SortMode;
@@ -26,6 +34,8 @@ export function TopCommandBar({
   onSortChange,
   onSourceFilterChange,
   onSelectAll,
+  onOpenFilters,
+  filterCount,
   showLibraryTools,
   sourceFilter,
   sortMode,
@@ -71,7 +81,7 @@ export function TopCommandBar({
               </select>
             </label>
             <label>
-              <span>Filter</span>
+              <span>Source</span>
               <select
                 aria-label="Filter Fragments"
                 value={sourceFilter}
@@ -85,6 +95,16 @@ export function TopCommandBar({
                 <option value="png">PNG</option>
               </select>
             </label>
+            <button
+              className="advanced-filter-button"
+              data-active={filterCount > 0}
+              onClick={onOpenFilters}
+              type="button"
+            >
+              <SlidersHorizontal aria-hidden="true" size={15} />
+              <span>Filters</span>
+              {filterCount > 0 ? <small>{filterCount}</small> : null}
+            </button>
           </div>
           <div className="command-actions">
             {onSelectAll ? (

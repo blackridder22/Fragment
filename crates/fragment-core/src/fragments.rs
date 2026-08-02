@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
 use crate::hashing::sha256_hex;
-use crate::models::{FileCleanupReport, Fragment, PurgeReport};
+use crate::models::{FileCleanupReport, Fragment, FragmentFilter, PurgeReport};
 use crate::storage::{extension_for_format, mime_for_format, safe_existing_file, write_atomic};
 use crate::thumbnails::{decode_image, dimensions, generate_preview, generate_thumbnail};
 
@@ -124,6 +124,276 @@ pub(crate) fn map_fragment(row: &Row<'_>) -> rusqlite::Result<Fragment> {
     })
 }
 
+fn trimmed_lower(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+}
+
+fn push_contains_filter(
+    conditions: &mut Vec<String>,
+    values: &mut Vec<Value>,
+    expression: &str,
+    value: &Option<String>,
+) {
+    if let Some(value) = trimmed_lower(value) {
+        conditions.push(format!("instr(lower(COALESCE({expression}, '')), ?) > 0"));
+        values.push(Value::Text(value));
+    }
+}
+
+fn build_filtered_scope(
+    frame_id: Option<String>,
+    include_descendants: bool,
+    trashed: bool,
+    filter: &FragmentFilter,
+) -> CoreResult<(String, Vec<Value>)> {
+    if filter.tags.len() > 32 || filter.mime_types.len() > 16 {
+        return Err(CoreError::InvalidInput(
+            "Fragment filter contains too many tag or format values".to_string(),
+        ));
+    }
+    let mut conditions = Vec::with_capacity(24);
+    let mut values = Vec::with_capacity(24);
+    if let Some(frame_id) = frame_id {
+        conditions.push(
+            if include_descendants {
+                "fragments.frame_id IN (
+                   WITH RECURSIVE frame_tree(id) AS (
+                     SELECT id FROM frames WHERE id = ?
+                     UNION ALL
+                     SELECT frames.id FROM frames
+                     INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
+                     WHERE frames.deleted_at IS NULL
+                   )
+                   SELECT id FROM frame_tree
+                 )"
+            } else {
+                "fragments.frame_id = ?"
+            }
+            .to_string(),
+        );
+        values.push(Value::Text(frame_id));
+    }
+    conditions.push(
+        if trashed {
+            "fragments.deleted_at IS NOT NULL"
+        } else {
+            "fragments.deleted_at IS NULL"
+        }
+        .to_string(),
+    );
+    conditions.push("frames.deleted_at IS NULL".to_string());
+
+    match filter.source_kind.as_deref().unwrap_or("all") {
+        "all" => {}
+        "source" => conditions.push(
+            "(NULLIF(trim(fragments.source_url), '') IS NOT NULL OR NULLIF(trim(fragments.page_url), '') IS NOT NULL)".to_string(),
+        ),
+        "local" => conditions.push(
+            "NULLIF(trim(fragments.source_url), '') IS NULL AND NULLIF(trim(fragments.page_url), '') IS NULL".to_string(),
+        ),
+        value => {
+            return Err(CoreError::InvalidInput(format!(
+                "Unknown Fragment source kind: {value}"
+            )))
+        }
+    }
+
+    if let Some(query) = trimmed_lower(&filter.query) {
+        conditions.push(
+            "instr(lower(
+               COALESCE(fragments.title, '') || char(31) ||
+               COALESCE(fragments.description, '') || char(31) ||
+               COALESCE(fragments.note, '') || char(31) ||
+               COALESCE(fragments.source_url, '') || char(31) ||
+               COALESCE(fragments.page_url, '') || char(31) ||
+               COALESCE(fragments.site_name, '') || char(31) ||
+               COALESCE(fragments.creator_name, '') || char(31) ||
+               COALESCE(frames.name, '')
+             ), ?) > 0"
+                .to_string(),
+        );
+        values.push(Value::Text(query));
+    }
+
+    let mime_types = filter
+        .mime_types
+        .iter()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if !mime_types.is_empty() {
+        conditions.push(format!(
+            "lower(COALESCE(assets.mime_type, fragments.mime_type, '')) IN ({})",
+            std::iter::repeat_n("?", mime_types.len())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        values.extend(mime_types.into_iter().map(Value::Text));
+    }
+
+    for tag in filter
+        .tags
+        .iter()
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+    {
+        conditions.push(
+            "EXISTS (
+               SELECT 1 FROM fragment_tags
+               INNER JOIN tags ON tags.id = fragment_tags.tag_id
+               WHERE fragment_tags.fragment_id = fragments.id AND lower(tags.name) = ?
+             )"
+            .to_string(),
+        );
+        values.push(Value::Text(tag));
+    }
+
+    if let Some(domain) = trimmed_lower(&filter.source_domain) {
+        let domain = domain
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_start_matches("www.")
+            .trim_end_matches('/')
+            .to_string();
+        conditions.push(
+            "lower(COALESCE(fragments.source_url, '') || char(31) || COALESCE(fragments.page_url, '')) LIKE ?"
+                .to_string(),
+        );
+        values.push(Value::Text(format!("%{domain}%")));
+    }
+
+    for (expression, value, operator) in [
+        ("fragments.captured_at", &filter.captured_after, ">="),
+        ("fragments.captured_at", &filter.captured_before, "<="),
+    ] {
+        if let Some(value) = value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            conditions.push(format!("{expression} {operator} ?"));
+            values.push(Value::Text(value.to_string()));
+        }
+    }
+
+    for (expression, value, operator) in [
+        (
+            "COALESCE(assets.width, fragments.width)",
+            filter.min_width,
+            ">=",
+        ),
+        (
+            "COALESCE(assets.width, fragments.width)",
+            filter.max_width,
+            "<=",
+        ),
+        (
+            "COALESCE(assets.height, fragments.height)",
+            filter.min_height,
+            ">=",
+        ),
+        (
+            "COALESCE(assets.height, fragments.height)",
+            filter.max_height,
+            "<=",
+        ),
+        (
+            "COALESCE(assets.file_size, fragments.file_size)",
+            filter.min_file_size,
+            ">=",
+        ),
+        (
+            "COALESCE(assets.file_size, fragments.file_size)",
+            filter.max_file_size,
+            "<=",
+        ),
+    ] {
+        if let Some(value) = value {
+            if value < 0 {
+                return Err(CoreError::InvalidInput(
+                    "Fragment numeric filters cannot be negative".to_string(),
+                ));
+            }
+            conditions.push(format!("{expression} {operator} ?"));
+            values.push(Value::Integer(value));
+        }
+    }
+
+    match filter.orientation.as_deref().unwrap_or("all") {
+        "all" => {}
+        "landscape" => conditions.push(
+            "COALESCE(assets.width, fragments.width, 0) > COALESCE(assets.height, fragments.height, 0)".to_string(),
+        ),
+        "portrait" => conditions.push(
+            "COALESCE(assets.height, fragments.height, 0) > COALESCE(assets.width, fragments.width, 0)".to_string(),
+        ),
+        "square" => conditions.push(
+            "COALESCE(assets.width, fragments.width, 0) = COALESCE(assets.height, fragments.height, 0) AND COALESCE(assets.width, fragments.width, 0) > 0".to_string(),
+        ),
+        value => {
+            return Err(CoreError::InvalidInput(format!(
+                "Unknown Fragment orientation: {value}"
+            )))
+        }
+    }
+
+    if let Some(has_notes) = filter.has_notes {
+        conditions.push(
+            if has_notes {
+                "NULLIF(trim(fragments.note), '') IS NOT NULL"
+            } else {
+                "NULLIF(trim(fragments.note), '') IS NULL"
+            }
+            .to_string(),
+        );
+    }
+    push_contains_filter(
+        &mut conditions,
+        &mut values,
+        "fragments.note",
+        &filter.note_contains,
+    );
+    push_contains_filter(
+        &mut conditions,
+        &mut values,
+        "fragments.title",
+        &filter.title_contains,
+    );
+    push_contains_filter(
+        &mut conditions,
+        &mut values,
+        "fragments.site_name",
+        &filter.site_contains,
+    );
+    push_contains_filter(
+        &mut conditions,
+        &mut values,
+        "fragments.creator_name",
+        &filter.creator_contains,
+    );
+
+    Ok((conditions.join(" AND "), values))
+}
+
+fn filtered_order(sort_mode: Option<&str>, trashed: bool) -> CoreResult<&'static str> {
+    match sort_mode.unwrap_or(if trashed { "deleted" } else { "newest" }) {
+        "newest" => Ok("fragments.captured_at DESC, fragments.id DESC"),
+        "oldest" => Ok("fragments.captured_at ASC, fragments.id ASC"),
+        "name" => Ok("lower(COALESCE(fragments.title, '')) ASC, fragments.id ASC"),
+        "largest" => {
+            Ok("COALESCE(assets.file_size, fragments.file_size, 0) DESC, fragments.id DESC")
+        }
+        "deleted" if trashed => Ok("fragments.deleted_at DESC, fragments.id DESC"),
+        value => Err(CoreError::InvalidInput(format!(
+            "Unknown Fragment sort mode: {value}"
+        ))),
+    }
+}
+
 impl FragmentCore {
     pub fn active_fragment_counts_by_frame(&self) -> CoreResult<BTreeMap<String, u64>> {
         let conn = self.conn()?;
@@ -223,53 +493,47 @@ impl FragmentCore {
         offset: usize,
         limit: usize,
     ) -> CoreResult<(Vec<Fragment>, u64)> {
+        self.list_fragment_page_filtered(
+            frame_id,
+            include_descendants,
+            trashed,
+            FragmentFilter::default(),
+            None,
+            offset,
+            limit,
+        )
+    }
+
+    pub fn list_fragment_page_filtered(
+        &self,
+        frame_id: Option<String>,
+        include_descendants: bool,
+        trashed: bool,
+        filter: FragmentFilter,
+        sort_mode: Option<String>,
+        offset: usize,
+        limit: usize,
+    ) -> CoreResult<(Vec<Fragment>, u64)> {
         if let Some(frame_id) = frame_id.as_deref() {
             self.require_frame(frame_id)?;
         }
-
-        let mut conditions = Vec::with_capacity(3);
-        let mut values = Vec::with_capacity(3);
-        if let Some(frame_id) = frame_id {
-            conditions.push(if include_descendants {
-                "fragments.frame_id IN (
-                   WITH RECURSIVE frame_tree(id) AS (
-                     SELECT id FROM frames WHERE id = ?
-                     UNION ALL
-                     SELECT frames.id FROM frames
-                     INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
-                     WHERE frames.deleted_at IS NULL
-                   )
-                   SELECT id FROM frame_tree
-                 )"
-            } else {
-                "fragments.frame_id = ?"
-            });
-            values.push(Value::Text(frame_id));
-        }
-        conditions.push(if trashed {
-            "fragments.deleted_at IS NOT NULL"
-        } else {
-            "fragments.deleted_at IS NULL"
-        });
-        conditions.push(
-            "EXISTS (
-               SELECT 1 FROM frames
-               WHERE frames.id = fragments.frame_id AND frames.deleted_at IS NULL
-             )",
-        );
-        let predicate = conditions.join(" AND ");
+        let (predicate, values) =
+            build_filtered_scope(frame_id, include_descendants, trashed, &filter)?;
         let conn = self.conn()?;
-        let count_sql = format!("SELECT count(*) FROM fragments WHERE {predicate}");
+        let count_sql = format!(
+            "SELECT count(*) FROM fragments
+             LEFT JOIN assets ON assets.id = fragments.asset_id
+             INNER JOIN frames ON frames.id = fragments.frame_id
+             WHERE {predicate}"
+        );
         let total: i64 = conn.query_row(&count_sql, params_from_iter(values.iter()), |row| {
             row.get(0)
         })?;
-
-        let order = if trashed {
-            "fragments.deleted_at DESC, fragments.id DESC"
-        } else {
-            "fragments.captured_at DESC, fragments.id DESC"
-        };
-        let page_clause = format!("WHERE {predicate} ORDER BY {order} LIMIT ? OFFSET ?");
+        let order = filtered_order(sort_mode.as_deref(), trashed)?;
+        let page_clause = format!(
+            "INNER JOIN frames ON frames.id = fragments.frame_id
+             WHERE {predicate} ORDER BY {order} LIMIT ? OFFSET ?"
+        );
         let sql = fragment_select_sql(&page_clause);
         let mut page_values = values;
         page_values.push(Value::Integer(i64::try_from(limit).map_err(|_| {
@@ -398,6 +662,36 @@ impl FragmentCore {
         Ok(ids)
     }
 
+    pub fn list_fragment_ids_filtered(
+        &self,
+        frame_id: Option<String>,
+        include_descendants: bool,
+        trashed: bool,
+        filter: FragmentFilter,
+        sort_mode: Option<String>,
+    ) -> CoreResult<Vec<String>> {
+        if let Some(frame_id) = frame_id.as_deref() {
+            self.require_frame(frame_id)?;
+        }
+        let (predicate, values) =
+            build_filtered_scope(frame_id, include_descendants, trashed, &filter)?;
+        let order = filtered_order(sort_mode.as_deref(), trashed)?;
+        let sql = format!(
+            "SELECT fragments.id
+             FROM fragments
+             LEFT JOIN assets ON assets.id = fragments.asset_id
+             INNER JOIN frames ON frames.id = fragments.frame_id
+             WHERE {predicate}
+             ORDER BY {order}"
+        );
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let ids = stmt
+            .query_map(params_from_iter(values.iter()), |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(ids)
+    }
+
     pub fn get_fragment(&self, id: String) -> CoreResult<Fragment> {
         self.get_fragment_any(id, false)
     }
@@ -467,6 +761,76 @@ impl FragmentCore {
             }
         }
         self.get_fragment(id)
+    }
+
+    pub fn fragment_tags(&self, id: &str) -> CoreResult<Vec<String>> {
+        let conn = self.conn()?;
+        let exists = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM fragments WHERE id = ?1)",
+            params![id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !exists {
+            return Err(CoreError::NotFound("Fragment".to_string()));
+        }
+        let mut statement = conn.prepare(
+            "SELECT tags.name
+             FROM tags
+             INNER JOIN fragment_tags ON fragment_tags.tag_id = tags.id
+             WHERE fragment_tags.fragment_id = ?1
+             ORDER BY tags.name COLLATE NOCASE, tags.name",
+        )?;
+        let tags = statement
+            .query_map(params![id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
+    pub fn list_tags(&self) -> CoreResult<Vec<String>> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT tags.name
+             FROM tags
+             WHERE EXISTS(
+               SELECT 1 FROM fragment_tags WHERE fragment_tags.tag_id = tags.id
+             )
+             ORDER BY tags.name COLLATE NOCASE, tags.name",
+        )?;
+        let tags = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
+    pub fn set_fragment_tags(&self, id: String, tags: Vec<String>) -> CoreResult<Vec<String>> {
+        let tags = normalize_tags(tags)?;
+        {
+            let mut conn = self.conn()?;
+            let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let exists = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM fragments WHERE id = ?1)",
+                params![&id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !exists {
+                return Err(CoreError::NotFound("Fragment".to_string()));
+            }
+
+            transaction.execute(
+                "DELETE FROM fragment_tags WHERE fragment_id = ?1",
+                params![&id],
+            )?;
+            insert_tags_in_conn(&transaction, &id, &tags)?;
+            transaction.execute(
+                "DELETE FROM tags
+                 WHERE NOT EXISTS(
+                   SELECT 1 FROM fragment_tags WHERE fragment_tags.tag_id = tags.id
+                 )",
+                [],
+            )?;
+            transaction.commit()?;
+        }
+        self.fragment_tags(&id)
     }
 
     pub fn delete_fragment(&self, id: String) -> CoreResult<()> {
@@ -1258,6 +1622,34 @@ fn insert_tags_in_conn(
     Ok(())
 }
 
+fn normalize_tags(tags: Vec<String>) -> CoreResult<Vec<String>> {
+    const MAX_TAGS: usize = 32;
+    const MAX_TAG_LENGTH: usize = 64;
+    let mut normalized = Vec::with_capacity(tags.len().min(MAX_TAGS));
+    let mut seen = std::collections::BTreeSet::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if tag.chars().count() > MAX_TAG_LENGTH {
+            return Err(CoreError::InvalidInput(format!(
+                "tag names must be {MAX_TAG_LENGTH} characters or fewer"
+            )));
+        }
+        let comparison_key = tag.to_lowercase();
+        if seen.insert(comparison_key) {
+            normalized.push(tag.to_string());
+        }
+    }
+    if normalized.len() > MAX_TAGS {
+        return Err(CoreError::InvalidInput(format!(
+            "a Fragment can have at most {MAX_TAGS} tags"
+        )));
+    }
+    Ok(normalized)
+}
+
 fn membership_by_asset_in_conn(
     connection: &Connection,
     frame_id: &str,
@@ -1411,7 +1803,7 @@ mod tests {
     use rusqlite::params;
     use tempfile::tempdir;
 
-    use crate::{CoreError, FragmentCore, ImportOutcome};
+    use crate::{CoreError, FragmentCore, FragmentFilter, ImportOutcome};
 
     fn sample_png_bytes() -> Vec<u8> {
         let image = ImageBuffer::from_fn(24, 16, |x, y| {
@@ -1466,6 +1858,91 @@ mod tests {
                 "{relative_path} should exist"
             );
         }
+    }
+
+    #[test]
+    fn fragment_tags_are_replaced_normalized_and_orphans_are_cleaned_up() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let fragment = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("import");
+
+        let tags = core
+            .set_fragment_tags(
+                fragment.id.clone(),
+                vec![
+                    " Interface ".to_string(),
+                    "interface".to_string(),
+                    "Reference".to_string(),
+                ],
+            )
+            .expect("set tags");
+        assert_eq!(tags, vec!["Interface", "Reference"]);
+        assert_eq!(core.list_tags().expect("list tags"), tags);
+
+        let replaced = core
+            .set_fragment_tags(fragment.id.clone(), vec!["Archive".to_string()])
+            .expect("replace tags");
+        assert_eq!(replaced, vec!["Archive"]);
+        assert_eq!(
+            core.fragment_tags(&fragment.id).expect("fragment tags"),
+            replaced
+        );
+        assert_eq!(core.list_tags().expect("list tags"), replaced);
+    }
+
+    #[test]
+    fn filtered_pages_use_metadata_tags_and_dimensions_before_pagination() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let fragment = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("import");
+        core.set_fragment_tags(
+            fragment.id.clone(),
+            vec!["Editorial".to_string(), "Warm".to_string()],
+        )
+        .expect("tags");
+        {
+            let conn = core.conn().expect("conn");
+            conn.execute(
+                "UPDATE fragments
+                 SET title = 'Museum identity', note = 'Typography study',
+                     source_url = 'https://example.com/work/identity',
+                     site_name = 'Example Studio', creator_name = 'Ada'
+                 WHERE id = ?1",
+                params![&fragment.id],
+            )
+            .expect("metadata");
+        }
+
+        let filter = FragmentFilter {
+            tags: vec!["editorial".to_string()],
+            mime_types: vec!["image/png".to_string()],
+            source_domain: Some("example.com".to_string()),
+            source_kind: Some("source".to_string()),
+            min_width: Some(1),
+            orientation: Some("landscape".to_string()),
+            has_notes: Some(true),
+            title_contains: Some("museum".to_string()),
+            creator_contains: Some("ada".to_string()),
+            ..FragmentFilter::default()
+        };
+        let (items, total) = core
+            .list_fragment_page_filtered(None, false, false, filter.clone(), None, 0, 60)
+            .expect("filtered page");
+        assert_eq!(total, 1);
+        assert_eq!(items[0].id, fragment.id);
+        assert_eq!(
+            core.list_fragment_ids_filtered(None, false, false, filter, None)
+                .expect("ids"),
+            vec![fragment.id]
+        );
     }
 
     #[test]

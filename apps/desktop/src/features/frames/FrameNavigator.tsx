@@ -1,20 +1,15 @@
 import {
-  Aperture,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   Folder,
   FolderOpen,
-  Images,
   Inbox,
   MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
   Pin,
   Plus,
   Search,
-  Settings,
-  Trash2,
+  Sparkles,
+  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -26,8 +21,9 @@ import {
   type PointerEvent,
 } from "react";
 import type { Frame } from "@fragment/shared";
-import type { RailView } from "../../components/IconRail";
+import { IconRail, type RailView } from "../../components/IconRail";
 import { flattenFrameTree } from "./frame-tree";
+import type { SmartFrame } from "../filters/filter-model";
 
 type FrameNavigatorProps = {
   activeView: RailView;
@@ -40,6 +36,8 @@ type FrameNavigatorProps = {
   pinnedIds: ReadonlySet<string>;
   recursiveCounts: ReadonlyMap<string, number>;
   selectedFrameId: string | null;
+  selectedSmartFrameId: string | null;
+  smartFrames: SmartFrame[];
   trashDropState: "idle" | "armed" | "success";
   width: number;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -48,6 +46,8 @@ type FrameNavigatorProps = {
   onPointerDown: (event: PointerEvent<HTMLElement>) => void;
   onRenameFrame: (frame: Frame, name: string) => Promise<void>;
   onSelectFrame: (frameId: string | null) => void;
+  onSelectSmartFrame: (smartFrameId: string) => void;
+  onDeleteSmartFrame: (smartFrame: SmartFrame) => void;
   onToggleExpanded: (frameId: string) => void;
   onTogglePinned: (frameId: string) => void;
   onViewChange: (view: RailView) => void;
@@ -55,17 +55,6 @@ type FrameNavigatorProps = {
 };
 
 type ContextMenuState = { frame: Frame; x: number; y: number } | null;
-
-const primaryItems: Array<{
-  id: RailView;
-  label: string;
-  icon: typeof Aperture;
-}> = [
-  { id: "home", label: "Vault", icon: Aperture },
-  { id: "frames", label: "Frames", icon: Images },
-  { id: "trash", label: "Trash", icon: Trash2 },
-  { id: "settings", label: "Settings", icon: Settings },
-];
 
 export function FrameNavigator({
   activeView,
@@ -78,6 +67,8 @@ export function FrameNavigator({
   pinnedIds,
   recursiveCounts,
   selectedFrameId,
+  selectedSmartFrameId,
+  smartFrames,
   trashDropState,
   width,
   onCollapsedChange,
@@ -86,6 +77,8 @@ export function FrameNavigator({
   onPointerDown,
   onRenameFrame,
   onSelectFrame,
+  onSelectSmartFrame,
+  onDeleteSmartFrame,
   onToggleExpanded,
   onTogglePinned,
   onViewChange,
@@ -204,72 +197,40 @@ export function FrameNavigator({
   return (
     <aside
       aria-label="Frame Navigator"
-      className="frame-navigator"
+      className="frame-sidebar"
       data-collapsed={collapsed}
       onPointerDown={onPointerDown}
-      style={{ width: collapsed ? 68 : width }}
+      style={{ width: collapsed ? 78 : width + 78 }}
     >
-      <div className="frame-nav-brand">
-        <img src="/Fragment.png" alt="" aria-hidden="true" />
-        <div className="frame-nav-copy">
-          <strong>Fragment</strong>
-          <span>Auto Scale Agency</span>
-        </div>
-        <button
-          aria-label={
-            collapsed ? "Expand Frame Navigator" : "Collapse Frame Navigator"
-          }
-          className="frame-nav-icon-button"
-          data-no-frame-drag="true"
-          onClick={() => onCollapsedChange(!collapsed)}
-          title={
-            collapsed ? "Expand Frame Navigator" : "Collapse Frame Navigator"
-          }
-          type="button"
-        >
-          {collapsed ? (
-            <PanelLeftOpen size={17} />
-          ) : (
-            <PanelLeftClose size={17} />
-          )}
-        </button>
-      </div>
+      <IconRail
+        activeView={activeView}
+        collapsed={collapsed}
+        dropTarget={dropTarget}
+        onNavigatorToggle={() => onCollapsedChange(!collapsed)}
+        onViewChange={onViewChange}
+        trashDropState={trashDropState}
+      />
 
-      <nav className="frame-nav-primary" aria-label="Library">
-        {primaryItems.map((item) => {
-          const Icon = item.icon;
-          const isTrash = item.id === "trash";
-          const isVault = item.id === "home";
-          return (
+      {!collapsed ? (
+        <section className="frame-navigator" aria-label="Frame tree">
+          <header className="frame-tree-panel-header">
+            <div>
+              <span>Vault structure</span>
+              <strong>Frames</strong>
+            </div>
             <button
-              aria-current={activeView === item.id ? "page" : undefined}
-              aria-label={item.label}
-              className="frame-nav-primary-item"
-              data-active={activeView === item.id}
-              data-drop-state={
-                isTrash
-                  ? trashDropState
-                  : isVault && dropTarget === "frame-root"
-                    ? "armed"
-                    : undefined
-              }
-              data-drop-target={
-                isTrash ? "trash" : isVault ? "frame-root" : undefined
-              }
+              aria-label="New root Frame"
+              className="frame-nav-icon-button"
               data-no-frame-drag="true"
-              key={item.id}
-              onClick={() => onViewChange(item.id)}
-              title={item.label}
+              onClick={() => onCreateFrame(null)}
+              title="New root Frame"
               type="button"
             >
-              <Icon aria-hidden="true" size={18} />
-              <span>{item.label}</span>
+              <Plus aria-hidden="true" size={16} />
             </button>
-          );
-        })}
-      </nav>
+          </header>
 
-      <div className="frame-nav-expanded-content">
+          <div className="frame-nav-expanded-content">
         {pinnedFrames.length > 0 ? (
           <section className="frame-nav-section frame-nav-quick-access">
             <div className="frame-nav-section-heading">
@@ -299,6 +260,42 @@ export function FrameNavigator({
                 </small>
               </button>
             ))}
+          </section>
+        ) : null}
+
+        {smartFrames.length > 0 ? (
+          <section className="frame-nav-section smart-frame-section">
+            <div className="frame-nav-section-heading">
+              <span>Smart Frames</span>
+              <Sparkles aria-hidden="true" size={13} />
+            </div>
+            <div className="smart-frame-list">
+              {smartFrames.map((smartFrame) => (
+                <div
+                  className="smart-frame-row"
+                  data-active={selectedSmartFrameId === smartFrame.id}
+                  key={smartFrame.id}
+                >
+                  <button
+                    onClick={() => onSelectSmartFrame(smartFrame.id)}
+                    title="Dynamic filtered Frame"
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" size={14} />
+                    <span>{smartFrame.name}</span>
+                  </button>
+                  <button
+                    aria-label={`Delete ${smartFrame.name}`}
+                    className="smart-frame-delete"
+                    onClick={() => onDeleteSmartFrame(smartFrame)}
+                    title="Delete Smart Frame"
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </section>
         ) : null}
 
@@ -478,17 +475,9 @@ export function FrameNavigator({
             ) : null}
           </div>
         </section>
-      </div>
-
-      <button
-        className="frame-nav-collapse-footer"
-        data-no-frame-drag="true"
-        onClick={() => onCollapsedChange(!collapsed)}
-        type="button"
-      >
-        {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        <span>{collapsed ? "" : "Collapse Navigator"}</span>
-      </button>
+          </div>
+        </section>
+      ) : null}
 
       {!collapsed ? (
         <div
