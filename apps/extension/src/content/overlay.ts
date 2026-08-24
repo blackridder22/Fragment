@@ -1473,6 +1473,394 @@ const styles = `
     color: rgba(255, 255, 255, 0.56);
     word-break: break-word;
   }
+
+  /* Paper Capture system — on-page UI stays solid dark for reliable contrast. */
+  :host {
+    --canvas: #080a0a;
+    --canvas-soft: #111413;
+    --surface: rgba(26, 29, 27, 0.94);
+    --surface-strong: #202421;
+    --hover: rgba(44, 50, 46, 0.9);
+    --line: rgba(255, 255, 255, 0.105);
+    --line-strong: rgba(255, 255, 255, 0.18);
+    --fg: #f4f7f2;
+    --muted: #b3bab0;
+    --faint: #7f887f;
+    --accent: #89f7ff;
+    --primary: #79e1a2;
+    --on-primary: #061b11;
+    --danger: #f27b72;
+  }
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .multi-tray {
+    min-height: 52px;
+    gap: 8px;
+    padding: 6px 6px 6px 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .tray-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding-left: 2px;
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .tray-count {
+    display: grid;
+    min-width: 30px;
+    height: 30px;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--canvas-soft);
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .tray-save-visible {
+    min-height: 38px;
+    padding: 0 14px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--on-primary);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .tray-save-visible:hover { background: #8ce8ad; }
+  .tray-close,
+  .picker-cancel {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    min-height: 0;
+    flex: 0 0 auto;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--canvas-soft);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .tray-close:hover,
+  .picker-cancel:hover { background: var(--hover); color: var(--fg); }
+  .tray-close svg,
+  .picker-cancel svg {
+    width: 17px;
+    height: 17px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+  .save-button {
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: var(--surface-strong);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.44);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .capture-mark {
+    display: grid;
+    width: 24px;
+    height: 24px;
+    place-items: center;
+    border-radius: 7px;
+    background: var(--primary);
+    color: var(--on-primary);
+  }
+  .capture-mark svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linejoin: round;
+  }
+  .marker.is-open .save-button,
+  .save-button:hover {
+    border-color: var(--accent);
+    background: var(--surface-strong);
+    box-shadow: 0 14px 38px rgba(0, 0, 0, 0.48);
+  }
+  .marker.is-open .save-button {
+    height: 40px;
+    padding: 0 12px 0 8px;
+    border-radius: 999px;
+  }
+  .save-label { font-size: 12px; font-weight: 680; }
+  .saving > .save-button { border-color: var(--accent); }
+  .saved > .save-button { border-color: var(--primary); box-shadow: 0 14px 38px rgba(0, 0, 0, 0.48); }
+  .picker,
+  .batch-picker {
+    width: min(364px, calc(100vw - 20px));
+    max-height: min(610px, calc(100vh - 24px));
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: var(--surface-strong);
+    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.56);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .batch-picker { width: min(408px, calc(100vw - 20px)); }
+  .picker-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .picker-header > div { display: grid; min-width: 0; gap: 3px; }
+  .picker-header strong { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+  .picker-header span { overflow: hidden; color: var(--muted); font-size: 11px; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+  .frame-picker-shell { gap: 8px; }
+  .frame-picker-heading {
+    color: var(--faint);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+  .frame-picker-actions { gap: 8px; }
+  .frame-picker-actions button {
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .frame-picker-actions button:hover { color: var(--fg); }
+  .frame-picker {
+    max-height: 168px;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--canvas-soft);
+  }
+  .frame-choice {
+    display: grid;
+    grid-template-columns: 18px 24px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 0 9px;
+    border-radius: 8px;
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .frame-choice:has(input:checked) { background: var(--hover); }
+  .frame-choice input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+  }
+  .frame-choice-icon {
+    display: grid;
+    width: 24px;
+    height: 24px;
+    place-items: center;
+    border-radius: 6px;
+    background: rgba(121, 225, 162, 0.1);
+    color: var(--primary);
+  }
+  .frame-choice-icon svg,
+  .source-note svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .frame-choice-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-field { display: grid; gap: 7px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; }
+  .picker-field input,
+  .note-field textarea {
+    min-height: 38px;
+    padding: 0 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--canvas-soft);
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .picker-field input::placeholder,
+  .note-field textarea::placeholder { color: var(--faint); }
+  .note-field {
+    display: grid;
+    gap: 8px;
+    color: var(--muted);
+  }
+  .note-field summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    list-style: none;
+  }
+  .note-field summary::-webkit-details-marker { display: none; }
+  .note-field summary::before { content: "+"; margin-right: 7px; color: var(--primary); }
+  .note-field summary span { margin-left: auto; color: var(--faint); font-size: 10px; font-weight: 500; }
+  .note-field textarea { min-height: 64px; padding: 9px 11px; resize: vertical; }
+  .picker-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .batch-picker .picker-actions { grid-template-columns: 1fr; }
+  .picker-save,
+  .picker-save-visible {
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .picker-save {
+    border: 1px solid transparent;
+    background: var(--primary);
+    color: var(--on-primary);
+  }
+  .picker-save:hover { background: #8ce8ad; }
+  .picker-save-visible {
+    border: 1px solid var(--line-strong);
+    background: var(--canvas-soft);
+    color: var(--fg);
+  }
+  .picker-save-visible:hover { background: var(--hover); }
+  .picker-row-status { min-height: 0; }
+  .picker-status { color: var(--accent); font-size: 11px; font-weight: 600; }
+  .picker-status:empty,
+  .setup-hint:empty { display: none; }
+  .setup-hint { color: var(--danger); font-size: 10px; line-height: 14px; }
+  .source-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--faint);
+    font-size: 10px;
+    line-height: 14px;
+  }
+  .source-note svg { width: 14px; height: 14px; flex: 0 0 auto; }
+  .preview-strip {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 5px;
+    height: 64px;
+  }
+  .preview-strip img,
+  .preview-strip > span {
+    width: 100%;
+    height: 64px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    object-fit: cover;
+    background: var(--canvas-soft);
+  }
+  .preview-strip > span { display: grid; place-items: center; color: var(--muted); font-size: 11px; font-weight: 700; }
+  .batch-results { max-height: 96px; gap: 4px; }
+  .batch-result { min-height: 30px; border-color: var(--line); background: var(--canvas-soft); }
+  .batch-result-state { color: var(--primary); }
+  .batch-result.is-failed .batch-result-state { color: var(--danger); }
+
+  /* Preserve the existing Capture geometry and behavior; update appearance only. */
+  .multi-tray {
+    min-height: 44px;
+    gap: 9px;
+    padding: 6px 7px 6px 13px;
+  }
+  .tray-count {
+    display: inline;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .tray-save-visible {
+    min-height: 32px;
+    padding: 0 13px;
+  }
+  .picker-cancel {
+    display: inline-flex;
+    width: auto;
+    height: auto;
+    min-height: 34px;
+    padding: 0 13px;
+    border-radius: 8px;
+  }
+  .picker,
+  .batch-picker {
+    width: min(292px, calc(100vw - 22px));
+    max-height: min(520px, calc(100vh - 34px));
+    gap: 10px;
+    padding: 14px;
+  }
+  .picker-header {
+    display: grid;
+    gap: 2px;
+  }
+  .picker-header span {
+    white-space: normal;
+  }
+  .frame-picker {
+    gap: 6px;
+    max-height: 138px;
+    padding: 4px;
+  }
+  .frame-choice {
+    display: flex;
+    grid-template-columns: none;
+    gap: 8px;
+    min-height: 30px;
+    padding: 6px 8px;
+  }
+  label {
+    color: var(--muted);
+  }
+  select,
+  input,
+  textarea {
+    border-color: var(--line);
+    border-radius: 8px;
+    background: var(--canvas-soft);
+  }
+  .picker-row-status {
+    min-height: 16px;
+  }
+
   @keyframes marker-in {
     from {
       opacity: 0;

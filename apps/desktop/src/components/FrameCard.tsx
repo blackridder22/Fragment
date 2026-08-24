@@ -1,4 +1,3 @@
-import type { DragEventHandler } from "react";
 import type { Fragment, Frame } from "@fragment/shared";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { AssetSource } from "../lib/assets";
@@ -13,8 +12,6 @@ type FrameCardProps = {
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
   readonly?: boolean;
   protectedFrame?: boolean;
-  onDragEnd?: DragEventHandler<HTMLElement>;
-  onDragStart?: DragEventHandler<HTMLElement>;
 };
 
 export function FrameCard({
@@ -25,8 +22,6 @@ export function FrameCard({
   onRename,
   onDelete,
   onAssetFallback,
-  onDragEnd,
-  onDragStart,
   protectedFrame = false,
   readonly = false,
 }: FrameCardProps) {
@@ -36,10 +31,8 @@ export function FrameCard({
     <article
       className="frame-card"
       data-draggable={draggable}
-      draggable={draggable}
+      data-frame-drag-id={draggable ? frame.id : undefined}
       onDoubleClick={onOpen}
-      onDragEnd={draggable ? onDragEnd : undefined}
-      onDragStart={draggable ? onDragStart : undefined}
     >
       <button className="frame-card-cover" onClick={onOpen} type="button">
         {covers.length > 0 ? (
@@ -48,7 +41,7 @@ export function FrameCard({
               const asset = assetFor(fragment);
               return (
                 <img
-                  alt={fragment.title ?? "Fragment thumbnail"}
+                  alt={fragment.title ?? "Frame thumbnail"}
                   data-transparent={isTransparentAsset(fragment)}
                   draggable={false}
                   key={fragment.id}
@@ -73,7 +66,7 @@ export function FrameCard({
         <button className="frame-title-button" onClick={onOpen} type="button">
           <strong>{frame.name}</strong>
           <span>
-            {fragments.length} Fragments
+            {fragments.length} {fragments.length === 1 ? "Frame" : "Frames"}
             {protectedFrame ? " · Protected" : ""}
           </span>
         </button>
@@ -85,7 +78,7 @@ export function FrameCard({
             <button
               className="icon-button small"
               onClick={onRename}
-              title="Rename Frame"
+              title="Rename Fragment"
               type="button"
             >
               <Pencil size={15} />
@@ -93,7 +86,7 @@ export function FrameCard({
             <button
               className="icon-button small danger"
               onClick={onDelete}
-              title="Delete Frame"
+              title="Delete Fragment"
               type="button"
             >
               <Trash2 size={15} />

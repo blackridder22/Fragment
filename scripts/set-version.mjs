@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import process from "node:process";
 
-const version = process.argv[2];
+const version = process.argv.slice(2).find((argument) => argument !== "--");
 
 if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
   console.error("Usage: pnpm version:set <major.minor.patch>");
@@ -15,14 +15,13 @@ const jsonFiles = [
   "apps/desktop/package.json",
   "apps/extension/package.json",
   "apps/extension/manifest.json",
-  "apps/extension/public/manifest.json",
   "apps/desktop/src-tauri/tauri.conf.json",
-  "packages/shared/package.json"
+  "packages/shared/package.json",
 ];
 const cargoFiles = [
   "crates/fragment-core/Cargo.toml",
   "crates/fragment-host/Cargo.toml",
-  "apps/desktop/src-tauri/Cargo.toml"
+  "apps/desktop/src-tauri/Cargo.toml",
 ];
 
 for (const relativePath of jsonFiles) {
@@ -45,4 +44,6 @@ for (const relativePath of cargoFiles) {
   await writeFile(path, updated);
 }
 
-console.log(`Fragment version set to ${version}. Run cargo check to refresh Cargo.lock.`);
+console.log(
+  `Fragment version set to ${version}. Run cargo check to refresh Cargo.lock.`,
+);

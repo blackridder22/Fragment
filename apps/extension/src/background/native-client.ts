@@ -37,12 +37,15 @@ const nativeResponseSchema = z.discriminatedUnion("type", [
     type: z.literal("capture.fragment.result"),
     requestId: z.string(),
     ok: z.boolean(),
-    fragmentId: z.string().optional(),
-    fragmentIds: z.array(z.string()).optional(),
-    duplicateOfFragmentId: z.string().optional(),
-    duplicateOfFragmentIds: z.array(z.string()).optional(),
-    thumbnailPath: z.string().optional(),
-    error: nativeErrorSchema.optional(),
+    fragmentId: z.string().nullish().transform(nullToUndefined),
+    fragmentIds: z.array(z.string()).nullish().transform(nullToUndefined),
+    duplicateOfFragmentId: z.string().nullish().transform(nullToUndefined),
+    duplicateOfFragmentIds: z
+      .array(z.string())
+      .nullish()
+      .transform(nullToUndefined),
+    thumbnailPath: z.string().nullish().transform(nullToUndefined),
+    error: nativeErrorSchema.nullish().transform(nullToUndefined),
   }),
   z.object({
     type: z.literal("error"),
@@ -51,6 +54,10 @@ const nativeResponseSchema = z.discriminatedUnion("type", [
     error: nativeErrorSchema,
   }),
 ]);
+
+function nullToUndefined<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
+}
 
 type ParsedNativeResponse = z.infer<typeof nativeResponseSchema>;
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;

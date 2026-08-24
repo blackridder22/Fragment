@@ -1,35 +1,32 @@
-import {
-  useEffect,
-  useState,
-  type DragEventHandler,
-  type MouseEvent,
-} from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import type { Fragment } from "@fragment/shared";
 import { Check, ImageOff, Maximize2 } from "lucide-react";
 import type { AssetSource } from "../lib/assets";
+import {
+  formatLabel,
+  sourceDomain,
+} from "../features/fragments/fragment-metadata";
 
 type FragmentCardProps = {
   fragment: Fragment;
   assetSources: AssetSource[];
   selected: boolean;
-  draggable?: boolean;
   selectionActive?: boolean;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
-  onDragEnd?: DragEventHandler<HTMLElement>;
-  onDragStart?: DragEventHandler<HTMLElement>;
+  onOpen: () => void;
   onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu: (event: MouseEvent<HTMLElement>) => void;
 };
 
 export function FragmentCard({
   fragment,
   assetSources,
-  draggable = true,
   selectionActive = false,
   selected,
   onAssetFallback,
-  onDragEnd,
-  onDragStart,
+  onOpen,
   onSelect,
+  onContextMenu,
 }: FragmentCardProps) {
   const [displayIndex, setDisplayIndex] = useState(0);
   const [imageFailed, setImageFailed] = useState(assetSources.length === 0);
@@ -70,27 +67,32 @@ export function FragmentCard({
       data-fragment-id={fragment.id}
       data-selected={selected}
       data-transparent={transparentAsset}
-      draggable={draggable}
-      onDragEnd={draggable ? onDragEnd : undefined}
-      onDragStart={draggable ? onDragStart : undefined}
+      onContextMenu={onContextMenu}
     >
       <button
-        aria-label={`${selected ? "Deselect" : selectionActive ? "Select" : "Open"} ${fragment.title ?? "Fragment"}`}
+        aria-label={`${selected ? "Selected" : "Select"} ${fragment.title ?? "Frame"}`}
         aria-pressed={selected}
         className="fragment-image-button"
         data-fragment-id={fragment.id}
         onClick={onSelect}
+        onDoubleClick={onOpen}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onOpen();
+          }
+        }}
         style={aspectRatio ? { aspectRatio } : undefined}
         type="button"
       >
         {imageFailed ? (
           <span className="fragment-image-fallback" style={{ aspectRatio }}>
             <ImageOff size={22} />
-            <strong>{fragment.title ?? "Fragment"}</strong>
+            <strong>{fragment.title ?? "Frame"}</strong>
           </span>
         ) : (
           <img
-            alt={fragment.title ?? "Saved Fragment"}
+            alt={fragment.title ?? "Saved Frame"}
             decoding="async"
             draggable={false}
             loading="lazy"
@@ -102,13 +104,25 @@ export function FragmentCard({
         <span className="fragment-hover">
           <span>
             <Maximize2 size={16} />
-            Open
+            {selectionActive ? "Selected" : "Select"}
           </span>
         </span>
         <span className="fragment-select-indicator" aria-hidden="true">
           <Check size={14} />
         </span>
       </button>
+      <div className="fragment-card-meta">
+        <strong>{fragment.title ?? "Untitled Frame"}</strong>
+        <span>
+          {formatLabel(fragment.mimeType, fragment.originalPath)}
+          {fragment.width && fragment.height
+            ? ` · ${fragment.width} × ${fragment.height}`
+            : ""}
+          {sourceDomain(fragment.sourceUrl ?? fragment.pageUrl)
+            ? ` · ${sourceDomain(fragment.sourceUrl ?? fragment.pageUrl)}`
+            : ""}
+        </span>
+      </div>
     </article>
   );
 }

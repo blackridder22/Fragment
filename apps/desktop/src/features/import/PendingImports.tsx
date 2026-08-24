@@ -22,7 +22,7 @@ export function PendingImportStatus({
       <strong>
         {failedCount > 0
           ? `${failedCount} ${failedCount === 1 ? "import needs" : "imports need"} attention${activeCount > 0 ? ` · ${activeCount} importing` : ""}`
-          : `Importing ${activeCount} ${activeCount === 1 ? "Fragment" : "Fragments"}`}
+          : `Importing ${activeCount} ${activeCount === 1 ? "Frame" : "Frames"}`}
       </strong>
       <small>
         {failedCount > 0
@@ -50,7 +50,7 @@ export function PendingImportCards({
             {item.status === "failed"
               ? (item.error ?? "Import failed")
               : item.status === "preparing"
-                ? "Preparing Fragment"
+                ? "Preparing Frame"
                 : "Waiting to import"}
           </small>
           {item.status === "failed" ? (

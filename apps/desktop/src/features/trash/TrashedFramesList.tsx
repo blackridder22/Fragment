@@ -13,7 +13,7 @@ export function TrashedFramesList({
   return (
     <section className="trashed-frame-section">
       <div className="section-heading">
-        <h2>Frames</h2>
+        <h2>Fragments</h2>
         <span>{frames.length} in Trash</span>
       </div>
       <div className="trashed-frame-list">
@@ -24,7 +24,7 @@ export function TrashedFramesList({
             </div>
             <div>
               <strong>{frame.name}</strong>
-              <span>Frame</span>
+              <span>Fragment</span>
             </div>
             <button
               className="button compact"

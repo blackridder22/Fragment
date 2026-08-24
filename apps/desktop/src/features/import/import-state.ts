@@ -1,3 +1,5 @@
+import type { ImportBatchResult } from "../../lib/tauri";
+
 export type ImportItemStatus = "queued" | "preparing" | "failed";
 
 export type ImportQueueItem = {
@@ -18,6 +20,7 @@ export type ImportQueueEvent =
   | { event: "queued"; requestId: string }
   | { event: "preparing"; requestId: string }
   | { event: "complete"; requestId: string }
+  | { event: "skipped"; requestId: string }
   | {
       event: "failed";
       requestId: string;
@@ -77,7 +80,7 @@ export function importQueueReducer(
   if (event.event === "finished") {
     return state;
   }
-  if (event.event === "complete") {
+  if (event.event === "complete" || event.event === "skipped") {
     return state.filter((item) => item.id !== event.requestId);
   }
 
@@ -107,4 +110,34 @@ export function importQueueReducer(
       existingTrashed: undefined,
     };
   });
+}
+
+export type ImportResultSummary = {
+  imported: number;
+  linkedFragmentIds: string[];
+  skipped: number;
+  failed: number;
+};
+
+export function summarizeImportResults(
+  results: ImportBatchResult[],
+): ImportResultSummary {
+  const summary: ImportResultSummary = {
+    imported: 0,
+    linkedFragmentIds: [],
+    skipped: 0,
+    failed: 0,
+  };
+  for (const result of results) {
+    if (!result.ok) {
+      summary.failed += 1;
+    } else if (result.outcome === "linked" && result.fragment) {
+      summary.linkedFragmentIds.push(result.fragment.id);
+    } else if (result.outcome === "skipped") {
+      summary.skipped += 1;
+    } else {
+      summary.imported += 1;
+    }
+  }
+  return summary;
 }

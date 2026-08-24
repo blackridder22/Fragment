@@ -23,6 +23,7 @@ type FragmentDetailSheetProps = {
   onSave: (title: string | null, note: string | null) => Promise<void>;
   onReveal: () => Promise<void>;
   onOpenSource: () => Promise<void>;
+  onCopyImage?: () => Promise<void>;
   onDelete: () => Promise<void>;
   onDeleteEverywhere?: () => Promise<void>;
   onNext?: () => void;
@@ -39,6 +40,7 @@ export function FragmentDetailSheet({
   onSave,
   onReveal,
   onOpenSource,
+  onCopyImage,
   onDelete,
   onDeleteEverywhere,
   onNext,
@@ -70,8 +72,7 @@ export function FragmentDetailSheet({
   }, [note, onSave, title]);
   const confirmDiscard = useCallback(
     () =>
-      !isDirty ||
-      window.confirm("Discard the unsaved changes to this Fragment?"),
+      !isDirty || window.confirm("Discard the unsaved changes to this Frame?"),
     [isDirty],
   );
   const requestClose = useCallback(() => {
@@ -144,22 +145,26 @@ export function FragmentDetailSheet({
   }, [busy, navigate, onNext, onPrevious, save]);
 
   async function copyImage() {
-    if (!assetUrl) {
+    if (!onCopyImage && !assetUrl) {
       setCopyStatus("No image");
-      return;
-    }
-    if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
-      setCopyStatus("Unavailable");
       return;
     }
 
     setCopyStatus("Copying...");
     try {
-      const response = await fetch(assetUrl);
-      const blob = await response.blob();
-      await navigator.clipboard.write([
-        new ClipboardItem({ [blob.type || "image/png"]: blob }),
-      ]);
+      if (onCopyImage) {
+        await onCopyImage();
+      } else {
+        if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+          setCopyStatus("Unavailable");
+          return;
+        }
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "image/png": fetch(assetUrl).then((response) => response.blob()),
+          }),
+        ]);
+      }
       setCopyStatus("Copied");
       if (copyResetTimer.current !== null) {
         window.clearTimeout(copyResetTimer.current);
@@ -191,26 +196,26 @@ export function FragmentDetailSheet({
 
   return (
     <Modal
-      title="Fragment Details"
+      title="Frame Details"
       className="fragment-detail-modal"
       headerActions={
-        <div className="detail-navigation" aria-label="Fragment navigation">
+        <div className="detail-navigation" aria-label="Frame navigation">
           <button
-            aria-label="Previous Fragment"
+            aria-label="Previous Frame"
             className="icon-button"
             disabled={!onPrevious}
             onClick={() => (onPrevious ? navigate(onPrevious) : undefined)}
-            title="Previous Fragment"
+            title="Previous Frame"
             type="button"
           >
             <ChevronLeft aria-hidden="true" size={18} />
           </button>
           <button
-            aria-label="Next Fragment"
+            aria-label="Next Frame"
             className="icon-button"
             disabled={!onNext}
             onClick={() => (onNext ? navigate(onNext) : undefined)}
-            title="Next Fragment"
+            title="Next Frame"
             type="button"
           >
             <ChevronRight aria-hidden="true" size={18} />
@@ -224,12 +229,12 @@ export function FragmentDetailSheet({
           {previewFailed ? (
             <div className="fragment-image-fallback detail-fallback">
               <ImageOff size={26} />
-              <strong>{fragment.title ?? "Fragment"}</strong>
+              <strong>{fragment.title ?? "Frame"}</strong>
             </div>
           ) : (
             <img
               src={assetUrl}
-              alt={fragment.title ?? "Selected Fragment"}
+              alt={fragment.title ?? "Selected Frame"}
               decoding="async"
               onError={handlePreviewError}
             />
@@ -241,7 +246,7 @@ export function FragmentDetailSheet({
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="Untitled Fragment"
+              placeholder="Untitled Frame"
             />
           </label>
           <label>
@@ -304,7 +309,7 @@ export function FragmentDetailSheet({
             </button>
             <button className="button danger" onClick={onDelete} type="button">
               <Trash2 size={16} />
-              {sharedReferenceCount > 1 ? "Remove from Frame" : "Delete"}
+              {sharedReferenceCount > 1 ? "Remove from Fragment" : "Delete"}
             </button>
             {sharedReferenceCount > 1 && onDeleteEverywhere ? (
               <button

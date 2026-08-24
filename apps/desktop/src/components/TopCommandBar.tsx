@@ -1,36 +1,35 @@
-import { CheckSquare, Download, Plus, Search } from "lucide-react";
+import type { ReactNode } from "react";
+import { CheckSquare, SlidersHorizontal } from "lucide-react";
 
 export type SortMode = "newest" | "oldest" | "name" | "largest";
 export type SourceFilter = "all" | "source" | "local" | "png";
 
 type TopCommandBarProps = {
-  query: string;
-  onQueryChange: (value: string) => void;
-  onCreateFrame: () => void;
-  onImport: () => void;
   onSortChange: (value: SortMode) => void;
   onSourceFilterChange: (value: SourceFilter) => void;
   onSelectAll?: () => void;
+  onOpenFilters: () => void;
+  filterCount: number;
   showLibraryTools: boolean;
   sourceFilter: SourceFilter;
   sortMode: SortMode;
   subtitle: string;
   title: string;
+  viewControls?: ReactNode;
 };
 
 export function TopCommandBar({
-  query,
-  onQueryChange,
-  onCreateFrame,
-  onImport,
   onSortChange,
   onSourceFilterChange,
   onSelectAll,
+  onOpenFilters,
+  filterCount,
   showLibraryTools,
   sourceFilter,
   sortMode,
   subtitle,
   title,
+  viewControls,
 }: TopCommandBarProps) {
   return (
     <header className="top-command-bar" data-library-tools={showLibraryTools}>
@@ -39,26 +38,17 @@ export function TopCommandBar({
         <span>{subtitle}</span>
       </div>
       {showLibraryTools ? (
-        <>
-          <label className="search-field">
-            <Search aria-hidden="true" size={18} />
-            <input
-              aria-label="Search your Vault"
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="Search your vault"
-            />
-            <kbd>⌘K</kbd>
-          </label>
+        <div className="page-command-tools">
+          {viewControls}
           <div
             className="library-controls"
             aria-label="Library controls"
             role="group"
           >
             <label>
-              <span>Sort</span>
+              <span className="sr-only">Sort</span>
               <select
-                aria-label="Sort Fragments"
+                aria-label="Sort Frames"
                 value={sortMode}
                 onChange={(event) =>
                   onSortChange(event.target.value as SortMode)
@@ -71,9 +61,9 @@ export function TopCommandBar({
               </select>
             </label>
             <label>
-              <span>Filter</span>
+              <span className="sr-only">Source</span>
               <select
-                aria-label="Filter Fragments"
+                aria-label="Filter Frames"
                 value={sourceFilter}
                 onChange={(event) =>
                   onSourceFilterChange(event.target.value as SourceFilter)
@@ -85,33 +75,31 @@ export function TopCommandBar({
                 <option value="png">PNG</option>
               </select>
             </label>
+            <button
+              className="advanced-filter-button"
+              data-active={filterCount > 0}
+              onClick={onOpenFilters}
+              type="button"
+            >
+              <SlidersHorizontal aria-hidden="true" size={15} />
+              <span>Filters</span>
+              {filterCount > 0 ? <small>{filterCount}</small> : null}
+            </button>
           </div>
           <div className="command-actions">
             {onSelectAll ? (
               <button
-                aria-label="Select all matching Fragments"
+                aria-label="Select all matching Frames"
                 className="icon-button command-select-button"
                 onClick={onSelectAll}
-                title="Select all matching Fragments (Command+A)"
+                title="Select all matching Frames (Command+A)"
                 type="button"
               >
                 <CheckSquare aria-hidden="true" size={17} />
               </button>
             ) : null}
-            <button
-              className="button primary"
-              onClick={onCreateFrame}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={17} />
-              <span>New Frame</span>
-            </button>
-            <button className="button" onClick={onImport} type="button">
-              <Download aria-hidden="true" size={17} />
-              <span>Import</span>
-            </button>
           </div>
-        </>
+        </div>
       ) : null}
     </header>
   );

@@ -1,15 +1,21 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
+use arboard::{Clipboard, ImageData};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use fragment_core::{CoreError, Fragment, Frame, ImportDuplicateCheck, PurgeReport};
+use fragment_core::{
+    CoreError, Fragment, FragmentFilter, Frame, ImportOutcome, PurgeReport, SmartFrame,
+};
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, AppHandle, Manager, State};
 use url::Url;
 
+use crate::native_host::{native_host_status as read_native_host_status, NativeHostStatus};
 use crate::state::FragmentState;
 
 type CommandResult<T> = Result<T, String>;
@@ -63,10 +69,15 @@ pub struct ImportBatchResult {
     error_code: Option<String>,
     existing_fragment_id: Option<String>,
     existing_trashed: Option<bool>,
+    outcome: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "event", rename_all = "camelCase")]
+#[serde(
+    tag = "event",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ImportBatchEvent {
     Queued {
         job_id: String,
@@ -80,6 +91,13 @@ pub enum ImportBatchEvent {
         job_id: String,
         request_id: String,
         fragment: Box<Fragment>,
+        linked: bool,
+    },
+    Skipped {
+        job_id: String,
+        request_id: String,
+        existing_fragment_id: String,
+        existing_trashed: bool,
     },
     Failed {
         job_id: String,
@@ -96,6 +114,8 @@ pub enum ImportBatchEvent {
     Finished {
         job_id: String,
         completed: usize,
+        linked: usize,
+        skipped: usize,
         failed: usize,
         cancelled: usize,
     },
@@ -199,16 +219,27 @@ pub async fn load_library_snapshot(
 pub async fn list_fragment_page(
     state: State<'_, FragmentState>,
     frame_id: Option<String>,
+    include_descendants: Option<bool>,
     trashed: Option<bool>,
     offset: Option<u32>,
     limit: Option<u32>,
+    filter: Option<FragmentFilter>,
+    sort_mode: Option<String>,
 ) -> CommandResult<FragmentPage> {
     let core = state.core.clone();
     let offset = offset.unwrap_or_default() as usize;
     let limit = page_size(limit);
     tauri::async_runtime::spawn_blocking(move || {
         let (items, total) = core
-            .list_fragment_page(frame_id, trashed.unwrap_or(false), offset, limit)
+            .list_fragment_page_filtered(
+                frame_id,
+                include_descendants.unwrap_or(false),
+                trashed.unwrap_or(false),
+                filter.unwrap_or_default(),
+                sort_mode,
+                offset,
+                limit,
+            )
             .map_err(safe_error)?;
         let revision = core.library_revision().map_err(safe_error)?.to_string();
         Ok(fragment_page(items, offset, limit, total, revision))
@@ -221,17 +252,66 @@ pub async fn list_fragment_page(
 pub async fn list_fragment_ids(
     state: State<'_, FragmentState>,
     frame_id: Option<String>,
+    include_descendants: Option<bool>,
     trashed: Option<bool>,
     query: Option<String>,
     source_filter: Option<String>,
+    filter: Option<FragmentFilter>,
+    sort_mode: Option<String>,
 ) -> CommandResult<Vec<String>> {
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        core.list_fragment_ids(frame_id, trashed.unwrap_or(false), query, source_filter)
-            .map_err(safe_error)
+        let filter = filter.unwrap_or_else(|| FragmentFilter {
+            query,
+            source_kind: source_filter,
+            ..FragmentFilter::default()
+        });
+        core.list_fragment_ids_filtered(
+            frame_id,
+            include_descendants.unwrap_or(false),
+            trashed.unwrap_or(false),
+            filter,
+            sort_mode,
+        )
+        .map_err(safe_error)
     })
     .await
     .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub fn list_smart_frames(state: State<'_, FragmentState>) -> CommandResult<Vec<SmartFrame>> {
+    state.core.list_smart_frames().map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn create_smart_frame(
+    state: State<'_, FragmentState>,
+    name: String,
+    filter: FragmentFilter,
+) -> CommandResult<SmartFrame> {
+    state
+        .core
+        .create_smart_frame(name, filter)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn update_smart_frame(
+    state: State<'_, FragmentState>,
+    id: String,
+    name: String,
+    filter: FragmentFilter,
+) -> CommandResult<SmartFrame> {
+    state
+        .core
+        .update_smart_frame(id, name, filter)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn delete_smart_frame(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
+    state.core.delete_smart_frame(id).map_err(safe_error)
 }
 
 #[tauri::command]
@@ -296,6 +376,19 @@ pub fn rename_frame(
 }
 
 #[tauri::command]
+pub fn move_frame(
+    state: State<'_, FragmentState>,
+    id: String,
+    parent_id: Option<String>,
+    position: u32,
+) -> CommandResult<Frame> {
+    state
+        .core
+        .move_frame(id, parent_id, position as usize)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
 pub fn delete_frame(
     state: State<'_, FragmentState>,
     id: String,
@@ -326,6 +419,14 @@ pub fn restore_frame(state: State<'_, FragmentState>, id: String) -> CommandResu
 pub async fn purge_expired_trash(state: State<'_, FragmentState>) -> CommandResult<PurgeReport> {
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || core.purge_expired_trash().map_err(safe_error))
+        .await
+        .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub async fn empty_trash(state: State<'_, FragmentState>) -> CommandResult<PurgeReport> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || core.empty_trash().map_err(safe_error))
         .await
         .map_err(safe_error)?
 }
@@ -377,6 +478,21 @@ pub async fn add_existing_fragment_to_frame(
 }
 
 #[tauri::command]
+pub async fn move_fragment_to_frame(
+    state: State<'_, FragmentState>,
+    id: String,
+    frame_id: String,
+) -> CommandResult<Fragment> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.move_fragment_to_frame(id, frame_id)
+            .map_err(safe_error)
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
 pub fn update_fragment(
     state: State<'_, FragmentState>,
     id: String,
@@ -390,6 +506,28 @@ pub fn update_fragment(
 }
 
 #[tauri::command]
+pub fn get_fragment_tags(
+    state: State<'_, FragmentState>,
+    id: String,
+) -> CommandResult<Vec<String>> {
+    state.core.fragment_tags(&id).map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn list_tags(state: State<'_, FragmentState>) -> CommandResult<Vec<String>> {
+    state.core.list_tags().map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn set_fragment_tags(
+    state: State<'_, FragmentState>,
+    id: String,
+    tags: Vec<String>,
+) -> CommandResult<Vec<String>> {
+    state.core.set_fragment_tags(id, tags).map_err(safe_error)
+}
+
+#[tauri::command]
 pub async fn import_image(
     state: State<'_, FragmentState>,
     frame_id: Option<String>,
@@ -399,21 +537,6 @@ pub async fn import_image(
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
         core.import_image(frame_id, file_path, title_override)
-            .map_err(safe_error)
-    })
-    .await
-    .map_err(safe_error)?
-}
-
-#[tauri::command]
-pub async fn check_import_duplicate(
-    state: State<'_, FragmentState>,
-    frame_id: Option<String>,
-    file_path: String,
-) -> CommandResult<ImportDuplicateCheck> {
-    let core = state.core.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        core.check_import_duplicate(frame_id, file_path)
             .map_err(safe_error)
     })
     .await
@@ -462,6 +585,8 @@ pub async fn import_image_batch(
 
         let mut results = Vec::with_capacity(items.len());
         let mut completed = 0;
+        let mut linked = 0;
+        let mut skipped = 0;
         let mut failed = 0;
         let mut cancelled = 0;
 
@@ -485,6 +610,7 @@ pub async fn import_image_batch(
                         error_code: None,
                         existing_fragment_id: None,
                         existing_trashed: None,
+                        outcome: None,
                     });
                 }
                 break;
@@ -505,7 +631,11 @@ pub async fn import_image_batch(
                                 job_id: job_id.clone(),
                                 request_id: item.request_id.clone(),
                             });
-                            core.import_image(item.frame_id, item.file_path, item.title_override)
+                            core.import_image_outcome(
+                                item.frame_id,
+                                item.file_path,
+                                item.title_override,
+                            )
                         }),
                     )
                 })
@@ -513,12 +643,13 @@ pub async fn import_image_batch(
 
             for (request_id, handle) in handles {
                 match handle.join() {
-                    Ok(Ok(fragment)) => {
+                    Ok(Ok(ImportOutcome::New(fragment))) => {
                         completed += 1;
                         let _ = on_event.send(ImportBatchEvent::Complete {
                             job_id: job_id.clone(),
                             request_id: request_id.clone(),
                             fragment: Box::new(fragment.clone()),
+                            linked: false,
                         });
                         results.push(ImportBatchResult {
                             request_id,
@@ -528,6 +659,48 @@ pub async fn import_image_batch(
                             error_code: None,
                             existing_fragment_id: None,
                             existing_trashed: None,
+                            outcome: Some("new".to_string()),
+                        });
+                    }
+                    Ok(Ok(ImportOutcome::Linked(fragment))) => {
+                        linked += 1;
+                        let _ = on_event.send(ImportBatchEvent::Complete {
+                            job_id: job_id.clone(),
+                            request_id: request_id.clone(),
+                            fragment: Box::new(fragment.clone()),
+                            linked: true,
+                        });
+                        results.push(ImportBatchResult {
+                            request_id,
+                            ok: true,
+                            fragment: Some(fragment),
+                            error: None,
+                            error_code: None,
+                            existing_fragment_id: None,
+                            existing_trashed: None,
+                            outcome: Some("linked".to_string()),
+                        });
+                    }
+                    Ok(Ok(ImportOutcome::SkippedDuplicate {
+                        existing_fragment_id,
+                        trashed,
+                    })) => {
+                        skipped += 1;
+                        let _ = on_event.send(ImportBatchEvent::Skipped {
+                            job_id: job_id.clone(),
+                            request_id: request_id.clone(),
+                            existing_fragment_id: existing_fragment_id.clone(),
+                            existing_trashed: trashed,
+                        });
+                        results.push(ImportBatchResult {
+                            request_id,
+                            ok: true,
+                            fragment: None,
+                            error: None,
+                            error_code: None,
+                            existing_fragment_id: Some(existing_fragment_id),
+                            existing_trashed: Some(trashed),
+                            outcome: Some("skipped".to_string()),
                         });
                     }
                     Ok(Err(error)) => {
@@ -551,6 +724,7 @@ pub async fn import_image_batch(
                             error_code,
                             existing_fragment_id,
                             existing_trashed,
+                            outcome: None,
                         });
                     }
                     Err(_) => {
@@ -572,6 +746,7 @@ pub async fn import_image_batch(
                             error_code: None,
                             existing_fragment_id: None,
                             existing_trashed: None,
+                            outcome: None,
                         });
                     }
                 }
@@ -582,6 +757,8 @@ pub async fn import_image_batch(
         let _ = on_event.send(ImportBatchEvent::Finished {
             job_id,
             completed,
+            linked,
+            skipped,
             failed,
             cancelled,
         });
@@ -643,12 +820,8 @@ pub async fn delete_fragments(
     }
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let ids = ids.into_iter().collect::<BTreeSet<_>>();
-        for id in &ids {
-            core.delete_fragment_with_policy(id.clone(), retention_days)
-                .map_err(safe_error)?;
-        }
-        Ok(ids.len())
+        core.delete_fragments_with_policy(&ids, retention_days)
+            .map_err(safe_error)
     })
     .await
     .map_err(safe_error)?
@@ -665,15 +838,9 @@ pub async fn restore_fragments(
         ));
     }
     let core = state.core.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let ids = ids.into_iter().collect::<BTreeSet<_>>();
-        for id in &ids {
-            core.restore_fragment(id.clone()).map_err(safe_error)?;
-        }
-        Ok(ids.len())
-    })
-    .await
-    .map_err(safe_error)?
+    tauri::async_runtime::spawn_blocking(move || core.restore_fragments(&ids).map_err(safe_error))
+        .await
+        .map_err(safe_error)?
 }
 
 #[tauri::command]
@@ -685,26 +852,45 @@ pub fn reveal_fragment_in_finder(state: State<'_, FragmentState>, id: String) ->
         .resolve_relative_path(&fragment.original_path)
         .map_err(safe_error)?;
 
+    open_in_file_manager(&path, true)
+}
+
+#[tauri::command]
+pub fn reveal_vault_in_finder(state: State<'_, FragmentState>) -> CommandResult<()> {
+    open_in_file_manager(state.core.paths().root(), false)
+}
+
+fn file_manager_arguments(path: &Path, reveal_item: bool) -> Vec<OsString> {
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .status()
-            .map_err(safe_error)?;
-        Ok(())
+        let mut args = Vec::with_capacity(if reveal_item { 2 } else { 1 });
+        if reveal_item {
+            args.push(OsString::from("-R"));
+        }
+        args.push(path.as_os_str().to_owned());
+        args
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        if let Some(parent) = path.parent() {
-            Command::new("open")
-                .arg(parent)
-                .status()
-                .map_err(safe_error)?;
-        }
-        Ok(())
+        let target = if reveal_item {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        vec![target.as_os_str().to_owned()]
     }
+}
+
+fn open_in_file_manager(path: &Path, reveal_item: bool) -> CommandResult<()> {
+    let status = Command::new("open")
+        .args(file_manager_arguments(path, reveal_item))
+        .status()
+        .map_err(safe_error)?;
+    if !status.success() {
+        return Err(format!("could not open Finder (exit status {status})"));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -727,8 +913,66 @@ pub fn open_fragment_source(state: State<'_, FragmentState>, id: String) -> Comm
 }
 
 #[tauri::command]
+pub fn copy_fragment_image(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
+    let fragment = state
+        .core
+        .get_fragment_including_deleted(id)
+        .map_err(safe_error)?;
+    let path = state
+        .core
+        .paths()
+        .resolve_relative_path(&fragment.original_path)
+        .map_err(safe_error)?;
+    let bytes = fs::read(path).map_err(safe_error)?;
+    let image = decode_clipboard_image(&bytes)?;
+    let mut clipboard = Clipboard::new().map_err(safe_error)?;
+    clipboard.set_image(image).map_err(safe_error)
+}
+
+fn decode_clipboard_image(bytes: &[u8]) -> CommandResult<ImageData<'static>> {
+    let rgba = image::load_from_memory(bytes)
+        .map_err(safe_error)?
+        .to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let width = usize::try_from(width).map_err(safe_error)?;
+    let height = usize::try_from(height).map_err(safe_error)?;
+    Ok(ImageData {
+        width,
+        height,
+        bytes: Cow::Owned(rgba.into_raw()),
+    })
+}
+
+#[tauri::command]
 pub fn asset_root(state: State<'_, FragmentState>) -> CommandResult<String> {
     Ok(state.core.paths().root().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn native_host_status(app: AppHandle) -> NativeHostStatus {
+    let resource_dir = match app.path().resource_dir() {
+        Ok(resource_dir) => resource_dir,
+        Err(error) => {
+            return NativeHostStatus {
+                ready: false,
+                label: "Setup required".to_string(),
+                description: Some(format!(
+                    "Fragment could not locate its bundled native host: {error}"
+                )),
+            };
+        }
+    };
+    match tauri::async_runtime::spawn_blocking(move || read_native_host_status(&resource_dir)).await
+    {
+        Ok(status) => status,
+        Err(error) => NativeHostStatus {
+            ready: false,
+            label: "Setup required".to_string(),
+            description: Some(format!(
+                "Native host verification could not finish: {error}"
+            )),
+        },
+    }
 }
 
 #[tauri::command]
@@ -786,6 +1030,10 @@ fn mime_for_asset_path(path: &Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+
     use super::*;
 
     fn fragment(id: &str) -> Fragment {
@@ -819,10 +1067,64 @@ mod tests {
     }
 
     #[test]
+    fn skipped_import_event_uses_camel_case_channel_shape() {
+        let event = ImportBatchEvent::Skipped {
+            job_id: "job".to_string(),
+            request_id: "request".to_string(),
+            existing_fragment_id: "fragment".to_string(),
+            existing_trashed: true,
+        };
+        let value = serde_json::to_value(event).expect("serialize event");
+        assert_eq!(value["event"], "skipped");
+        assert_eq!(value["jobId"], "job");
+        assert_eq!(value["existingFragmentId"], "fragment");
+        assert_eq!(value["existingTrashed"], true);
+    }
+
+    #[test]
+    fn clipboard_image_decodes_png_and_jpeg_to_rgba() {
+        let image =
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(3, 2, Rgba([10_u8, 20, 30, 255])));
+        for format in [ImageFormat::Png, ImageFormat::Jpeg] {
+            let mut cursor = Cursor::new(Vec::new());
+            image.write_to(&mut cursor, format).expect("encode image");
+            let decoded = decode_clipboard_image(&cursor.into_inner()).expect("decode image");
+            assert_eq!(decoded.width, 3);
+            assert_eq!(decoded.height, 2);
+            assert_eq!(decoded.bytes.len(), 3 * 2 * 4);
+        }
+    }
+
+    #[test]
     fn page_size_is_bounded() {
         assert_eq!(page_size(None), DEFAULT_FRAGMENT_PAGE_SIZE);
         assert_eq!(page_size(Some(0)), 1);
         assert_eq!(page_size(Some(500)), MAX_FRAGMENT_PAGE_SIZE);
+    }
+
+    #[test]
+    fn finder_arguments_distinguish_revealing_an_item_from_opening_the_vault() {
+        let path = Path::new("/tmp/Fragment Vault/original.png");
+        let reveal = file_manager_arguments(path, true);
+        let open = file_manager_arguments(path, false);
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                reveal,
+                vec![OsString::from("-R"), OsString::from(path.as_os_str())]
+            );
+            assert_eq!(open, vec![OsString::from(path.as_os_str())]);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                reveal,
+                vec![OsString::from(path.parent().unwrap().as_os_str())]
+            );
+            assert_eq!(open, vec![OsString::from(path.as_os_str())]);
+        }
     }
 
     #[test]

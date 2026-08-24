@@ -135,11 +135,26 @@ try {
   const page = await context.newPage();
   await page.goto(serverOrigin(server), { waitUntil: "domcontentloaded" });
   await page.waitForSelector("img[alt='Fragment smoke image']");
+  await page.waitForFunction(() => {
+    const image = document.querySelector("img[alt='Fragment smoke image']");
+    return Boolean(
+      image instanceof HTMLImageElement &&
+      image.complete &&
+      image.naturalWidth >= 120,
+    );
+  });
+  const captureModeWasAlreadyActive = await page.evaluate(() =>
+    Boolean(document.querySelector("fragment-capture-overlay")?.shadowRoot),
+  );
+  if (captureModeWasAlreadyActive) {
+    throw new Error("Capture Mode activated before the extension action");
+  }
 
-  await toggleCaptureMode(context, extensionId, serverOrigin(server));
+  await toggleCaptureMode(context, extensionId, page);
   await page.waitForFunction(() =>
     Boolean(document.querySelector("fragment-capture-overlay")?.shadowRoot),
   );
+  await page.hover("img[alt='Fragment smoke image']");
   await page.waitForFunction(() => {
     const root = document.querySelector("fragment-capture-overlay")?.shadowRoot;
     return Boolean(root?.querySelector(".save-button"));
@@ -155,6 +170,10 @@ try {
   await waitForPickerReady(page);
   await page.evaluate(() => {
     const root = document.querySelector("fragment-capture-overlay")?.shadowRoot;
+    const picker = root?.querySelector(".picker");
+    if (!root || !(picker instanceof HTMLFormElement)) {
+      throw new Error("Capture picker is missing");
+    }
     const tags = root?.querySelector("input[name='tags']");
     const note = root?.querySelector("textarea[name='note']");
     if (tags instanceof HTMLInputElement) {
@@ -165,15 +184,12 @@ try {
       note.value = "Extension capture smoke";
       note.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    root
-      ?.querySelector(".picker")
-      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    picker.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
   });
-  await page.waitForFunction(() => {
-    const root = document.querySelector("fragment-capture-overlay")?.shadowRoot;
-    const status = root?.querySelector(".picker-status")?.textContent ?? "";
-    return status.includes("Saved") || status.includes("Already saved");
-  });
+  await waitForCaptureArtifacts(vaultDir);
 
   const originals = walkFiles(join(vaultDir, "originals"));
   const thumbnails = walkFiles(join(vaultDir, "thumbnails"));
@@ -281,6 +297,22 @@ function closeServer(serverInstance) {
       }
     });
   });
+}
+
+async function waitForCaptureArtifacts(directory, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (
+      existsSync(join(directory, "fragment.db")) &&
+      walkFiles(join(directory, "originals")).length > 0 &&
+      walkFiles(join(directory, "thumbnails")).length > 0 &&
+      walkFiles(join(directory, "previews")).length > 0
+    ) {
+      return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error("Timed out waiting for the extension capture artifacts");
 }
 
 function serverOrigin(serverInstance) {
@@ -499,23 +531,26 @@ function backupManifestPath(manifestPath) {
   return `${manifestPath}.fragment-smoke-backup`;
 }
 
-async function toggleCaptureMode(contextInstance, extensionId, pageOrigin) {
+async function toggleCaptureMode(contextInstance, extensionId, smokePage) {
   const extensionPage = await contextInstance.newPage();
   try {
     await extensionPage.goto(
       `chrome-extension://${extensionId}/src/popup/index.html`,
     );
-    return await extensionPage.evaluate(async (origin) => {
-      const tabs = await chrome.tabs.query({});
-      const tab = tabs.find((candidate) => candidate.url?.startsWith(origin));
+    await smokePage.bringToFront();
+    return await extensionPage.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
       if (!tab?.id) {
-        throw new Error(`No smoke page tab was found for ${origin}`);
+        throw new Error("No active smoke page tab was found");
       }
       await chrome.tabs.sendMessage(tab.id, {
         type: "fragment.capture.toggle",
       });
       return tab.id;
-    }, pageOrigin);
+    });
   } finally {
     await extensionPage.close().catch(() => undefined);
   }

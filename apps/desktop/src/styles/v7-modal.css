@@ -1,0 +1,229 @@
+.v7-app .modal-backdrop:has(> .v7-frame-name-modal) {
+  inset: 0;
+  z-index: 200;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.58);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v7-app .modal.v7-frame-name-modal {
+  display: flex;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  overflow: clip;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 22px;
+  background: rgba(32, 36, 33, 0.94);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v7-app .v7-frame-name-modal .modal-header {
+  position: static;
+  align-items: flex-start;
+  padding: 24px 24px 0;
+  gap: 16px;
+  border: 0;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v7-app .v7-frame-name-modal .modal-header h2 {
+  min-width: 0;
+  margin: 0;
+  color: #f4f7f2;
+  font-family: "SF Pro Display", var(--font);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.03em;
+}
+
+.v7-app .v7-frame-name-modal .modal-header-actions {
+  flex: 0 0 auto;
+}
+
+.v7-app .v7-frame-name-modal .modal-header .icon-button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: #b3bab0;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+  transform: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v7-app .v7-frame-name-modal .modal-header .icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.v7-app .v7-frame-name-modal .modal-header .icon-button:hover {
+  color: #f4f7f2;
+  background: rgba(44, 50, 46, 0.9);
+  transform: none;
+}
+
+.v7-app .v7-frame-name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+}
+
+.v7-app .v7-frame-name-copy {
+  padding: 4px 24px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.105);
+}
+
+.v7-app .v7-frame-name-copy p {
+  margin: 0;
+  color: #b3bab0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.v7-app .frame-form .v7-frame-name-field {
+  display: flex;
+  padding: 24px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.v7-app .v7-frame-name-field > span {
+  color: #b3bab0;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.v7-app .frame-form .v7-frame-name-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  outline: 0;
+  color: #f4f7f2;
+  background: #111413;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v7-app .frame-form .v7-frame-name-input:hover {
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+.v7-app .frame-form .v7-frame-name-input:focus,
+.v7-app .frame-form .v7-frame-name-input:focus-visible {
+  border-color: #89f7ff;
+  outline: 0;
+  box-shadow: 0 0 0 2px rgba(137, 247, 255, 0.1);
+}
+
+.v7-app .v7-frame-name-input::placeholder {
+  color: #7f887f;
+}
+
+.v7-app .v7-frame-name-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 16px 24px 20px;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.105);
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-button {
+  min-height: 36px;
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  color: #b3bab0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  transform: none;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.26);
+  color: #f4f7f2;
+  background: rgba(44, 50, 46, 0.9);
+  transform: none;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-button:active:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-primary {
+  border-color: transparent;
+  color: #061b11;
+  background: #79e1a2;
+  font-weight: 600;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-primary::after {
+  content: none;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: #061b11;
+  background: #b3ffc9;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.v7-app .v7-frame-name-modal .v7-trash-confirm-button {
+  border-color: rgba(255, 111, 105, 0.42);
+  color: #ffd3d0;
+  background: rgba(151, 46, 43, 0.22);
+  font-weight: 600;
+}
+
+.v7-app .v7-frame-name-modal .v7-trash-confirm-button:hover:not(:disabled) {
+  border-color: rgba(255, 129, 123, 0.62);
+  color: #fff1ef;
+  background: rgba(181, 55, 50, 0.34);
+}
+
+@media (max-width: 520px) {
+  .v7-app .modal-backdrop:has(> .v7-frame-name-modal) {
+    padding: 16px;
+  }
+
+  .v7-app .v7-frame-name-modal .v7-frame-dialog-button span {
+    display: inline;
+  }
+}

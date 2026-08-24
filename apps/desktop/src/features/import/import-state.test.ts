@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { importQueueReducer, type ImportQueueItem } from "./import-state";
+import {
+  importQueueReducer,
+  summarizeImportResults,
+  type ImportQueueItem,
+} from "./import-state";
 
 function item(id: string): ImportQueueItem {
   return {
@@ -53,5 +57,37 @@ describe("importQueueReducer", () => {
         event: { event: "complete", requestId: "one" },
       }),
     ).toEqual([]);
+  });
+
+  it("removes a skipped duplicate from the pending queue", () => {
+    expect(
+      importQueueReducer([item("one")], {
+        type: "event",
+        event: { event: "skipped", requestId: "one" },
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("summarizeImportResults", () => {
+  it("counts new, linked, skipped, and failed outcomes", () => {
+    expect(
+      summarizeImportResults([
+        { requestId: "new", ok: true, outcome: "new", fragment: null },
+        {
+          requestId: "linked",
+          ok: true,
+          outcome: "linked",
+          fragment: { id: "linked-fragment" } as never,
+        },
+        { requestId: "skipped", ok: true, outcome: "skipped" },
+        { requestId: "failed", ok: false, error: "decode failed" },
+      ]),
+    ).toEqual({
+      imported: 1,
+      linkedFragmentIds: ["linked-fragment"],
+      skipped: 1,
+      failed: 1,
+    });
   });
 });

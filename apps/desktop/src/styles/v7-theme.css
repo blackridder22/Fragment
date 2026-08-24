@@ -1,0 +1,361 @@
+/* v7 consumes resolved theme roles; Paper primitives stay isolated in tokens.css. */
+.v7-app {
+  --v7-canvas: var(--theme-canvas);
+  --v7-canvas-soft: var(--theme-canvas-soft);
+  --v7-surface: var(--theme-surface);
+  --v7-surface-strong: var(--theme-surface-strong);
+  --v7-surface-hover: var(--theme-surface-hover);
+  --v7-floating-surface: var(--theme-popover-surface);
+  --v7-border: var(--theme-border);
+  --v7-border-strong: var(--theme-border-strong);
+  --v7-text: var(--theme-text);
+  --v7-text-muted: var(--theme-text-muted);
+  --v7-text-faint: var(--theme-text-faint);
+  --v7-shadow-color: var(--theme-shadow-color);
+  --v7-focus: var(--theme-focus);
+  --v7-focus-strong: var(--theme-focus-strong);
+  --v7-primary: var(--theme-primary);
+  --v7-primary-strong: var(--theme-primary-strong);
+  --v7-on-primary: var(--theme-on-primary);
+  --v7-danger: var(--theme-danger);
+  --v7-font-sans: var(--font-sans);
+  --v7-font-display: var(--font-display);
+  --v7-radius-xs: var(--radius-xs);
+  --v7-radius-sm: var(--radius-sm);
+  --v7-radius-md: var(--radius-md);
+  --v7-radius-lg: var(--radius-lg);
+  --v7-radius-pill: var(--radius-pill);
+  --v7-popover-surface: var(--v7-floating-surface);
+  --v7-popover-border: var(--v7-border-strong);
+  color: var(--v7-text);
+  background: var(--v7-canvas);
+  font-family: var(--v7-font-sans);
+}
+
+.v7-app .v7-workspace {
+  background: var(--v7-canvas);
+}
+
+/* Menus and notices share the same semantic floating-surface contract. */
+.v7-app .v7-add-menu,
+.v7-app .v7-sort-menu,
+.v7-app .v7-filter-popover,
+.v7-app .v7-trash-sort-menu,
+.v7-app .v7-notice,
+.v7-app .v7-undo-toast {
+  border-color: var(--v7-popover-border);
+  color: var(--v7-text);
+  background: var(--v7-popover-surface);
+  box-shadow: 0 18px 40px var(--v7-shadow-color);
+}
+
+.v7-app .v7-add-menu > button,
+.v7-app .v7-add-menu > button:hover,
+.v7-app .v7-sort-menu button,
+.v7-app .v7-sort-menu button:hover,
+.v7-app .v7-sort-menu button[data-active="true"],
+.v7-app .v7-notice button,
+.v7-app .v7-notice button:hover {
+  color: var(--v7-text);
+}
+
+.v7-app .v7-add-menu > button:hover,
+.v7-app .v7-sort-menu button:hover,
+.v7-app .v7-sort-menu button[data-active="true"],
+.v7-app .v7-notice button:hover {
+  background: var(--v7-surface-hover);
+}
+
+.v7-app .v7-add-menu small,
+.v7-app .v7-filter-menu-label,
+.v7-app .v7-notice {
+  color: var(--v7-text-faint);
+}
+
+.v7-app .v7-filter-popover {
+  background: var(--v7-popover-surface);
+  box-shadow: 0 18px 40px var(--v7-shadow-color);
+}
+
+.v7-app .v7-trash-sort-menu {
+  --v7-surface: var(--theme-surface);
+  --v7-surface-hover: var(--theme-surface-hover);
+  --v7-border: var(--theme-border);
+  --v7-border-strong: var(--theme-border-strong);
+  --v7-text: var(--theme-text);
+  --v7-text-muted: var(--theme-text-muted);
+  --v7-text-faint: var(--theme-text-faint);
+  --v7-focus: var(--theme-focus);
+  --v7-popover-border: var(--theme-border-strong);
+}
+
+.v7-app .v7-notice[data-tone="error"] {
+  border-color: color-mix(in srgb, var(--v7-danger) 42%, transparent);
+  color: var(--v7-text);
+}
+
+/* Paper context menu: opaque surface, strong edge, compact rows, calm shadow. */
+.v7-app .fragment-context-menu {
+  --v7-context-menu-surface: var(--theme-popover-surface);
+  --v7-context-menu-hover: var(--theme-surface-hover);
+  --v7-context-menu-border: var(--theme-border-strong);
+  --v7-context-menu-text: var(--theme-text);
+  --v7-context-menu-muted: var(--theme-text-faint);
+  --v7-context-menu-shadow: var(--theme-shadow-color);
+  padding: 8px;
+  gap: 4px;
+  border: 1px solid var(--v7-context-menu-border);
+  border-radius: 14px;
+  color: var(--v7-context-menu-text);
+  background: var(--v7-context-menu-surface);
+  box-shadow: 0 18px 40px var(--v7-context-menu-shadow);
+}
+
+.v7-app .fragment-context-menu > header {
+  padding: 10px 12px;
+  border-bottom-color: var(--theme-border);
+}
+
+.v7-app .fragment-context-menu > header strong,
+.v7-app .fragment-context-menu > button {
+  color: var(--v7-context-menu-text);
+}
+
+.v7-app .fragment-context-menu > header span,
+.v7-app .fragment-context-menu kbd,
+.v7-app .fragment-context-submenu > span {
+  color: var(--v7-context-menu-muted);
+}
+
+.v7-app .fragment-context-menu > button {
+  height: 34px;
+  min-height: 34px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.v7-app .fragment-context-menu > button:hover {
+  color: var(--v7-context-menu-text);
+  background: var(--v7-context-menu-hover);
+}
+
+.v7-app .fragment-context-menu > button.danger {
+  color: var(--theme-danger);
+}
+
+.v7-app .fragment-context-divider {
+  background: var(--theme-border);
+}
+
+.v7-app .fragment-context-submenu button {
+  border-color: var(--theme-border);
+  color: var(--theme-text-muted);
+  background: var(--theme-surface-strong);
+}
+
+.v7-app .fragment-context-submenu button:hover {
+  border-color: var(--theme-border-strong);
+  color: var(--theme-text);
+  background: var(--theme-surface-hover);
+}
+
+/* Selection follows the theme; dark preview retains its existing media contrast. */
+.v7-app .v7-selection-action-bar {
+  box-shadow: 0 18px 40px var(--v7-shadow-color);
+}
+
+.v7-app .v7-focused-details {
+  box-shadow: 0 28px 70px var(--v7-shadow-color);
+}
+
+.v7-app .v7-focused-overlay {
+  background: rgb(8 10 10 / 76%);
+}
+
+.v7-app .v7-focused-topbar,
+.v7-app .v7-focused-preview-pane {
+  --v7-canvas-soft: var(--paper-dark-canvas-soft);
+  --v7-surface: var(--paper-dark-surface);
+  --v7-surface-hover: var(--paper-dark-surface-hover);
+  --v7-border: var(--paper-dark-border);
+  --v7-border-strong: var(--paper-dark-border-strong);
+  --v7-text: var(--paper-dark-text);
+  --v7-text-muted: var(--paper-dark-text-muted);
+  --v7-text-faint: var(--paper-dark-text-faint);
+  --v7-focus: var(--paper-dark-focus);
+}
+
+.v7-app .v7-focused-close {
+  color: var(--paper-dark-text);
+  background: rgb(26 29 27 / 86%);
+}
+
+/* Light preview keeps the image workspace within the resolved Paper palette. */
+:root[data-theme="light"] .v7-app .v7-focused-overlay {
+  background: color-mix(in srgb, var(--theme-canvas) 88%, transparent);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-topbar,
+:root[data-theme="light"] .v7-app .v7-focused-preview-pane {
+  --v7-canvas-soft: var(--theme-canvas-soft);
+  --v7-surface: var(--theme-surface);
+  --v7-surface-strong: var(--theme-surface-strong);
+  --v7-surface-hover: var(--theme-surface-hover);
+  --v7-border: var(--theme-border);
+  --v7-border-strong: var(--theme-border-strong);
+  --v7-text: var(--theme-text);
+  --v7-text-muted: var(--theme-text-muted);
+  --v7-text-faint: var(--theme-text-faint);
+  --v7-focus: var(--theme-focus);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-preview-pane {
+  border-color: var(--theme-border-strong);
+  background: var(--theme-surface);
+  box-shadow: 0 28px 70px var(--theme-shadow-color);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-image-stage {
+  border-color: var(--theme-border-strong);
+  background: var(--theme-canvas-soft);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-close,
+:root[data-theme="light"] .v7-app .v7-focused-nav > button {
+  border-color: var(--theme-border-strong);
+  color: var(--theme-text-muted);
+  background: var(--theme-surface-strong);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-close:hover,
+:root[data-theme="light"] .v7-app .v7-focused-nav > button:hover:not(:disabled),
+:root[data-theme="light"] .v7-app .v7-focused-close:focus-visible,
+:root[data-theme="light"] .v7-app .v7-focused-nav > button:focus-visible {
+  border-color: var(--theme-focus);
+  color: var(--theme-text);
+  background: var(--theme-surface-hover);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-nav > button:disabled {
+  border-color: var(--theme-border);
+  color: var(--theme-text-faint);
+  background: var(--theme-surface-strong);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-counter {
+  border-color: var(--theme-border);
+  color: var(--theme-text-faint);
+  background: var(--theme-surface-strong);
+}
+
+:root[data-theme="light"] .v7-app .v7-focused-counter strong {
+  color: var(--theme-text-muted);
+}
+
+/* Frame dialogs now follow the same Paper surface and control roles. */
+.v7-app .modal.v7-frame-name-modal {
+  border-color: var(--v7-border-strong);
+  color: var(--v7-text);
+  background: var(--v7-floating-surface);
+  box-shadow: 0 30px 80px var(--v7-shadow-color);
+}
+
+.v7-app .v7-frame-name-modal .modal-header h2 {
+  color: var(--v7-text);
+}
+
+.v7-app .v7-frame-name-modal .modal-header .icon-button {
+  color: var(--v7-text-muted);
+  background: var(--v7-surface);
+}
+
+.v7-app .v7-frame-name-modal .modal-header .icon-button:hover {
+  color: var(--v7-text);
+  background: var(--v7-surface-hover);
+}
+
+.v7-app .v7-frame-name-copy {
+  border-bottom-color: var(--v7-border);
+}
+
+.v7-app .v7-frame-name-copy p,
+.v7-app .v7-frame-name-field > span {
+  color: var(--v7-text-muted);
+}
+
+.v7-app .frame-form .v7-frame-name-input {
+  border-color: var(--v7-border-strong);
+  color: var(--v7-text);
+  background: var(--v7-canvas-soft);
+}
+
+.v7-app .frame-form .v7-frame-name-input:hover {
+  border-color: var(--v7-focus);
+}
+
+.v7-app .frame-form .v7-frame-name-input:focus,
+.v7-app .frame-form .v7-frame-name-input:focus-visible {
+  border-color: var(--v7-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--v7-focus) 14%, transparent);
+}
+
+.v7-app .v7-frame-name-input::placeholder {
+  color: var(--v7-text-faint);
+}
+
+.v7-app .v7-frame-name-actions {
+  border-top-color: var(--v7-border);
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-button {
+  border-color: var(--v7-border-strong);
+  color: var(--v7-text-muted);
+  background: transparent;
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-button:hover:not(:disabled) {
+  border-color: var(--v7-border-strong);
+  color: var(--v7-text);
+  background: var(--v7-surface-hover);
+}
+
+.v7-app .v7-frame-name-modal .v7-frame-dialog-primary,
+.v7-app .v7-frame-name-modal .v7-frame-dialog-primary:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--v7-on-primary);
+  background: var(--v7-primary);
+}
+
+.v7-app .v7-frame-name-modal .v7-trash-confirm-button {
+  border-color: color-mix(in srgb, var(--v7-danger) 42%, transparent);
+  color: var(--v7-danger);
+  background: color-mix(in srgb, var(--v7-danger) 10%, transparent);
+}
+
+.v7-app .v7-frame-name-modal .v7-trash-confirm-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--v7-danger) 62%, transparent);
+  color: var(--v7-danger);
+  background: color-mix(in srgb, var(--v7-danger) 16%, transparent);
+}
+
+:root[data-theme="light"] .v7-app .v7-trash-list-header {
+  background: var(--theme-surface-strong);
+}
+
+:root[data-theme="light"] .v7-app .v7-trash-item-row:hover {
+  background: var(--theme-surface-hover);
+}
+
+:root[data-theme="light"] .v7-app .v7-trash-restore {
+  box-shadow: inset 0 1px rgb(255 255 255 / 70%);
+}
+
+:root[data-theme="light"] .v7-app .v7-trash-restore:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--theme-focus) 42%, transparent);
+  color: var(--theme-focus);
+}
+
+:root[data-theme="light"] .v7-app .v7-undo-toast {
+  box-shadow: 0 18px 40px var(--theme-shadow-color);
+}

@@ -1,47 +1,50 @@
-import type { DragEvent, DragEventHandler, MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import type { Fragment } from "@fragment/shared";
 import type { AssetSource } from "../lib/assets";
 import { FragmentCard } from "./FragmentCard";
+import type {
+  BrowsingDensity,
+  BrowsingLayout,
+} from "../features/library/BrowsingModeControl";
 
 type MasonryGridProps = {
   fragments: Fragment[];
   assetSourcesFor: (fragment: Fragment) => AssetSource[];
-  draggable?: boolean;
   selectionActive?: boolean;
   selectedIds: Set<string>;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
-  onDragEnd?: DragEventHandler<HTMLElement>;
-  onDragStart?: (fragment: Fragment, event: DragEvent<HTMLElement>) => void;
+  onOpen: (fragment: Fragment) => void;
   onSelect: (fragment: Fragment, event: MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
+  layout: BrowsingLayout;
+  density: BrowsingDensity;
 };
 
 export function MasonryGrid({
   fragments,
   assetSourcesFor,
-  draggable = true,
   selectionActive = false,
   selectedIds,
   onAssetFallback,
-  onDragEnd,
-  onDragStart,
+  onOpen,
   onSelect,
+  onContextMenu,
+  layout,
+  density,
 }: MasonryGridProps) {
   return (
-    <div className="masonry-grid">
+    <div className="masonry-grid" data-density={density} data-layout={layout}>
       {fragments.map((fragment) => (
         <FragmentCard
           assetSources={assetSourcesFor(fragment)}
-          draggable={draggable && !fragment.id.startsWith("demo-")}
           fragment={fragment}
           key={fragment.id}
           selectionActive={selectionActive}
           onAssetFallback={onAssetFallback}
-          onDragEnd={onDragEnd}
-          onDragStart={
-            onDragStart ? (event) => onDragStart(fragment, event) : undefined
-          }
+          onOpen={() => onOpen(fragment)}
           selected={selectedIds.has(fragment.id)}
           onSelect={(event) => onSelect(fragment, event)}
+          onContextMenu={(event) => onContextMenu(fragment, event)}
         />
       ))}
     </div>

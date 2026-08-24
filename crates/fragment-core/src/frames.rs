@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
-use crate::fragments::{enqueue_orphan_asset_cleanup, usize_to_u64};
+use crate::fragments::{
+    enqueue_fragment_cleanup, enqueue_orphan_asset_cleanup, fragment_by_id_in_conn, usize_to_u64,
+};
 use crate::models::Frame;
 
 const DEFAULT_FRAME_RETENTION_DAYS: u32 = 31;
@@ -72,6 +74,8 @@ impl FragmentCore {
             self.require_frame(parent_id)?;
         }
 
+        let conn = self.conn()?;
+        let sort_order = next_sibling_sort_order(&conn, parent_id.as_deref())?;
         let now = Utc::now().to_rfc3339();
         let frame = Frame {
             id: Uuid::new_v4().to_string(),
@@ -79,12 +83,11 @@ impl FragmentCore {
             name: trimmed.to_string(),
             description: None,
             icon: None,
-            sort_order: 0,
+            sort_order,
             created_at: now.clone(),
             updated_at: now,
         };
 
-        let conn = self.conn()?;
         conn.execute(
             "
             INSERT INTO frames (
@@ -105,6 +108,81 @@ impl FragmentCore {
         )?;
 
         Ok(frame)
+    }
+
+    pub fn move_frame(
+        &self,
+        id: String,
+        parent_id: Option<String>,
+        position: usize,
+    ) -> CoreResult<Frame> {
+        self.ensure_frame_is_not_default(&id)?;
+        if parent_id.as_deref() == Some(id.as_str()) {
+            return Err(CoreError::InvalidInput(
+                "a Frame cannot contain itself".to_string(),
+            ));
+        }
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current_parent_id = tx
+            .query_row(
+                "SELECT parent_id FROM frames WHERE id = ?1 AND deleted_at IS NULL",
+                params![&id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .ok_or_else(|| CoreError::NotFound("Frame".to_string()))?;
+
+        if let Some(parent_id) = parent_id.as_deref() {
+            let parent_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM frames WHERE id = ?1 AND deleted_at IS NULL)",
+                params![parent_id],
+                |row| row.get(0),
+            )?;
+            if !parent_exists {
+                return Err(CoreError::NotFound("Parent Frame".to_string()));
+            }
+
+            let creates_cycle: bool = tx.query_row(
+                "
+                WITH RECURSIVE frame_tree(id) AS (
+                  SELECT id FROM frames WHERE id = ?1
+                  UNION ALL
+                  SELECT frames.id FROM frames
+                  INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
+                  WHERE frames.deleted_at IS NULL
+                )
+                SELECT EXISTS(SELECT 1 FROM frame_tree WHERE id = ?2)
+                ",
+                params![&id, parent_id],
+                |row| row.get(0),
+            )?;
+            if creates_cycle {
+                return Err(CoreError::InvalidInput(
+                    "a Frame cannot move inside one of its Sub-frames".to_string(),
+                ));
+            }
+        }
+
+        let mut destination_ids = sibling_ids(&tx, parent_id.as_deref(), Some(&id))?;
+        let destination_position = position.min(destination_ids.len());
+        destination_ids.insert(destination_position, id.clone());
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "UPDATE frames SET parent_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![parent_id.as_deref(), &now, &id],
+        )?;
+        rewrite_sibling_order(&tx, &destination_ids, &now)?;
+
+        if current_parent_id != parent_id {
+            let source_ids = sibling_ids(&tx, current_parent_id.as_deref(), None)?;
+            rewrite_sibling_order(&tx, &source_ids, &now)?;
+        }
+
+        tx.commit()?;
+        drop(conn);
+        self.get_frame(&id)
     }
 
     pub fn list_frames(&self) -> CoreResult<Vec<Frame>> {
@@ -379,6 +457,82 @@ impl FragmentCore {
     }
 }
 
+fn next_sibling_sort_order(connection: &Connection, parent_id: Option<&str>) -> CoreResult<i64> {
+    let next = match parent_id {
+        Some(parent_id) => connection.query_row(
+            "
+            SELECT COALESCE(MAX(sort_order), -1) + 1
+            FROM frames
+            WHERE parent_id = ?1 AND deleted_at IS NULL
+            ",
+            params![parent_id],
+            |row| row.get(0),
+        )?,
+        None => connection.query_row(
+            "
+            SELECT COALESCE(MAX(sort_order), -1) + 1
+            FROM frames
+            WHERE parent_id IS NULL AND deleted_at IS NULL
+            ",
+            [],
+            |row| row.get(0),
+        )?,
+    };
+    Ok(next)
+}
+
+fn sibling_ids(
+    connection: &Connection,
+    parent_id: Option<&str>,
+    excluded_id: Option<&str>,
+) -> CoreResult<Vec<String>> {
+    let mut ids = if let Some(parent_id) = parent_id {
+        let mut stmt = connection.prepare(
+            "
+            SELECT id FROM frames
+            WHERE parent_id = ?1 AND deleted_at IS NULL
+            ORDER BY sort_order ASC, created_at ASC, id ASC
+            ",
+        )?;
+        let rows = stmt
+            .query_map(params![parent_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    } else {
+        let mut stmt = connection.prepare(
+            "
+            SELECT id FROM frames
+            WHERE parent_id IS NULL AND deleted_at IS NULL
+            ORDER BY sort_order ASC, created_at ASC, id ASC
+            ",
+        )?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    if let Some(excluded_id) = excluded_id {
+        ids.retain(|id| id != excluded_id);
+    }
+    Ok(ids)
+}
+
+fn rewrite_sibling_order(
+    connection: &Connection,
+    sibling_ids: &[String],
+    updated_at: &str,
+) -> CoreResult<()> {
+    for (position, id) in sibling_ids.iter().enumerate() {
+        let sort_order = i64::try_from(position)
+            .map_err(|_| CoreError::InvalidInput("Frame position is too large".to_string()))?;
+        connection.execute(
+            "UPDATE frames SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            params![sort_order, updated_at, id],
+        )?;
+    }
+    Ok(())
+}
+
 fn frame_by_system_status(connection: &Connection, is_system: bool) -> CoreResult<Option<Frame>> {
     Ok(connection
         .query_row(
@@ -402,6 +556,41 @@ fn frame_by_id_in_conn(
     Ok(connection
         .query_row(sql, params![id], map_frame)
         .optional()?)
+}
+
+pub(crate) fn hard_delete_trashed_frames_in_conn(
+    connection: &Connection,
+) -> CoreResult<(u64, u64)> {
+    let roots = {
+        let mut stmt = connection.prepare(
+            "
+            SELECT frame.id
+            FROM frames AS frame
+            WHERE frame.deleted_at IS NOT NULL
+              AND frame.is_system = 0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM frames AS parent
+                WHERE parent.id = frame.parent_id
+                  AND parent.deleted_at IS NOT NULL
+              )
+            ORDER BY frame.deleted_at ASC, frame.id ASC
+            ",
+        )?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let mut frames = 0_u64;
+    let mut assets = 0_u64;
+    for frame_id in roots {
+        let (removed_frames, removed_assets) = hard_delete_frame_in_conn(connection, &frame_id)?;
+        frames = frames.saturating_add(removed_frames);
+        assets = assets.saturating_add(removed_assets);
+    }
+    Ok((frames, assets))
 }
 
 fn hard_delete_frame_in_conn(connection: &Connection, frame_id: &str) -> CoreResult<(u64, u64)> {
@@ -445,6 +634,31 @@ fn hard_delete_frame_in_conn(connection: &Connection, frame_id: &str) -> CoreRes
         rows
     };
 
+    let legacy_fragments = {
+        let mut stmt = connection.prepare(
+            "
+            WITH RECURSIVE frame_tree(id) AS (
+              SELECT id FROM frames WHERE id = ?1
+              UNION ALL
+              SELECT frames.id FROM frames
+              INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
+            )
+            SELECT id FROM fragments
+            WHERE frame_id IN (SELECT id FROM frame_tree) AND asset_id IS NULL
+            ",
+        )?;
+        let ids = stmt
+            .query_map(params![frame_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut fragments = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(fragment) = fragment_by_id_in_conn(connection, &id, true)? {
+                fragments.push(fragment);
+            }
+        }
+        fragments
+    };
+
     connection.execute(
         "
         WITH RECURSIVE frame_tree(id) AS (
@@ -476,6 +690,9 @@ fn hard_delete_frame_in_conn(connection: &Connection, frame_id: &str) -> CoreRes
             removed_assets = removed_assets.saturating_add(1);
         }
     }
+    for fragment in &legacy_fragments {
+        enqueue_fragment_cleanup(connection, fragment)?;
+    }
     Ok((usize_to_u64(frame_ids.len()), removed_assets))
 }
 
@@ -487,7 +704,7 @@ mod tests {
     use rusqlite::params;
     use tempfile::tempdir;
 
-    use crate::FragmentCore;
+    use crate::{CoreError, FragmentCore};
 
     fn sample_png_bytes() -> Vec<u8> {
         let image = ImageBuffer::from_fn(20, 20, |x, y| {
@@ -522,6 +739,110 @@ mod tests {
             .expect("create");
         let frames = core.list_frames().expect("frames");
         assert!(frames.iter().any(|item| item.id == frame.id));
+    }
+
+    #[test]
+    fn nested_frames_append_to_their_sibling_order() {
+        let temp = tempdir().expect("tempdir");
+        let core = FragmentCore::new_at(temp.path().to_path_buf()).expect("core");
+        let parent = core
+            .create_frame(None, "Parent".to_string())
+            .expect("create parent");
+        let first = core
+            .create_frame(Some(parent.id.clone()), "First".to_string())
+            .expect("create first child");
+        let second = core
+            .create_frame(Some(parent.id.clone()), "Second".to_string())
+            .expect("create second child");
+
+        assert_eq!(parent.sort_order, 1, "Inbox keeps the first root position");
+        assert_eq!(first.parent_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(first.sort_order, 0);
+        assert_eq!(second.sort_order, 1);
+        assert_eq!(
+            core.list_child_frames(Some(parent.id))
+                .expect("children")
+                .into_iter()
+                .map(|frame| frame.name)
+                .collect::<Vec<_>>(),
+            vec!["First", "Second"]
+        );
+    }
+
+    #[test]
+    fn move_frame_reparents_and_reorders_safely() {
+        let temp = tempdir().expect("tempdir");
+        let core = FragmentCore::new_at(temp.path().to_path_buf()).expect("core");
+        let parent = core
+            .create_frame(None, "Parent".to_string())
+            .expect("create parent");
+        let sibling = core
+            .create_frame(None, "Sibling".to_string())
+            .expect("create sibling");
+        let child = core
+            .create_frame(Some(parent.id.clone()), "Child".to_string())
+            .expect("create child");
+
+        let moved = core
+            .move_frame(sibling.id.clone(), Some(parent.id.clone()), 0)
+            .expect("move into parent");
+        assert_eq!(moved.parent_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(
+            core.list_child_frames(Some(parent.id.clone()))
+                .expect("children")
+                .into_iter()
+                .map(|frame| frame.id)
+                .collect::<Vec<_>>(),
+            vec![sibling.id.clone(), child.id.clone()]
+        );
+
+        let moved = core
+            .move_frame(child.id.clone(), None, 1)
+            .expect("move to Vault root");
+        assert_eq!(moved.parent_id, None);
+        let roots = core.list_child_frames(None).expect("roots");
+        assert_eq!(roots[0].name, "Inbox");
+        assert_eq!(roots[1].id, child.id);
+        assert_eq!(roots[2].id, parent.id);
+        assert_eq!(
+            roots
+                .iter()
+                .map(|frame| frame.sort_order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn move_frame_rejects_cycles_self_parenting_and_inbox_moves() {
+        let temp = tempdir().expect("tempdir");
+        let core = FragmentCore::new_at(temp.path().to_path_buf()).expect("core");
+        let inbox = core.ensure_default_frame().expect("inbox");
+        let parent = core
+            .create_frame(None, "Parent".to_string())
+            .expect("create parent");
+        let child = core
+            .create_frame(Some(parent.id.clone()), "Child".to_string())
+            .expect("create child");
+
+        let cycle = core
+            .move_frame(parent.id.clone(), Some(child.id), 0)
+            .expect_err("cycle must be rejected");
+        assert!(matches!(cycle, CoreError::InvalidInput(message) if message.contains("Sub-frame")));
+
+        let self_parent = core
+            .move_frame(parent.id.clone(), Some(parent.id.clone()), 0)
+            .expect_err("self-parenting must be rejected");
+        assert!(
+            matches!(self_parent, CoreError::InvalidInput(message) if message.contains("itself"))
+        );
+
+        let inbox_move = core
+            .move_frame(inbox.id, Some(parent.id), 0)
+            .expect_err("Inbox must stay at the Vault root");
+        assert!(
+            matches!(inbox_move, CoreError::InvalidInput(message) if message.contains("protected Frame"))
+        );
     }
 
     #[test]

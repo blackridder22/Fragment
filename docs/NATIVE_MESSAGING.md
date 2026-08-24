@@ -20,7 +20,12 @@ UTF-8 JSON payload
 
 ```ts
 type NativeRequest =
-  | { type: "ping"; requestId: string }
+  | {
+      type: "ping";
+      requestId: string;
+      protocolVersion?: number;
+      minimumProtocolVersion?: number;
+    }
   | { type: "frames.list"; requestId: string }
   | CaptureFragmentRequest;
 ```
@@ -39,6 +44,9 @@ type NativeResponse =
       ok: true;
       app: "Fragment";
       version: string;
+      protocolVersion: number;
+      minimumProtocolVersion: number;
+      compatible: boolean;
     }
   | { type: "frames.list.result"; requestId: string; ok: true; frames: Frame[] }
   | CaptureFragmentResponse
@@ -57,14 +65,18 @@ action.
 ## Version compatibility
 
 - The root, npm workspaces, Cargo packages, Tauri app, and extension manifests
-  use application version `0.0.3` while this release is in development.
+  use the current synchronized application version (`0.0.7` for this release).
 - `extensionVersion` reports the sender build.
 - `pong.version` reports the native host build.
-- Neither field is currently a protocol version.
-- Explicit protocol negotiation and one-version backward compatibility remain
-  v0.0.3 release work; any added field must be optional for the previous client.
+- Neither application-version field is the native protocol version.
+- The current protocol is version `2` and its minimum compatible version is
+  `1`. Ping requests and responses exchange `protocolVersion` and
+  `minimumProtocolVersion`; the handshake succeeds only when the client and
+  host ranges overlap.
+- Protocol fields remain optional on incoming messages so a current host can
+  answer a version-1 client and a current extension can evaluate a legacy pong.
 
-## Development manifest
+## Chrome manifest setup
 
 ```json
 {
@@ -76,14 +88,26 @@ action.
 }
 ```
 
-Install for local development:
+On macOS, Fragment Desktop makes a best-effort setup attempt at app startup. It
+creates or repairs Chrome's manifest so `path` points to the bundled host at
+`Fragment.app/Contents/Resources/fragment-host` and `allowed_origins` contains
+the packaged extension origin. A setup failure is logged and does not prevent
+the app from launching; Settings can report the current native-host state.
+
+The Settings status is a live readiness check, not a manifest-presence label.
+Fragment verifies the exact manifest origin and bundled host path, confirms the
+host is executable, launches it, and completes a bounded ping handshake. Ready
+requires matching Fragment application versions and an overlapping native
+protocol range.
+
+Use the script as a manual repair or local-development fallback:
 
 ```bash
 scripts/install-native-host-macos.sh <chrome-extension-id>
 ```
 
 Without an explicit host path, the installer checks the host bundled in
-`Fragment.app` first, then release and debug workspace binaries. Production
+`Fragment.app` first, then release and debug workspace binaries. Packaged
 builds bundle `fragment-host` at
 `Fragment.app/Contents/Resources/fragment-host` so the manifest does not depend
 on a repository path.
@@ -94,10 +118,10 @@ The development manifest is written to:
 ~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.autoscale.fragment.json
 ```
 
-This script points at a local build and is not a production installer. The
-v0.0.3 distribution target is a signed host bundled at a stable path inside
-`Fragment.app`, with an install/repair action that changes the Chrome manifest
-only after the bundled host answers `ping`.
+The script is a manual fallback, not the normal packaged-app setup path. The
+v0.0.7 local beta target keeps the host bundled at a stable path inside
+`Fragment.app`; startup setup or manual repair must never point Chrome at a
+temporary or user-selected executable.
 
 ## Debugging
 

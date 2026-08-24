@@ -215,4 +215,51 @@ describe("persistent native port manager", () => {
     expect(manager.connectionState().protocolVersion).toBe(1);
     manager.dispose();
   });
+
+  it("accepts null optional fields from a successful capture response", async () => {
+    const port = new FakePort();
+    const manager = new NativePortManager({
+      connectNative: () => port,
+      requestTimeoutMs: 1_000,
+      maxReconnectAttempts: 0,
+    });
+    const request = manager.request({
+      type: "capture.fragment",
+      requestId: "capture-nullable-response",
+      frameId: "inbox",
+      frameIds: ["inbox"],
+      candidate: {
+        id: "candidate-1",
+        src: "https://example.com/reference.png",
+        pageUrl: "https://example.com/gallery",
+        width: 640,
+        height: 480,
+        rect: { x: 0, y: 0, width: 640, height: 480 },
+        source: "generic",
+      },
+      requestedAt: "2026-08-23T00:00:00.000Z",
+      extensionVersion: "0.0.7",
+    });
+    port.completeHandshake(2);
+    port.onMessage.emit({
+      type: "capture.fragment.result",
+      requestId: "capture-nullable-response",
+      ok: true,
+      fragmentId: "fragment-1",
+      fragmentIds: ["fragment-1"],
+      duplicateOfFragmentId: null,
+      duplicateOfFragmentIds: null,
+      thumbnailPath: "thumbnails/fragment-1.png",
+      error: null,
+    });
+
+    await expect(request).resolves.toMatchObject({
+      type: "capture.fragment.result",
+      requestId: "capture-nullable-response",
+      ok: true,
+      fragmentId: "fragment-1",
+    });
+    expect(manager.connectionState().status).toBe("connected");
+    manager.dispose();
+  });
 });
