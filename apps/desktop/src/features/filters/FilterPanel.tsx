@@ -75,13 +75,13 @@ export function FilterPanel({
   }
 
   return (
-    <aside className="filter-panel" aria-label="Filter Fragments">
+    <aside className="filter-panel" aria-label="Filter Frames">
       <header>
         <div>
           <span className="filter-panel-kicker">
             <SlidersHorizontal aria-hidden="true" size={14} /> Retrieval
           </span>
-          <h2>Filter Fragments</h2>
+          <h2>Filter Frames</h2>
         </div>
         <button
           aria-label="Close filters"
@@ -149,7 +149,8 @@ export function FilterPanel({
                 value={draft.sourceKind ?? "all"}
                 onChange={(event) =>
                   patch({
-                    sourceKind: event.target.value as FragmentFilter["sourceKind"],
+                    sourceKind: event.target
+                      .value as FragmentFilter["sourceKind"],
                   })
                 }
               >
@@ -162,7 +163,9 @@ export function FilterPanel({
               <span>Domain</span>
               <input
                 value={draft.sourceDomain ?? ""}
-                onChange={(event) => patch({ sourceDomain: event.target.value })}
+                onChange={(event) =>
+                  patch({ sourceDomain: event.target.value })
+                }
                 placeholder="are.na"
               />
             </label>
@@ -172,14 +175,18 @@ export function FilterPanel({
               <span>Site contains</span>
               <input
                 value={draft.siteContains ?? ""}
-                onChange={(event) => patch({ siteContains: event.target.value })}
+                onChange={(event) =>
+                  patch({ siteContains: event.target.value })
+                }
               />
             </label>
             <label>
               <span>Creator contains</span>
               <input
                 value={draft.creatorContains ?? ""}
-                onChange={(event) => patch({ creatorContains: event.target.value })}
+                onChange={(event) =>
+                  patch({ creatorContains: event.target.value })
+                }
               />
             </label>
           </div>
@@ -205,7 +212,8 @@ export function FilterPanel({
               value={draft.orientation ?? "all"}
               onChange={(event) =>
                 patch({
-                  orientation: event.target.value as FragmentFilter["orientation"],
+                  orientation: event.target
+                    .value as FragmentFilter["orientation"],
                 })
               }
             >
@@ -216,19 +224,23 @@ export function FilterPanel({
             </select>
           </label>
           <div className="filter-grid-four">
-            {([
-              ["Min W", "minWidth"],
-              ["Max W", "maxWidth"],
-              ["Min H", "minHeight"],
-              ["Max H", "maxHeight"],
-            ] as const).map(([label, key]) => (
+            {(
+              [
+                ["Min W", "minWidth"],
+                ["Max W", "maxWidth"],
+                ["Min H", "minHeight"],
+                ["Max H", "maxHeight"],
+              ] as const
+            ).map(([label, key]) => (
               <label key={key}>
                 <span>{label}</span>
                 <input
                   min="0"
                   type="number"
                   value={draft[key] ?? ""}
-                  onChange={(event) => patch({ [key]: numberValue(event.target.value) })}
+                  onChange={(event) =>
+                    patch({ [key]: numberValue(event.target.value) })
+                  }
                 />
               </label>
             ))}
@@ -277,7 +289,9 @@ export function FilterPanel({
               <input
                 type="date"
                 value={draft.capturedAfter?.slice(0, 10) ?? ""}
-                onChange={(event) => patch({ capturedAfter: event.target.value })}
+                onChange={(event) =>
+                  patch({ capturedAfter: event.target.value })
+                }
               />
             </label>
             <label>
@@ -285,7 +299,9 @@ export function FilterPanel({
               <input
                 type="date"
                 value={draft.capturedBefore?.slice(0, 10) ?? ""}
-                onChange={(event) => patch({ capturedBefore: event.target.value })}
+                onChange={(event) =>
+                  patch({ capturedBefore: event.target.value })
+                }
               />
             </label>
           </div>
@@ -331,12 +347,12 @@ export function FilterPanel({
           </span>
           <div>
             <input
-              aria-label="Smart Frame name"
+              aria-label="Smart Fragment name"
               onChange={(event) => setSmartName(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") void saveSmartFrame();
               }}
-              placeholder="Smart Frame name"
+              placeholder="Smart Fragment name"
               value={smartName}
             />
             <button
@@ -348,7 +364,7 @@ export function FilterPanel({
               {smartFrameName ? "Update" : "Save"}
             </button>
           </div>
-          <small>Dynamic results; no Fragment files are duplicated.</small>
+          <small>Dynamic results; no Frame files are duplicated.</small>
         </section>
       </div>
 
@@ -368,7 +384,8 @@ export function FilterPanel({
           onClick={() => onApply(normalizeFragmentFilter(draft))}
           type="button"
         >
-          Apply {activeFilterCount(draft) > 0 ? `(${activeFilterCount(draft)})` : ""}
+          Apply{" "}
+          {activeFilterCount(draft) > 0 ? `(${activeFilterCount(draft)})` : ""}
         </button>
       </footer>
     </aside>

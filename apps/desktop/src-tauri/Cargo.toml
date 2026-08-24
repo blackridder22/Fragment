@@ -1,6 +1,6 @@
 [package]
 name = "fragment-desktop"
-version = "0.0.6"
+version = "0.0.7"
 edition.workspace = true
 license.workspace = true
 
@@ -17,6 +17,7 @@ base64.workspace = true
 fragment-core = { path = "../../../crates/fragment-core" }
 image.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 thiserror.workspace = true
@@ -25,4 +26,4 @@ tracing-subscriber.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+tempfile.workspace = true

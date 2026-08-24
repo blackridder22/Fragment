@@ -22,7 +22,7 @@ export function FrameBreadcrumbs({
     : [];
   return (
     <div className="frame-breadcrumb-bar">
-      <nav aria-label="Frame path" className="frame-breadcrumbs">
+      <nav aria-label="Fragment path" className="frame-breadcrumbs">
         <button onClick={() => onSelectFrame(null)} type="button">
           Vault
         </button>
@@ -45,7 +45,7 @@ export function FrameBreadcrumbs({
             type="checkbox"
           />
           <Layers3 aria-hidden="true" size={14} />
-          <span>Include Sub-frame Fragments</span>
+          <span>Include Frames from nested Fragments</span>
         </label>
       ) : null}
     </div>

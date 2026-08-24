@@ -18,6 +18,10 @@ export function CreateFrameModal({
 }: CreateFrameModalProps) {
   const [name, setName] = useState(initialName);
   const [busy, setBusy] = useState(false);
+  const description =
+    actionLabel === "Save"
+      ? "Update the name used throughout your Vault."
+      : "Create a folder for related Frames.";
 
   useEffect(() => setName(initialName), [initialName]);
 
@@ -36,30 +40,41 @@ export function CreateFrameModal({
   }
 
   return (
-    <Modal className="frame-name-modal" title={title} onClose={onCancel}>
-      <form className="frame-form" onSubmit={submit}>
-        <div className="frame-form-copy">
-          <p>
-            Frames keep related Fragments together. Keep the name short enough
-            to scan in the Vault.
-          </p>
+    <Modal
+      className="frame-name-modal v7-frame-name-modal"
+      title={title}
+      onClose={onCancel}
+    >
+      <form
+        aria-busy={busy}
+        className="frame-form v7-frame-name-form"
+        onSubmit={submit}
+      >
+        <div className="frame-form-copy v7-frame-name-copy">
+          <p>{description}</p>
         </div>
-        <label>
-          Name
+        <label className="v7-frame-name-field">
+          <span>Name</span>
           <input
             autoFocus
+            className="v7-frame-name-input"
+            data-modal-preferred-focus="true"
             maxLength={48}
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Mood references"
           />
         </label>
-        <div className="form-actions">
-          <button className="button" onClick={onCancel} type="button">
+        <div className="form-actions v7-frame-name-actions">
+          <button
+            className="button v7-frame-dialog-button"
+            onClick={onCancel}
+            type="button"
+          >
             Cancel
           </button>
           <button
-            className="button primary"
+            className="button primary v7-frame-dialog-button v7-frame-dialog-primary"
             disabled={busy || !name.trim()}
             type="submit"
           >

@@ -3,13 +3,13 @@ import type { Fragment, Frame } from "@fragment/shared";
 const now = new Date().toISOString();
 
 export const demoFrames: Frame[] = [
-  frame("demo-frame-inbox", "Inbox", null, 0),
-  frame("demo-frame-ui", "UI", null, 1),
+  frame("demo-frame-inbox", "Launch references", null, 0),
+  frame("demo-frame-ui", "Homes & spaces", null, 1),
   frame("demo-frame-motion", "Motion", "demo-frame-ui", 0),
   frame("demo-frame-posters", "Posters", "demo-frame-ui", 1),
-  frame("demo-frame-interiors", "Interiors", null, 2),
+  frame("demo-frame-interiors", "Type & layout", null, 2),
   frame("demo-frame-texture", "Texture", "demo-frame-interiors", 0),
-  frame("demo-frame-backgrounds", "Backgrounds", null, 3),
+  frame("demo-frame-backgrounds", "Packaging", null, 3),
 ];
 
 export const demoFragments: Fragment[] = [

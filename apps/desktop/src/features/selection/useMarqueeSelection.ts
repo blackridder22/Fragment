@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import {
+  edgeScrollStep,
+  intersectingCardIds,
+  marqueeRectFromPoints,
+  selectionAfterEmptyCanvasClick,
+  type MarqueeRect,
+} from "./marquee-geometry";
 
-export type MarqueeRect = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
+export type { MarqueeRect } from "./marquee-geometry";
 
 type UseMarqueeSelectionOptions = {
   matchingIds: readonly string[];
@@ -18,11 +20,14 @@ type MarqueePress = {
   pointerId: number;
   startX: number;
   startY: number;
+  startClientX: number;
+  startClientY: number;
   clientX: number;
   clientY: number;
   dragging: boolean;
   additive: boolean;
   baseIds: string[];
+  startingIds: string[];
   container: HTMLElement;
   lastSignature: string;
 };
@@ -51,7 +56,7 @@ export function useMarqueeSelection({
     cancelFrame();
     pressRef.current = null;
     setRect(null);
-    delete document.body.dataset.dragActive;
+    delete document.body.dataset.marqueeActive;
   }, [cancelFrame]);
 
   useEffect(() => clearInteractionState, [clearInteractionState]);
@@ -63,27 +68,36 @@ export function useMarqueeSelection({
       return;
     }
 
-    const distanceFromTop = press.clientY;
-    const distanceFromBottom = window.innerHeight - press.clientY;
-    let scrollStep = 0;
-    if (distanceFromTop < EDGE_ZONE) {
-      scrollStep =
-        -MAX_SCROLL_STEP * (1 - Math.max(0, distanceFromTop) / EDGE_ZONE);
-    } else if (distanceFromBottom < EDGE_ZONE) {
-      scrollStep =
-        MAX_SCROLL_STEP * (1 - Math.max(0, distanceFromBottom) / EDGE_ZONE);
-    }
+    const containerBounds = press.container.getBoundingClientRect();
+    const scrollStep = edgeScrollStep(
+      press.clientY,
+      containerBounds.top,
+      containerBounds.bottom,
+      EDGE_ZONE,
+      MAX_SCROLL_STEP,
+    );
+    const previousScrollTop = press.container.scrollTop;
     if (scrollStep !== 0) {
-      window.scrollBy({ top: scrollStep, behavior: "auto" });
+      press.container.scrollBy({ top: scrollStep, behavior: "auto" });
     }
+    const didScroll = press.container.scrollTop !== previousScrollTop;
 
-    const currentX = press.clientX + window.scrollX;
-    const currentY = press.clientY + window.scrollY;
+    const currentX =
+      press.clientX - containerBounds.left + press.container.scrollLeft;
+    const currentY =
+      press.clientY - containerBounds.top + press.container.scrollTop;
+    const contentRect = marqueeRectFromPoints(
+      press.startX,
+      press.startY,
+      currentX,
+      currentY,
+    );
     const nextRect = {
-      left: Math.min(press.startX, currentX),
-      top: Math.min(press.startY, currentY),
-      width: Math.abs(currentX - press.startX),
-      height: Math.abs(currentY - press.startY),
+      left:
+        containerBounds.left + contentRect.left - press.container.scrollLeft,
+      top: containerBounds.top + contentRect.top - press.container.scrollTop,
+      width: contentRect.width,
+      height: contentRect.height,
     };
     setRect(nextRect);
 
@@ -97,10 +111,10 @@ export function useMarqueeSelection({
         const bounds = element.getBoundingClientRect();
         return {
           id: element.dataset.fragmentId ?? "",
-          left: bounds.left + window.scrollX,
-          right: bounds.right + window.scrollX,
-          top: bounds.top + window.scrollY,
-          bottom: bounds.bottom + window.scrollY,
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom,
         };
       })
       .filter((card) => card.id && matching.has(card.id))
@@ -113,15 +127,7 @@ export function useMarqueeSelection({
         ...matchingIds,
       ]),
     );
-    const hits = cards
-      .filter(
-        (card) =>
-          card.right >= nextRect.left &&
-          card.left <= nextRect.left + nextRect.width &&
-          card.bottom >= nextRect.top &&
-          card.top <= nextRect.top + nextRect.height,
-      )
-      .map((card) => card.id);
+    const hits = intersectingCardIds(nextRect, cards);
     const nextIds = press.additive
       ? Array.from(new Set([...press.baseIds, ...hits]))
       : hits;
@@ -131,7 +137,7 @@ export function useMarqueeSelection({
       onReplace(nextIds, selectionOrder);
     }
 
-    if (scrollStep !== 0 && pressRef.current?.dragging) {
+    if (didScroll && pressRef.current?.dragging) {
       frameRef.current = window.requestAnimationFrame(updateSelection);
     }
   }, [matchingIds, onReplace]);
@@ -149,21 +155,27 @@ export function useMarqueeSelection({
         !event.isPrimary ||
         !(event.target instanceof Element) ||
         event.target.closest(
-          "[data-fragment-id], [data-frame-drag-id], button, input, textarea, select, a, [contenteditable='true'], [data-drop-target]",
+          "[data-fragment-id], [data-frame-drag-id], [data-canvas-control], button, input, textarea, select, a, [contenteditable='true'], [data-drop-target]",
         )
       ) {
         return false;
       }
       const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      const containerBounds = event.currentTarget.getBoundingClientRect();
       pressRef.current = {
         pointerId: event.pointerId,
-        startX: event.clientX + window.scrollX,
-        startY: event.clientY + window.scrollY,
+        startX:
+          event.clientX - containerBounds.left + event.currentTarget.scrollLeft,
+        startY:
+          event.clientY - containerBounds.top + event.currentTarget.scrollTop,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
         clientX: event.clientX,
         clientY: event.clientY,
         dragging: false,
         additive,
         baseIds: additive ? [...selectedIds] : [],
+        startingIds: [...selectedIds],
         container: event.currentTarget,
         lastSignature: additive ? selectedIds.join("\u0000") : "",
       };
@@ -178,15 +190,15 @@ export function useMarqueeSelection({
         if (
           !press.dragging &&
           Math.hypot(
-            moveEvent.clientX + window.scrollX - press.startX,
-            moveEvent.clientY + window.scrollY - press.startY,
+            moveEvent.clientX - press.startClientX,
+            moveEvent.clientY - press.startClientY,
           ) < MARQUEE_THRESHOLD
         ) {
           return;
         }
         if (!press.dragging) {
           press.dragging = true;
-          document.body.dataset.dragActive = "true";
+          document.body.dataset.marqueeActive = "true";
         }
         moveEvent.preventDefault();
         scheduleUpdate();
@@ -209,7 +221,10 @@ export function useMarqueeSelection({
           upEvent.preventDefault();
           updateSelection();
         } else {
-          onReplace([], [...matchingIds]);
+          onReplace(
+            selectionAfterEmptyCanvasClick(press.startingIds, press.additive),
+            [...matchingIds],
+          );
         }
         clearInteractionState();
       };
@@ -217,7 +232,7 @@ export function useMarqueeSelection({
       const restoreBaseAndCancel = () => {
         const press = pressRef.current;
         if (press?.dragging) {
-          onReplace(press.baseIds, [...matchingIds]);
+          onReplace(press.startingIds, [...matchingIds]);
         }
         removeListeners();
         clearInteractionState();

@@ -28,7 +28,7 @@ export type FrameNavigatorPreferences = {
 
 export const DEFAULT_FRAME_NAVIGATOR_PREFERENCES: FrameNavigatorPreferences = {
   collapsed: false,
-  width: 272,
+  width: 240,
   expandedIds: [],
   pinnedIds: [],
   includeDescendants: false,

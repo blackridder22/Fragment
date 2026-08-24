@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "fragment-core"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "directories",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "fragment-desktop"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -949,6 +949,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
@@ -957,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "fragment-host"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "chrono",

@@ -2,7 +2,10 @@ import { useEffect, useState, type MouseEvent } from "react";
 import type { Fragment } from "@fragment/shared";
 import { Check, ImageOff, Maximize2 } from "lucide-react";
 import type { AssetSource } from "../lib/assets";
-import { formatLabel, sourceDomain } from "../features/fragments/fragment-metadata";
+import {
+  formatLabel,
+  sourceDomain,
+} from "../features/fragments/fragment-metadata";
 
 type FragmentCardProps = {
   fragment: Fragment;
@@ -67,7 +70,7 @@ export function FragmentCard({
       onContextMenu={onContextMenu}
     >
       <button
-        aria-label={`${selected ? "Selected" : "Select"} ${fragment.title ?? "Fragment"}`}
+        aria-label={`${selected ? "Selected" : "Select"} ${fragment.title ?? "Frame"}`}
         aria-pressed={selected}
         className="fragment-image-button"
         data-fragment-id={fragment.id}
@@ -85,11 +88,11 @@ export function FragmentCard({
         {imageFailed ? (
           <span className="fragment-image-fallback" style={{ aspectRatio }}>
             <ImageOff size={22} />
-            <strong>{fragment.title ?? "Fragment"}</strong>
+            <strong>{fragment.title ?? "Frame"}</strong>
           </span>
         ) : (
           <img
-            alt={fragment.title ?? "Saved Fragment"}
+            alt={fragment.title ?? "Saved Frame"}
             decoding="async"
             draggable={false}
             loading="lazy"
@@ -109,7 +112,7 @@ export function FragmentCard({
         </span>
       </button>
       <div className="fragment-card-meta">
-        <strong>{fragment.title ?? "Untitled Fragment"}</strong>
+        <strong>{fragment.title ?? "Untitled Frame"}</strong>
         <span>
           {formatLabel(fragment.mimeType, fragment.originalPath)}
           {fragment.width && fragment.height

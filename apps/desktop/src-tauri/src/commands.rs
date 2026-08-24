@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -11,9 +12,10 @@ use fragment_core::{
     CoreError, Fragment, FragmentFilter, Frame, ImportOutcome, PurgeReport, SmartFrame,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, AppHandle, Manager, State};
 use url::Url;
 
+use crate::native_host::{native_host_status as read_native_host_status, NativeHostStatus};
 use crate::state::FragmentState;
 
 type CommandResult<T> = Result<T, String>;
@@ -422,6 +424,14 @@ pub async fn purge_expired_trash(state: State<'_, FragmentState>) -> CommandResu
 }
 
 #[tauri::command]
+pub async fn empty_trash(state: State<'_, FragmentState>) -> CommandResult<PurgeReport> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || core.empty_trash().map_err(safe_error))
+        .await
+        .map_err(safe_error)?
+}
+
+#[tauri::command]
 pub fn list_all_fragments(state: State<'_, FragmentState>) -> CommandResult<Vec<Fragment>> {
     state.core.list_all_fragments().map_err(safe_error)
 }
@@ -461,6 +471,21 @@ pub async fn add_existing_fragment_to_frame(
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
         core.add_existing_fragment_to_frame(existing_fragment_id, frame_id)
+            .map_err(safe_error)
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+#[tauri::command]
+pub async fn move_fragment_to_frame(
+    state: State<'_, FragmentState>,
+    id: String,
+    frame_id: String,
+) -> CommandResult<Fragment> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.move_fragment_to_frame(id, frame_id)
             .map_err(safe_error)
     })
     .await
@@ -795,12 +820,8 @@ pub async fn delete_fragments(
     }
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let ids = ids.into_iter().collect::<BTreeSet<_>>();
-        for id in &ids {
-            core.delete_fragment_with_policy(id.clone(), retention_days)
-                .map_err(safe_error)?;
-        }
-        Ok(ids.len())
+        core.delete_fragments_with_policy(&ids, retention_days)
+            .map_err(safe_error)
     })
     .await
     .map_err(safe_error)?
@@ -817,15 +838,9 @@ pub async fn restore_fragments(
         ));
     }
     let core = state.core.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let ids = ids.into_iter().collect::<BTreeSet<_>>();
-        for id in &ids {
-            core.restore_fragment(id.clone()).map_err(safe_error)?;
-        }
-        Ok(ids.len())
-    })
-    .await
-    .map_err(safe_error)?
+    tauri::async_runtime::spawn_blocking(move || core.restore_fragments(&ids).map_err(safe_error))
+        .await
+        .map_err(safe_error)?
 }
 
 #[tauri::command]
@@ -837,26 +852,45 @@ pub fn reveal_fragment_in_finder(state: State<'_, FragmentState>, id: String) ->
         .resolve_relative_path(&fragment.original_path)
         .map_err(safe_error)?;
 
+    open_in_file_manager(&path, true)
+}
+
+#[tauri::command]
+pub fn reveal_vault_in_finder(state: State<'_, FragmentState>) -> CommandResult<()> {
+    open_in_file_manager(state.core.paths().root(), false)
+}
+
+fn file_manager_arguments(path: &Path, reveal_item: bool) -> Vec<OsString> {
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .status()
-            .map_err(safe_error)?;
-        Ok(())
+        let mut args = Vec::with_capacity(if reveal_item { 2 } else { 1 });
+        if reveal_item {
+            args.push(OsString::from("-R"));
+        }
+        args.push(path.as_os_str().to_owned());
+        args
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        if let Some(parent) = path.parent() {
-            Command::new("open")
-                .arg(parent)
-                .status()
-                .map_err(safe_error)?;
-        }
-        Ok(())
+        let target = if reveal_item {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        vec![target.as_os_str().to_owned()]
     }
+}
+
+fn open_in_file_manager(path: &Path, reveal_item: bool) -> CommandResult<()> {
+    let status = Command::new("open")
+        .args(file_manager_arguments(path, reveal_item))
+        .status()
+        .map_err(safe_error)?;
+    if !status.success() {
+        return Err(format!("could not open Finder (exit status {status})"));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -912,6 +946,33 @@ fn decode_clipboard_image(bytes: &[u8]) -> CommandResult<ImageData<'static>> {
 #[tauri::command]
 pub fn asset_root(state: State<'_, FragmentState>) -> CommandResult<String> {
     Ok(state.core.paths().root().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn native_host_status(app: AppHandle) -> NativeHostStatus {
+    let resource_dir = match app.path().resource_dir() {
+        Ok(resource_dir) => resource_dir,
+        Err(error) => {
+            return NativeHostStatus {
+                ready: false,
+                label: "Setup required".to_string(),
+                description: Some(format!(
+                    "Fragment could not locate its bundled native host: {error}"
+                )),
+            };
+        }
+    };
+    match tauri::async_runtime::spawn_blocking(move || read_native_host_status(&resource_dir)).await
+    {
+        Ok(status) => status,
+        Err(error) => NativeHostStatus {
+            ready: false,
+            label: "Setup required".to_string(),
+            description: Some(format!(
+                "Native host verification could not finish: {error}"
+            )),
+        },
+    }
 }
 
 #[tauri::command]
@@ -1039,6 +1100,31 @@ mod tests {
         assert_eq!(page_size(None), DEFAULT_FRAGMENT_PAGE_SIZE);
         assert_eq!(page_size(Some(0)), 1);
         assert_eq!(page_size(Some(500)), MAX_FRAGMENT_PAGE_SIZE);
+    }
+
+    #[test]
+    fn finder_arguments_distinguish_revealing_an_item_from_opening_the_vault() {
+        let path = Path::new("/tmp/Fragment Vault/original.png");
+        let reveal = file_manager_arguments(path, true);
+        let open = file_manager_arguments(path, false);
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                reveal,
+                vec![OsString::from("-R"), OsString::from(path.as_os_str())]
+            );
+            assert_eq!(open, vec![OsString::from(path.as_os_str())]);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                reveal,
+                vec![OsString::from(path.parent().unwrap().as_os_str())]
+            );
+            assert_eq!(open, vec![OsString::from(path.as_os_str())]);
+        }
     }
 
     #[test]

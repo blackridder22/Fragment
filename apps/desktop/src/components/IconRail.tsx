@@ -1,19 +1,10 @@
-import {
-  Aperture,
-  Images,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Settings,
-  Trash2,
-} from "lucide-react";
+import { Aperture, Images, Settings, Trash2 } from "lucide-react";
 
 export type RailView = "home" | "frames" | "trash" | "settings";
 
 type IconRailProps = {
   activeView: RailView;
-  collapsed?: boolean;
   dropTarget?: string | null;
-  onNavigatorToggle?: () => void;
   onViewChange: (view: RailView) => void;
   trashDropState?: "idle" | "armed" | "success";
 };
@@ -23,7 +14,7 @@ const items: Array<{
   label: string;
   icon: typeof Aperture;
 }> = [
-  { id: "home", label: "Vault", icon: Aperture },
+  { id: "home", label: "Your Vault", icon: Aperture },
   { id: "frames", label: "Frames", icon: Images },
   { id: "trash", label: "Trash", icon: Trash2 },
   { id: "settings", label: "Settings", icon: Settings },
@@ -31,26 +22,12 @@ const items: Array<{
 
 export function IconRail({
   activeView,
-  collapsed = true,
   dropTarget = null,
-  onNavigatorToggle,
   onViewChange,
   trashDropState = "idle",
 }: IconRailProps) {
   return (
     <nav className="icon-rail" aria-label="Primary">
-      <div className="sidebar-brand">
-        <img
-          className="rail-mark"
-          src="/Fragment.png"
-          alt=""
-          aria-hidden="true"
-        />
-        <div>
-          <strong>Fragment</strong>
-          <span>Auto Scale Agency</span>
-        </div>
-      </div>
       <div className="rail-items">
         {items.map((item) => {
           const Icon = item.icon;
@@ -102,28 +79,6 @@ export function IconRail({
             </button>
           );
         })}
-      </div>
-
-      <div className="sidebar-footer">
-        {onNavigatorToggle ? (
-          <button
-            aria-label={
-              collapsed ? "Open Frame tree" : "Close Frame tree"
-            }
-            className="rail-button rail-navigator-toggle"
-            data-no-frame-drag="true"
-            onClick={onNavigatorToggle}
-            title={collapsed ? "Open Frame tree" : "Close Frame tree"}
-            type="button"
-          >
-            {collapsed ? (
-              <PanelLeftOpen aria-hidden="true" size={19} strokeWidth={1.9} />
-            ) : (
-              <PanelLeftClose aria-hidden="true" size={19} strokeWidth={1.9} />
-            )}
-            <span>{collapsed ? "Open Frame tree" : "Close Frame tree"}</span>
-          </button>
-        ) : null}
       </div>
     </nav>
   );

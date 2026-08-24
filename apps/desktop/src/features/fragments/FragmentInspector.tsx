@@ -10,12 +10,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { Fragment, Frame } from "@fragment/shared";
 import type { AssetSource } from "../../lib/assets";
 import { formatBytes, formatDate } from "../../lib/format";
@@ -103,11 +98,7 @@ export function FragmentInspector({
     if (event.key === "Enter" || event.key === ",") {
       event.preventDefault();
       addTag();
-    } else if (
-      event.key === "Backspace" &&
-      !tagInput &&
-      draftTags.length > 0
-    ) {
+    } else if (event.key === "Backspace" && !tagInput && draftTags.length > 0) {
       setDraftTags((current) => current.slice(0, -1));
     }
   }
@@ -158,11 +149,11 @@ export function FragmentInspector({
   }
 
   return (
-    <aside className="fragment-inspector" aria-label="Fragment inspector">
+    <aside className="fragment-inspector" aria-label="Frame inspector">
       <header className="fragment-inspector-header">
         <div>
           <span>Selection</span>
-          <strong>Fragment</strong>
+          <strong>Frame</strong>
         </div>
         <button
           aria-label="Close inspector"
@@ -178,17 +169,17 @@ export function FragmentInspector({
       <button
         className="fragment-inspector-preview"
         onClick={onOpenPreview}
-        title="Open Fragment Preview"
+        title="Open Frame Preview"
         type="button"
       >
         {previewFailed ? (
           <span className="fragment-image-fallback">
             <ImageOff aria-hidden="true" size={22} />
-            <strong>{fragment.title ?? "Fragment"}</strong>
+            <strong>{fragment.title ?? "Frame"}</strong>
           </span>
         ) : (
           <img
-            alt={fragment.title ?? "Selected Fragment"}
+            alt={fragment.title ?? "Selected Frame"}
             onError={handlePreviewError}
             src={previewUrl}
           />
@@ -212,7 +203,7 @@ export function FragmentInspector({
             <span>Notes</span>
             <textarea
               onChange={(event) => setNote(event.target.value)}
-              placeholder="Add context that makes this Fragment useful later"
+              placeholder="Add context that makes this Frame useful later"
               rows={4}
               value={note}
             />
@@ -366,11 +357,11 @@ export function FragmentInspector({
 
           <div className="inspector-add-frame">
             <select
-              aria-label="Destination Frame"
+              aria-label="Destination Fragment"
               onChange={(event) => setDestinationFrameId(event.target.value)}
               value={destinationFrameId}
             >
-              <option value="">Add to Frame…</option>
+              <option value="">Add to Fragment…</option>
               {availableFrames.map((frame) => (
                 <option key={frame.id} value={frame.id}>
                   {frame.name}
@@ -378,11 +369,11 @@ export function FragmentInspector({
               ))}
             </select>
             <button
-              aria-label="Add to selected Frame"
+              aria-label="Add to selected Fragment"
               className="icon-button compact-icon"
               disabled={!destinationFrameId || !onAddToFrame || busy}
               onClick={() =>
-                void runAction("Adding to Frame", async () => {
+                void runAction("Adding to Fragment", async () => {
                   if (!onAddToFrame) return;
                   await onAddToFrame(destinationFrameId);
                   setDestinationFrameId("");

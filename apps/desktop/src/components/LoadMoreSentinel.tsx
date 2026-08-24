@@ -14,7 +14,7 @@ export function LoadMoreSentinel({
   loading,
   loadedCount,
   totalCount,
-  noun = "Fragments",
+  noun = "Frames",
   onLoadMore,
 }: LoadMoreSentinelProps) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);

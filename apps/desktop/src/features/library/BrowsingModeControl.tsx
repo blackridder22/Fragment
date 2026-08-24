@@ -24,7 +24,7 @@ export function BrowsingModeControl({
 }: BrowsingModeControlProps) {
   return (
     <div className="browsing-mode-control" aria-label="Browsing mode">
-      <div role="group" aria-label="Fragment layout">
+      <div role="group" aria-label="Frame layout">
         {LAYOUTS.map(([value, Icon, label]) => (
           <button
             aria-label={`${label} layout`}
@@ -42,7 +42,7 @@ export function BrowsingModeControl({
       <label>
         <span>Size</span>
         <input
-          aria-label="Fragment size"
+          aria-label="Frame size"
           max="2"
           min="0"
           onChange={(event) =>
@@ -54,9 +54,7 @@ export function BrowsingModeControl({
           }
           step="1"
           type="range"
-          value={
-            density === "compact" ? 0 : density === "comfortable" ? 1 : 2
-          }
+          value={density === "compact" ? 0 : density === "comfortable" ? 1 : 2}
         />
       </label>
       <kbd>Space · Quick Preview</kbd>

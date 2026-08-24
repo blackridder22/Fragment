@@ -36,15 +36,19 @@ export function FragmentQuickPreview({
   }
 
   return (
-    <div className="quick-preview-backdrop" onMouseDown={onClose} role="presentation">
+    <div
+      className="quick-preview-backdrop"
+      onMouseDown={onClose}
+      role="presentation"
+    >
       <section
-        aria-label={`Quick Preview: ${fragment.title ?? "Fragment"}`}
+        aria-label={`Quick Preview: ${fragment.title ?? "Frame"}`}
         className="quick-preview"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
           <div>
-            <strong>{fragment.title ?? "Untitled Fragment"}</strong>
+            <strong>{fragment.title ?? "Untitled Frame"}</strong>
             <span>
               {formatLabel(fragment.mimeType, fragment.originalPath)}
               {fragment.width && fragment.height
@@ -61,10 +65,13 @@ export function FragmentQuickPreview({
         </header>
         <div className="quick-preview-image">
           {failed ? (
-            <span><ImageOff aria-hidden="true" size={28} />Preview unavailable</span>
+            <span>
+              <ImageOff aria-hidden="true" size={28} />
+              Preview unavailable
+            </span>
           ) : (
             <img
-              alt={fragment.title ?? "Fragment preview"}
+              alt={fragment.title ?? "Frame preview"}
               onError={() => void handleError()}
               src={source?.url ?? ""}
             />

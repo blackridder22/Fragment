@@ -16,7 +16,11 @@ export function FrameChipBar({
   onSelect,
 }: FrameChipBarProps) {
   return (
-    <div className="frame-chip-bar" aria-label="Frame filters" role="toolbar">
+    <div
+      className="frame-chip-bar"
+      aria-label="Fragment filters"
+      role="toolbar"
+    >
       <button
         aria-pressed={selectedFrameId === null}
         className="frame-chip"

@@ -44,22 +44,25 @@ function controller() {
 
   const intersectionObserver =
     typeof IntersectionObserver === "function"
-      ? new IntersectionObserver((entries) => {
-          for (const entry of entries) {
-            const candidateId = entry.target.getAttribute(
-              "data-fragment-candidate-observed",
-            );
-            if (!candidateId) {
-              continue;
+      ? new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              const candidateId = entry.target.getAttribute(
+                "data-fragment-candidate-observed",
+              );
+              if (!candidateId) {
+                continue;
+              }
+              if (entry.isIntersecting) {
+                visibleCandidateIds.add(candidateId);
+              } else {
+                visibleCandidateIds.delete(candidateId);
+              }
             }
-            if (entry.isIntersecting) {
-              visibleCandidateIds.add(candidateId);
-            } else {
-              visibleCandidateIds.delete(candidateId);
-            }
-          }
-          scheduleLayoutRefresh();
-        }, { rootMargin: "160px" })
+            scheduleLayoutRefresh();
+          },
+          { rootMargin: "160px" },
+        )
       : undefined;
 
   const mutationObserver = new MutationObserver((records) => {
@@ -75,9 +78,11 @@ function controller() {
       }
       for (const node of record.addedNodes) {
         if (node instanceof Element) {
-          queueRoot(node.tagName === "SOURCE" && node.parentElement
-            ? node.parentElement
-            : node);
+          queueRoot(
+            node.tagName === "SOURCE" && node.parentElement
+              ? node.parentElement
+              : node,
+          );
         } else if (node instanceof DocumentFragment) {
           queueRoot(node);
         }
@@ -148,7 +153,9 @@ function controller() {
     for (const root of roots) {
       const previousIds = candidateIdsWithin(root);
       const discovered = findImageCandidates(root);
-      const discoveredIds = new Set(discovered.map((candidate) => candidate.id));
+      const discoveredIds = new Set(
+        discovered.map((candidate) => candidate.id),
+      );
       for (const candidateId of previousIds) {
         if (!discoveredIds.has(candidateId)) {
           removeCandidate(candidateId);
@@ -204,7 +211,10 @@ function controller() {
       if (!element) {
         continue;
       }
-      if (root === element || (root instanceof Node && root.contains(element))) {
+      if (
+        root === element ||
+        (root instanceof Node && root.contains(element))
+      ) {
         ids.push(candidateId);
       }
     }
@@ -324,13 +334,3 @@ chrome.runtime.onMessage.addListener((message: { type?: string }) => {
     controller().disable();
   }
 });
-
-function enableWhenReady() {
-  controller().enable();
-}
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", enableWhenReady, { once: true });
-} else {
-  enableWhenReady();
-}

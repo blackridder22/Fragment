@@ -1,60 +1,206 @@
 :root {
   color-scheme: dark;
-  --bg: #080a0a;
-  --bg-soft: #111413;
-  --surface: rgba(26, 29, 27, 0.74);
-  --surface-strong: rgba(32, 36, 33, 0.94);
-  --surface-hover: rgba(44, 50, 46, 0.9);
-  --line: rgba(255, 255, 255, 0.105);
-  --line-strong: rgba(255, 255, 255, 0.18);
-  --text: #f4f7f2;
-  --muted: #b3bab0;
-  --subtle: #7f887f;
-  --accent: #79e1a2;
-  --accent-strong: #b3ffc9;
-  --accent-ink: #061b11;
-  --warm: #f77754;
-  --danger: #f27b72;
-  --shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
-  --glass-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -1px 0 rgba(0, 0, 0, 0.36),
-    0 18px 46px rgba(0, 0, 0, 0.36);
-  --pressed-shadow:
-    inset 0 3px 11px rgba(0, 0, 0, 0.58),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+
+  /* Paper primitives are immutable. Theme roles below choose the active set. */
+  --paper-dark-canvas: #080a0a;
+  --paper-dark-canvas-soft: #111413;
+  --paper-dark-surface: rgb(26 29 27 / 74%);
+  --paper-dark-surface-strong: rgb(32 36 33 / 94%);
+  --paper-dark-surface-hover: rgb(44 50 46 / 90%);
+  --paper-dark-border: rgb(255 255 255 / 10.5%);
+  --paper-dark-border-strong: rgb(255 255 255 / 18%);
+  --paper-dark-text: #f4f7f2;
+  --paper-dark-text-muted: #b3bab0;
+  --paper-dark-text-faint: #7f887f;
+  --paper-dark-shadow: rgb(0 0 0 / 38%);
+  --paper-dark-focus: #89f7ff;
+  --paper-dark-primary: #79e1a2;
+  --paper-dark-primary-strong: #b3ffc9;
+  --paper-dark-on-primary: #061b11;
+  --paper-dark-warning: #f77754;
+  --paper-dark-danger: #f27b72;
+
+  --paper-light-canvas: #f4f7f2;
+  --paper-light-canvas-soft: #e9efea;
+  --paper-light-surface: #ffffff;
+  --paper-light-surface-strong: #f0f3ef;
+  --paper-light-surface-hover: #e2e8e3;
+  --paper-light-border: rgb(8 10 10 / 12%);
+  --paper-light-border-strong: rgb(8 10 10 / 20%);
+  --paper-light-text: #080a0a;
+  --paper-light-text-muted: #4c5650;
+  --paper-light-text-faint: #66716a;
+  --paper-light-shadow: rgb(8 10 10 / 18%);
+  --paper-light-focus: #167682;
+  --paper-light-primary: #79e1a2;
+  --paper-light-on-primary: #061b11;
+  --paper-light-danger: #b34e47;
+
+  /* Resolved semantic roles. Components consume these, never the raw sets. */
+  --theme-canvas: var(--paper-dark-canvas);
+  --theme-canvas-soft: var(--paper-dark-canvas-soft);
+  --theme-surface: var(--paper-dark-surface);
+  --theme-surface-strong: var(--paper-dark-surface-strong);
+  --theme-surface-hover: var(--paper-dark-surface-hover);
+  --theme-popover-surface: var(--paper-dark-surface-strong);
+  --theme-border: var(--paper-dark-border);
+  --theme-border-strong: var(--paper-dark-border-strong);
+  --theme-text: var(--paper-dark-text);
+  --theme-text-muted: var(--paper-dark-text-muted);
+  --theme-text-faint: var(--paper-dark-text-faint);
+  --theme-shadow-color: var(--paper-dark-shadow);
+  --theme-focus: var(--paper-dark-focus);
+  --theme-focus-strong: var(--paper-dark-focus);
+  --theme-on-focus: var(--paper-dark-on-primary);
+  --theme-primary: var(--paper-dark-primary);
+  --theme-primary-strong: var(--paper-dark-primary-strong);
+  --theme-on-primary: var(--paper-dark-on-primary);
+  --theme-success: var(--paper-dark-primary);
+  --theme-warning: var(--paper-dark-warning);
+  --theme-danger: var(--paper-dark-danger);
+  --theme-shadow: 0 22px 70px var(--theme-shadow-color);
+  --theme-glass-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 12%), inset 0 -1px 0 rgb(0 0 0 / 36%),
+    0 18px 46px rgb(0 0 0 / 36%);
+  --theme-pressed-shadow:
+    inset 0 3px 11px rgb(0 0 0 / 58%), inset 0 1px 0 rgb(255 255 255 / 8%);
+
+  /* Paper-compatible color aliases. */
+  --color-canvas: var(--theme-canvas);
+  --color-canvas-soft: var(--theme-canvas-soft);
+  --color-surface: var(--theme-surface);
+  --color-surface-strong: var(--theme-surface-strong);
+  --color-surface-hover: var(--theme-surface-hover);
+  --color-border: var(--theme-border);
+  --color-border-strong: var(--theme-border-strong);
+  --color-text: var(--theme-text);
+  --color-text-muted: var(--theme-text-muted);
+  --color-text-faint: var(--theme-text-faint);
+  --color-shadow: var(--theme-shadow-color);
+  --color-focus: var(--theme-focus);
+  --color-focus-strong: var(--theme-focus-strong);
+  --color-on-focus: var(--theme-on-focus);
+  --color-primary: var(--theme-primary);
+  --color-primary-strong: var(--theme-primary-strong);
+  --color-on-primary: var(--theme-on-primary);
+  --color-success: var(--theme-success);
+  --color-warning: var(--theme-warning);
+  --color-danger: var(--theme-danger);
+
+  /* Legacy aliases remain stable while the v7 UI migrates to semantic roles. */
+  --canvas: var(--theme-canvas);
+  --canvas-soft: var(--theme-canvas-soft);
+  --bg: var(--theme-canvas);
+  --bg-soft: var(--theme-canvas-soft);
+  --surface: var(--theme-surface);
+  --surface-strong: var(--theme-surface-strong);
+  --surface-hover: var(--theme-surface-hover);
+  --line: var(--theme-border);
+  --line-strong: var(--theme-border-strong);
+  --border: var(--theme-border);
+  --border-strong: var(--theme-border-strong);
+  --text: var(--theme-text);
+  --muted: var(--theme-text-muted);
+  --subtle: var(--theme-text-faint);
+  --text-faint: var(--theme-text-faint);
+  --accent: var(--theme-primary);
+  --accent-strong: var(--theme-primary-strong);
+  --accent-ink: var(--theme-on-primary);
+  --primary: var(--theme-primary);
+  --primary-strong: var(--theme-primary-strong);
+  --on-primary: var(--theme-on-primary);
+  --warm: var(--theme-warning);
+  --danger: var(--theme-danger);
+  --focus: var(--theme-focus);
+  --success: var(--theme-success);
+  --warning: var(--theme-warning);
+  --neon: var(--theme-focus);
+  --shadow: var(--theme-shadow);
+  --glass-shadow: var(--theme-glass-shadow);
+  --pressed-shadow: var(--theme-pressed-shadow);
+
+  --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 14px;
   --radius-lg: 22px;
-  --font:
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+  --text-11: 11px;
+  --text-13: 13px;
+  --text-15: 15px;
+  --text-18: 18px;
+  --text-22: 22px;
+  --text-28: 28px;
+  --text-34: 34px;
+  --line-16: 16px;
+  --line-20: 20px;
+  --line-24: 24px;
+  --line-28: 28px;
+  --line-34: 34px;
+  --line-40: 40px;
+  --window-bar-height: 48px;
+  --page-bar-height: 68px;
+  --sidebar-width: 240px;
+  --inspector-width: 320px;
+  --control-height: 32px;
+  --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
     "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --font-display:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --font: var(--font-sans);
   --font-accent: "Caveat", "Brush Script MT", cursive;
-  --neon: #89f7ff;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #eef0ed;
-  --bg-soft: rgba(255, 255, 255, 0.58);
-  --surface: rgba(255, 255, 255, 0.42);
-  --surface-strong: rgba(255, 255, 255, 0.72);
-  --surface-hover: rgba(255, 255, 255, 0.86);
-  --line: rgba(18, 24, 22, 0.1);
-  --line-strong: rgba(18, 24, 22, 0.18);
-  --text: #171918;
-  --muted: #606862;
-  --subtle: #68716a;
-  --accent: #2edfe8;
-  --accent-strong: #0a6870;
-  --accent-ink: #031819;
-  --warm: #ff8066;
-  --danger: #d8463e;
-  --shadow: 0 22px 70px rgba(62, 68, 62, 0.18);
-  --glass-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.82),
-    inset 0 -1px 0 rgba(18, 24, 22, 0.08), 0 20px 54px rgba(65, 73, 69, 0.18);
-  --pressed-shadow:
-    inset 0 4px 14px rgba(80, 88, 82, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.68);
-  --neon: #60e7ff;
+  --theme-canvas: var(--paper-light-canvas);
+  --theme-canvas-soft: var(--paper-light-canvas-soft);
+  --theme-surface: var(--paper-light-surface);
+  --theme-surface-strong: var(--paper-light-surface-strong);
+  --theme-surface-hover: var(--paper-light-surface-hover);
+  --theme-popover-surface: var(--paper-light-surface);
+  --theme-border: var(--paper-light-border);
+  --theme-border-strong: var(--paper-light-border-strong);
+  --theme-text: var(--paper-light-text);
+  --theme-text-muted: var(--paper-light-text-muted);
+  --theme-text-faint: var(--paper-light-text-faint);
+  --theme-shadow-color: var(--paper-light-shadow);
+  --theme-focus: var(--paper-light-focus);
+  --theme-focus-strong: var(--paper-light-focus);
+  --theme-on-focus: var(--paper-light-on-primary);
+  --theme-primary: var(--paper-light-primary);
+  --theme-primary-strong: var(--paper-light-primary);
+  --theme-on-primary: var(--paper-light-on-primary);
+  --theme-success: var(--paper-light-primary);
+  --theme-danger: var(--paper-light-danger);
+  --theme-shadow: 0 22px 70px var(--theme-shadow-color);
+  --theme-glass-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 82%), inset 0 -1px 0 var(--theme-border),
+    0 20px 54px var(--theme-shadow-color);
+  --theme-pressed-shadow:
+    inset 0 4px 14px rgb(8 10 10 / 14%), inset 0 1px 0 rgb(255 255 255 / 68%);
+}
+
+html[data-reduce-motion="true"] {
+  scroll-behavior: auto;
+}
+
+html[data-reduce-motion="true"] *,
+html[data-reduce-motion="true"] *::before,
+html[data-reduce-motion="true"] *::after {
+  animation-delay: 0ms !important;
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 1ms !important;
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,10 +11,30 @@ use uuid::Uuid;
 
 use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
+use crate::frames::hard_delete_trashed_frames_in_conn;
 use crate::hashing::sha256_hex;
 use crate::models::{FileCleanupReport, Fragment, FragmentFilter, PurgeReport};
 use crate::storage::{extension_for_format, mime_for_format, safe_existing_file, write_atomic};
 use crate::thumbnails::{decode_image, dimensions, generate_preview, generate_thumbnail};
+
+const MAX_FRAGMENT_TITLE_CHARS: usize = 120;
+
+fn normalize_fragment_title(title: Option<&str>) -> Option<String> {
+    let normalized = title?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if normalized.chars().count() <= MAX_FRAGMENT_TITLE_CHARS {
+        return Some(normalized);
+    }
+
+    let prefix = normalized
+        .chars()
+        .take(MAX_FRAGMENT_TITLE_CHARS - 1)
+        .collect::<String>();
+    Some(format!("{prefix}…"))
+}
 
 pub(crate) struct NewFragmentAsset {
     pub(crate) bytes: Vec<u8>,
@@ -388,6 +408,7 @@ fn filtered_order(sort_mode: Option<&str>, trashed: bool) -> CoreResult<&'static
             Ok("COALESCE(assets.file_size, fragments.file_size, 0) DESC, fragments.id DESC")
         }
         "deleted" if trashed => Ok("fragments.deleted_at DESC, fragments.id DESC"),
+        "deleted-oldest" if trashed => Ok("fragments.deleted_at ASC, fragments.id ASC"),
         value => Err(CoreError::InvalidInput(format!(
             "Unknown Fragment sort mode: {value}"
         ))),
@@ -749,6 +770,7 @@ impl FragmentCore {
         title: Option<String>,
         note: Option<String>,
     ) -> CoreResult<Fragment> {
+        let title = normalize_fragment_title(title.as_deref());
         let now = Utc::now().to_rfc3339();
         {
             let conn = self.conn()?;
@@ -834,7 +856,8 @@ impl FragmentCore {
     }
 
     pub fn delete_fragment(&self, id: String) -> CoreResult<()> {
-        self.hard_delete_fragment(id)
+        self.delete_fragments_with_policy(std::slice::from_ref(&id), None)
+            .map(|_| ())
     }
 
     pub fn delete_fragment_with_policy(
@@ -842,71 +865,46 @@ impl FragmentCore {
         id: String,
         retention_days: Option<u32>,
     ) -> CoreResult<()> {
-        match retention_days {
-            Some(days) if days > 0 => self.trash_fragment(id, days),
-            _ => self.hard_delete_fragment(id),
+        self.delete_fragments_with_policy(std::slice::from_ref(&id), retention_days)
+            .map(|_| ())
+    }
+
+    pub fn delete_fragments_with_policy(
+        &self,
+        ids: &[String],
+        retention_days: Option<u32>,
+    ) -> CoreResult<usize> {
+        let ids = unique_fragment_ids(ids);
+        if ids.is_empty() {
+            return Ok(0);
         }
+
+        match retention_days {
+            Some(days) if days > 0 => self.trash_fragments(&ids, days)?,
+            _ => self.hard_delete_fragments(&ids)?,
+        }
+        Ok(ids.len())
     }
 
     pub fn restore_fragment(&self, id: String) -> CoreResult<Fragment> {
+        self.restore_fragments(std::slice::from_ref(&id))?;
+        self.get_fragment(id)
+    }
+
+    pub fn restore_fragments(&self, ids: &[String]) -> CoreResult<usize> {
+        let ids = unique_fragment_ids(ids);
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (frame_id, asset_id, deleted_at) = tx
-            .query_row(
-                "SELECT frame_id, asset_id, deleted_at FROM fragments WHERE id = ?1",
-                params![&id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )
-            .optional()?
-            .ok_or_else(|| CoreError::NotFound("Fragment".to_string()))?;
-
-        let frame_is_active: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM frames WHERE id = ?1 AND deleted_at IS NULL)",
-            params![&frame_id],
-            |row| row.get(0),
-        )?;
-        if !frame_is_active {
-            return Err(CoreError::InvalidInput(
-                "restore the containing Frame before restoring this Fragment".to_string(),
-            ));
-        }
-
-        if deleted_at.is_some() {
-            if let Some(asset_id) = asset_id.as_deref() {
-                let conflict = tx
-                    .query_row(
-                        "
-                        SELECT id FROM fragments
-                        WHERE frame_id = ?1 AND asset_id = ?2 AND id <> ?3
-                        LIMIT 1
-                        ",
-                        params![&frame_id, asset_id, &id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?;
-                if let Some(existing_fragment_id) = conflict {
-                    return Err(CoreError::RestoreConflict {
-                        fragment_id: id,
-                        existing_fragment_id,
-                    });
-                }
-            }
-
-            let now = Utc::now().to_rfc3339();
-            tx.execute(
-                "UPDATE fragments SET deleted_at = NULL, delete_after = NULL, updated_at = ?1 WHERE id = ?2",
-                params![now, &id],
-            )?;
+        let now = Utc::now().to_rfc3339();
+        for id in &ids {
+            restore_fragment_in_conn(&tx, id, &now)?;
         }
         tx.commit()?;
-        drop(conn);
-        self.get_fragment(id)
+        Ok(ids.len())
     }
 
     pub fn delete_fragment_everywhere(&self, id: String) -> CoreResult<()> {
@@ -975,36 +973,61 @@ impl FragmentCore {
         Ok(())
     }
 
-    fn trash_fragment(&self, id: String, retention_days: u32) -> CoreResult<()> {
+    fn trash_fragments(&self, ids: &[&str], retention_days: u32) -> CoreResult<()> {
         let now = Utc::now();
         let deleted_at = now.to_rfc3339();
         let delete_after = (now + Duration::days(i64::from(retention_days))).to_rfc3339();
-        let conn = self.conn()?;
-        let changed = conn.execute(
-            "UPDATE fragments SET deleted_at = ?1, delete_after = ?2, updated_at = ?1 WHERE id = ?3 AND deleted_at IS NULL",
-            params![deleted_at, delete_after, id],
-        )?;
-        if changed == 0 {
-            return Err(CoreError::NotFound("Fragment".to_string()));
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for id in ids {
+            let changed = tx.execute(
+                "UPDATE fragments SET deleted_at = ?1, delete_after = ?2, updated_at = ?1 WHERE id = ?3 AND deleted_at IS NULL",
+                params![&deleted_at, &delete_after, id],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::NotFound("Active Fragment".to_string()));
+            }
         }
+        tx.commit()?;
         Ok(())
     }
 
-    fn hard_delete_fragment(&self, id: String) -> CoreResult<()> {
+    fn hard_delete_fragments(&self, ids: &[&str]) -> CoreResult<()> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let fragment = fragment_by_id_in_conn(&tx, &id, true)?
-            .ok_or_else(|| CoreError::NotFound("Fragment".to_string()))?;
-        tx.execute("DELETE FROM fragments WHERE id = ?1", params![&id])?;
-        if let Some(asset_id) = fragment.asset_id.as_deref() {
-            enqueue_orphan_asset_cleanup(&tx, asset_id)?;
-        } else {
-            enqueue_fragment_cleanup(&tx, &fragment)?;
-        }
+        hard_delete_fragments_in_conn(&tx, ids)?;
         tx.commit()?;
         drop(conn);
         self.retry_cleanup_best_effort();
         Ok(())
+    }
+
+    /// Permanently removes every item currently in Trash in one database transaction.
+    ///
+    /// Asset files are recorded in the durable cleanup queue as part of the same
+    /// transaction, then removed after the transaction commits. Failed filesystem
+    /// removals remain queued for a later retry.
+    pub fn empty_trash(&self) -> CoreResult<PurgeReport> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (fragments, fragment_assets) = hard_delete_trashed_fragments_in_conn(&tx)?;
+        let (frames, frame_assets) = hard_delete_trashed_frames_in_conn(&tx)?;
+        tx.commit()?;
+        drop(conn);
+
+        let cleanup = match self.retry_pending_file_cleanup() {
+            Ok(report) => report,
+            Err(error) => {
+                tracing::warn!(%error, "Fragment file cleanup was deferred after emptying Trash");
+                FileCleanupReport::default()
+            }
+        };
+        Ok(PurgeReport {
+            fragments,
+            frames,
+            assets: fragment_assets.saturating_add(frame_assets),
+            cleanup,
+        })
     }
 
     pub fn purge_expired_trash(&self) -> CoreResult<PurgeReport> {
@@ -1077,40 +1100,23 @@ impl FragmentCore {
         let now = Utc::now().to_rfc3339();
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let expired = {
+        let expired_ids = {
             let mut stmt = tx.prepare(
                 "
-                SELECT id, asset_id
+                SELECT id
                 FROM fragments
                 WHERE deleted_at IS NOT NULL AND delete_after IS NOT NULL AND delete_after <= ?1
                 ",
             )?;
             let rows = stmt
-                .query_map(params![&now], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-                })?
+                .query_map(params![&now], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
-
-        let mut removed_assets = 0_u64;
-        for (fragment_id, asset_id) in &expired {
-            let legacy_fragment = if asset_id.is_none() {
-                fragment_by_id_in_conn(&tx, fragment_id, true)?
-            } else {
-                None
-            };
-            tx.execute("DELETE FROM fragments WHERE id = ?1", params![fragment_id])?;
-            if let Some(asset_id) = asset_id.as_deref() {
-                if enqueue_orphan_asset_cleanup(&tx, asset_id)? {
-                    removed_assets = removed_assets.saturating_add(1);
-                }
-            } else if let Some(fragment) = legacy_fragment.as_ref() {
-                enqueue_fragment_cleanup(&tx, fragment)?;
-            }
-        }
+        let expired_ids = expired_ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let result = hard_delete_fragments_in_conn(&tx, &expired_ids)?;
         tx.commit()?;
-        Ok((usize_to_u64(expired.len()), removed_assets))
+        Ok(result)
     }
 
     pub fn import_image(
@@ -1394,6 +1400,57 @@ impl FragmentCore {
         Ok(fragment)
     }
 
+    /// Moves an active Fragment membership to another active Frame.
+    ///
+    /// The membership row is updated in place so its ID, asset, metadata, and tags are preserved.
+    pub fn move_fragment_to_frame(&self, id: String, frame_id: String) -> CoreResult<Fragment> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut fragment = fragment_by_id_in_conn(&tx, &id, false)?
+            .ok_or_else(|| CoreError::NotFound("Active Fragment".to_string()))?;
+        let target_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM frames WHERE id = ?1 AND deleted_at IS NULL)",
+            params![&frame_id],
+            |row| row.get(0),
+        )?;
+        if !target_exists {
+            return Err(CoreError::NotFound("Frame".to_string()));
+        }
+
+        if fragment.frame_id == frame_id {
+            tx.commit()?;
+            return Ok(fragment);
+        }
+
+        if let Some(asset_id) = fragment.asset_id.as_deref() {
+            if let Some((fragment_id, trashed)) =
+                membership_by_asset_in_conn(&tx, &frame_id, asset_id)?
+            {
+                return Err(CoreError::DuplicateMembership {
+                    frame_id,
+                    fragment_id,
+                    trashed,
+                });
+            }
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let changed = tx.execute(
+            "UPDATE fragments
+             SET frame_id = ?1, updated_at = ?2
+             WHERE id = ?3 AND deleted_at IS NULL",
+            params![&frame_id, &now, &id],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound("Active Fragment".to_string()));
+        }
+
+        tx.commit()?;
+        fragment.frame_id = frame_id;
+        fragment.updated_at = now;
+        Ok(fragment)
+    }
+
     fn resolve_frame_id(&self, frame_id: Option<String>) -> CoreResult<String> {
         let frame_id = match frame_id {
             Some(id) if !id.trim().is_empty() => id,
@@ -1530,7 +1587,7 @@ fn fragment_from_asset(
         id: Uuid::new_v4().to_string(),
         asset_id: Some(stored_asset.id.clone()),
         frame_id: frame_id.to_string(),
-        title: asset.title.clone(),
+        title: normalize_fragment_title(asset.title.as_deref()),
         description: None,
         note: asset.note.clone(),
         source_url: asset.source_url.clone(),
@@ -1685,7 +1742,7 @@ fn map_membership_insert_error(
     }
 }
 
-fn fragment_by_id_in_conn(
+pub(crate) fn fragment_by_id_in_conn(
     connection: &Connection,
     id: &str,
     include_deleted: bool,
@@ -1698,6 +1755,105 @@ fn fragment_by_id_in_conn(
     Ok(connection
         .query_row(&sql, params![id], map_fragment)
         .optional()?)
+}
+
+fn hard_delete_trashed_fragments_in_conn(connection: &Connection) -> CoreResult<(u64, u64)> {
+    let ids = {
+        let mut stmt =
+            connection.prepare("SELECT id FROM fragments WHERE deleted_at IS NOT NULL")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+    hard_delete_fragments_in_conn(connection, &ids)
+}
+
+fn hard_delete_fragments_in_conn(connection: &Connection, ids: &[&str]) -> CoreResult<(u64, u64)> {
+    let mut removed_assets = 0_u64;
+    for id in ids {
+        let fragment = fragment_by_id_in_conn(connection, id, true)?
+            .ok_or_else(|| CoreError::NotFound("Fragment".to_string()))?;
+        connection.execute("DELETE FROM fragments WHERE id = ?1", params![id])?;
+        if let Some(asset_id) = fragment.asset_id.as_deref() {
+            if enqueue_orphan_asset_cleanup(connection, asset_id)? {
+                removed_assets = removed_assets.saturating_add(1);
+            }
+        } else {
+            enqueue_fragment_cleanup(connection, &fragment)?;
+        }
+    }
+    Ok((usize_to_u64(ids.len()), removed_assets))
+}
+
+fn unique_fragment_ids(ids: &[String]) -> Vec<&str> {
+    let mut seen = HashSet::with_capacity(ids.len());
+    let mut unique = Vec::with_capacity(ids.len());
+    for id in ids {
+        if seen.insert(id.as_str()) {
+            unique.push(id.as_str());
+        }
+    }
+    unique
+}
+
+fn restore_fragment_in_conn(connection: &Connection, id: &str, updated_at: &str) -> CoreResult<()> {
+    let (frame_id, asset_id, deleted_at) = connection
+        .query_row(
+            "SELECT frame_id, asset_id, deleted_at FROM fragments WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::NotFound("Fragment".to_string()))?;
+
+    let frame_is_active: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM frames WHERE id = ?1 AND deleted_at IS NULL)",
+        params![&frame_id],
+        |row| row.get(0),
+    )?;
+    if !frame_is_active {
+        return Err(CoreError::InvalidInput(
+            "restore the containing Frame before restoring this Fragment".to_string(),
+        ));
+    }
+
+    if deleted_at.is_none() {
+        return Ok(());
+    }
+
+    if let Some(asset_id) = asset_id.as_deref() {
+        let conflict = connection
+            .query_row(
+                "
+                SELECT id FROM fragments
+                WHERE frame_id = ?1 AND asset_id = ?2 AND id <> ?3
+                LIMIT 1
+                ",
+                params![&frame_id, asset_id, id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(existing_fragment_id) = conflict {
+            return Err(CoreError::RestoreConflict {
+                fragment_id: id.to_string(),
+                existing_fragment_id,
+            });
+        }
+    }
+
+    connection.execute(
+        "UPDATE fragments SET deleted_at = NULL, delete_after = NULL, updated_at = ?1 WHERE id = ?2",
+        params![updated_at, id],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn enqueue_orphan_asset_cleanup(
@@ -1724,7 +1880,10 @@ fn enqueue_asset_cleanup_and_delete(connection: &Connection, asset_id: &str) -> 
     Ok(())
 }
 
-fn enqueue_fragment_cleanup(connection: &Connection, fragment: &Fragment) -> CoreResult<()> {
+pub(crate) fn enqueue_fragment_cleanup(
+    connection: &Connection,
+    fragment: &Fragment,
+) -> CoreResult<()> {
     enqueue_cleanup_paths(
         connection,
         [
@@ -1805,6 +1964,60 @@ mod tests {
 
     use crate::{CoreError, FragmentCore, FragmentFilter, ImportOutcome};
 
+    #[test]
+    fn fragment_title_policy_collapses_whitespace_and_keeps_the_exact_limit() {
+        assert_eq!(
+            super::normalize_fragment_title(Some("  Pinterest\n\tvisual   reference  ")),
+            Some("Pinterest visual reference".to_string())
+        );
+        let exact = "a".repeat(super::MAX_FRAGMENT_TITLE_CHARS);
+        assert_eq!(super::normalize_fragment_title(Some(&exact)), Some(exact));
+    }
+
+    #[test]
+    fn fragment_title_policy_truncates_unicode_safely_with_an_ellipsis() {
+        let long = "🧠".repeat(super::MAX_FRAGMENT_TITLE_CHARS + 5);
+        let normalized = super::normalize_fragment_title(Some(&long)).expect("title");
+        assert_eq!(normalized.chars().count(), super::MAX_FRAGMENT_TITLE_CHARS);
+        assert!(normalized.ends_with('…'));
+        assert_eq!(
+            normalized
+                .chars()
+                .filter(|character| *character == '🧠')
+                .count(),
+            119
+        );
+        assert_eq!(super::normalize_fragment_title(Some(" \n\t ")), None);
+    }
+
+    #[test]
+    fn import_and_edit_apply_the_fragment_title_policy_at_storage_boundary() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+
+        let imported = core
+            .import_image(
+                None,
+                source_path.to_string_lossy().to_string(),
+                Some(format!("  {}  ", "🧠".repeat(140))),
+            )
+            .expect("import");
+        let imported_title = imported.title.expect("import title");
+        assert_eq!(imported_title.chars().count(), 120);
+        assert!(imported_title.ends_with('…'));
+
+        let updated = core
+            .update_fragment(
+                imported.id,
+                Some("  concise\n Pinterest   reference  ".to_string()),
+                None,
+            )
+            .expect("update title");
+        assert_eq!(updated.title.as_deref(), Some("concise Pinterest reference"));
+    }
+
     fn sample_png_bytes() -> Vec<u8> {
         let image = ImageBuffer::from_fn(24, 16, |x, y| {
             if (x + y) % 2 == 0 {
@@ -1818,6 +2031,79 @@ mod tests {
             .write_to(&mut cursor, ImageFormat::Png)
             .expect("encode png");
         cursor.into_inner()
+    }
+
+    #[test]
+    fn trashed_pages_support_both_deleted_date_directions() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let second_frame = core
+            .create_frame(None, "Second".to_string())
+            .expect("second frame");
+        let second = core
+            .add_existing_fragment_to_frame(first.id.clone(), Some(second_frame.id))
+            .expect("second membership");
+
+        core.delete_fragment_with_policy(first.id.clone(), Some(7))
+            .expect("trash first");
+        core.delete_fragment_with_policy(second.id.clone(), Some(7))
+            .expect("trash second");
+        let conn = core.conn().expect("conn");
+        conn.execute(
+            "UPDATE fragments SET deleted_at = ?1 WHERE id = ?2",
+            params!["2026-08-01T00:00:00Z", &first.id],
+        )
+        .expect("date first deletion");
+        conn.execute(
+            "UPDATE fragments SET deleted_at = ?1 WHERE id = ?2",
+            params!["2026-08-02T00:00:00Z", &second.id],
+        )
+        .expect("date second deletion");
+        drop(conn);
+
+        let (newest, total) = core
+            .list_fragment_page_filtered(
+                None,
+                false,
+                true,
+                FragmentFilter::default(),
+                Some("deleted".to_string()),
+                0,
+                1,
+            )
+            .expect("newest deletion page");
+        let (next_newest, _) = core
+            .list_fragment_page_filtered(
+                None,
+                false,
+                true,
+                FragmentFilter::default(),
+                Some("deleted".to_string()),
+                1,
+                1,
+            )
+            .expect("next newest deletion page");
+        let (oldest, _) = core
+            .list_fragment_page_filtered(
+                None,
+                false,
+                true,
+                FragmentFilter::default(),
+                Some("deleted-oldest".to_string()),
+                0,
+                1,
+            )
+            .expect("oldest deletion page");
+
+        assert_eq!(total, 2);
+        assert_eq!(newest[0].id, second.id);
+        assert_eq!(next_newest[0].id, first.id);
+        assert_eq!(oldest[0].id, first.id);
     }
 
     #[test]
@@ -1981,6 +2267,130 @@ mod tests {
             core.fragment_membership_count(first.id)
                 .expect("membership count"),
             2
+        );
+    }
+
+    #[test]
+    fn move_fragment_to_frame_preserves_identity_asset_metadata_and_tags() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let target = core
+            .create_frame(None, "Target".to_string())
+            .expect("target frame");
+        let original = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("import");
+        core.set_fragment_tags(
+            original.id.clone(),
+            vec!["Editorial".to_string(), "Warm".to_string()],
+        )
+        .expect("set tags");
+        let before = core
+            .get_fragment(original.id.clone())
+            .expect("fragment before move");
+
+        let moved = core
+            .move_fragment_to_frame(original.id.clone(), target.id.clone())
+            .expect("move membership");
+
+        let mut expected = before.clone();
+        expected.frame_id = target.id.clone();
+        expected.updated_at.clone_from(&moved.updated_at);
+        assert_eq!(moved, expected);
+        assert_eq!(
+            core.fragment_tags(&original.id).expect("moved tags"),
+            vec!["Editorial", "Warm"]
+        );
+        assert!(core
+            .list_fragments(before.frame_id)
+            .expect("source memberships")
+            .is_empty());
+        assert_eq!(
+            core.list_fragments(target.id)
+                .expect("target memberships")
+                .into_iter()
+                .map(|fragment| fragment.id)
+                .collect::<Vec<_>>(),
+            vec![original.id.clone()]
+        );
+        assert_eq!(
+            core.fragment_membership_count(original.id)
+                .expect("membership count"),
+            1
+        );
+    }
+
+    #[test]
+    fn move_fragment_to_frame_rolls_back_when_target_already_has_the_asset() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let target = core
+            .create_frame(None, "Target".to_string())
+            .expect("target frame");
+        let original = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("import");
+        let target_membership = core
+            .add_existing_fragment_to_frame(original.id.clone(), Some(target.id.clone()))
+            .expect("target membership");
+        let source_before = core
+            .get_fragment(original.id.clone())
+            .expect("source before move");
+        let target_before = core
+            .get_fragment(target_membership.id.clone())
+            .expect("target before move");
+        let revision_before = core.library_revision().expect("revision before move");
+
+        let error = core
+            .move_fragment_to_frame(original.id.clone(), target.id.clone())
+            .expect_err("duplicate target must reject move");
+
+        assert!(matches!(
+            error,
+            CoreError::DuplicateMembership {
+                frame_id,
+                fragment_id,
+                trashed: false,
+            } if frame_id == target.id && fragment_id == target_membership.id
+        ));
+        assert_eq!(
+            core.get_fragment(original.id).expect("source after move"),
+            source_before
+        );
+        assert_eq!(
+            core.get_fragment(target_membership.id)
+                .expect("target after move"),
+            target_before
+        );
+        assert_eq!(
+            core.library_revision().expect("revision after move"),
+            revision_before
+        );
+    }
+
+    #[test]
+    fn move_fragment_to_its_current_frame_is_a_no_op() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let original = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("import");
+        let revision_before = core.library_revision().expect("revision before move");
+
+        let unchanged = core
+            .move_fragment_to_frame(original.id.clone(), original.frame_id.clone())
+            .expect("same-frame move");
+
+        assert_eq!(unchanged, original);
+        assert_eq!(
+            core.library_revision().expect("revision after move"),
+            revision_before
         );
     }
 
@@ -2347,6 +2757,420 @@ mod tests {
         assert!(restored.delete_after.is_none());
         assert_eq!(core.list_all_fragments().expect("active").len(), 1);
         assert!(core.list_trashed_fragments().expect("trash").is_empty());
+    }
+
+    #[test]
+    fn batch_trash_and_restore_deduplicate_ids() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let frame = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let second = core
+            .add_existing_fragment_to_frame(first.id.clone(), Some(frame.id))
+            .expect("second membership");
+        let ids = vec![first.id.clone(), second.id.clone(), first.id.clone()];
+
+        let trashed = core
+            .delete_fragments_with_policy(&ids, Some(7))
+            .expect("batch trash");
+        assert_eq!(trashed, 2);
+        assert!(core.list_all_fragments().expect("active").is_empty());
+        assert_eq!(core.list_trashed_fragments().expect("trash").len(), 2);
+
+        let restored = core.restore_fragments(&ids).expect("batch restore");
+        assert_eq!(restored, 2);
+        assert_eq!(core.list_all_fragments().expect("active").len(), 2);
+        assert!(core.list_trashed_fragments().expect("trash").is_empty());
+    }
+
+    #[test]
+    fn batch_trash_rolls_back_when_a_later_id_is_missing() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let frame = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let second = core
+            .add_existing_fragment_to_frame(first.id.clone(), Some(frame.id))
+            .expect("second membership");
+
+        let error = core
+            .delete_fragments_with_policy(
+                &[first.id.clone(), second.id.clone(), "missing".to_string()],
+                Some(7),
+            )
+            .expect_err("missing id must roll back batch trash");
+
+        assert!(matches!(error, CoreError::NotFound(_)));
+        assert!(core.get_fragment(first.id).is_ok());
+        assert!(core.get_fragment(second.id).is_ok());
+        assert!(core.list_trashed_fragments().expect("trash").is_empty());
+    }
+
+    #[test]
+    fn batch_hard_delete_rolls_back_cleanup_when_a_later_id_is_missing() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let frame = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let second = core
+            .add_existing_fragment_to_frame(first.id.clone(), Some(frame.id))
+            .expect("second membership");
+        let paths = [
+            Some(first.original_path.as_str()),
+            Some(first.thumbnail_path.as_str()),
+            first.preview_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|relative_path| {
+            core.paths()
+                .resolve_relative_path(relative_path)
+                .expect("resolve")
+        })
+        .collect::<Vec<_>>();
+
+        let error = core
+            .delete_fragments_with_policy(
+                &[first.id.clone(), second.id.clone(), "missing".to_string()],
+                Some(0),
+            )
+            .expect_err("missing id must roll back hard delete");
+
+        assert!(matches!(error, CoreError::NotFound(_)));
+        assert!(core.get_fragment(first.id).is_ok());
+        assert!(core.get_fragment(second.id).is_ok());
+        for path in paths {
+            assert!(path.exists(), "{} should remain", path.display());
+        }
+        let conn = core.conn().expect("conn");
+        let pending_cleanup: i64 = conn
+            .query_row("SELECT count(*) FROM pending_file_deletions", [], |row| {
+                row.get(0)
+            })
+            .expect("pending cleanup count");
+        assert_eq!(pending_cleanup, 0);
+    }
+
+    #[test]
+    fn batch_hard_delete_cleans_assets_after_the_last_membership() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let frame = core
+            .create_frame(None, "References".to_string())
+            .expect("create frame");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let second = core
+            .add_existing_fragment_to_frame(first.id.clone(), Some(frame.id))
+            .expect("second membership");
+        let paths = [
+            Some(first.original_path.as_str()),
+            Some(first.thumbnail_path.as_str()),
+            first.preview_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|relative_path| {
+            core.paths()
+                .resolve_relative_path(relative_path)
+                .expect("resolve")
+        })
+        .collect::<Vec<_>>();
+
+        let deleted = core
+            .delete_fragments_with_policy(&[first.id.clone(), second.id, first.id], Some(0))
+            .expect("batch hard delete");
+
+        assert_eq!(deleted, 2);
+        assert!(core.list_all_fragments().expect("active").is_empty());
+        for path in paths {
+            assert!(!path.exists(), "{} should be removed", path.display());
+        }
+        let conn = core.conn().expect("conn");
+        let assets: i64 = conn
+            .query_row("SELECT count(*) FROM assets", [], |row| row.get(0))
+            .expect("asset count");
+        assert_eq!(assets, 0);
+    }
+
+    #[test]
+    fn batch_restore_rolls_back_when_a_later_fragment_conflicts() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let valid_frame = core
+            .create_frame(None, "Valid".to_string())
+            .expect("valid frame");
+        let conflict_frame = core
+            .create_frame(None, "Conflict".to_string())
+            .expect("conflict frame");
+        let original = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("original membership");
+        let valid = core
+            .add_existing_fragment_to_frame(original.id.clone(), Some(valid_frame.id))
+            .expect("valid membership");
+        let conflict = core
+            .add_existing_fragment_to_frame(original.id, Some(conflict_frame.id))
+            .expect("conflicting membership");
+        core.delete_fragments_with_policy(&[valid.id.clone(), conflict.id.clone()], Some(7))
+            .expect("trash memberships");
+        {
+            let conn = core.conn().expect("conn");
+            conn.execute_batch("DROP INDEX ux_fragments_frame_asset")
+                .expect("drop invariant for corruption fixture");
+            conn.execute(
+                "
+                INSERT INTO fragments (
+                  id, asset_id, frame_id, title, original_path, thumbnail_path, preview_path,
+                  mime_type, width, height, file_size, sha256, captured_from, captured_at,
+                  created_at, updated_at, deleted_at, delete_after
+                )
+                SELECT
+                  'active-conflict', asset_id, frame_id, 'Conflict', original_path,
+                  thumbnail_path, preview_path, mime_type, width, height, file_size, sha256,
+                  captured_from, captured_at, created_at, updated_at, NULL, NULL
+                FROM fragments WHERE id = ?1
+                ",
+                params![&conflict.id],
+            )
+            .expect("insert corrupt duplicate");
+        }
+
+        let error = core
+            .restore_fragments(&[valid.id.clone(), conflict.id.clone()])
+            .expect_err("conflict must roll back earlier restore");
+
+        assert!(matches!(error, CoreError::RestoreConflict { .. }));
+        assert!(core
+            .get_fragment_including_deleted(valid.id)
+            .expect("valid membership")
+            .deleted_at
+            .is_some());
+        assert!(core
+            .get_fragment_including_deleted(conflict.id)
+            .expect("conflicting membership")
+            .deleted_at
+            .is_some());
+    }
+
+    #[test]
+    fn empty_trash_removes_all_trashed_fragments_and_frame_trees() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let parent = core
+            .create_frame(None, "Parent".to_string())
+            .expect("parent");
+        let child = core
+            .create_frame(Some(parent.id.clone()), "Child".to_string())
+            .expect("child");
+        let standalone = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("standalone import");
+        core.add_existing_fragment_to_frame(standalone.id.clone(), Some(child.id.clone()))
+            .expect("tree membership");
+        let asset_paths = [
+            Some(standalone.original_path.as_str()),
+            Some(standalone.thumbnail_path.as_str()),
+            standalone.preview_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|relative_path| {
+            core.paths()
+                .resolve_relative_path(relative_path)
+                .expect("resolve asset path")
+        })
+        .collect::<Vec<_>>();
+
+        core.delete_fragment_with_policy(standalone.id, Some(31))
+            .expect("trash standalone fragment");
+        core.delete_frame_with_policy(parent.id.clone(), Some(31))
+            .expect("trash frame tree");
+
+        let report = core.empty_trash().expect("empty trash");
+
+        assert_eq!(report.fragments, 1);
+        assert_eq!(report.frames, 2);
+        assert_eq!(report.assets, 1);
+        assert!(core.list_trashed_fragments().expect("fragments").is_empty());
+        assert!(core.list_trashed_frames().expect("frames").is_empty());
+        assert!(core.get_frame(&parent.id).is_err());
+        for path in asset_paths {
+            assert!(!path.exists(), "{} should be removed", path.display());
+        }
+        let conn = core.conn().expect("conn");
+        let assets: i64 = conn
+            .query_row("SELECT count(*) FROM assets", [], |row| row.get(0))
+            .expect("asset count");
+        let pending_cleanup: i64 = conn
+            .query_row("SELECT count(*) FROM pending_file_deletions", [], |row| {
+                row.get(0)
+            })
+            .expect("pending cleanup count");
+        assert_eq!(assets, 0);
+        assert_eq!(pending_cleanup, 0);
+    }
+
+    #[test]
+    fn empty_trash_is_not_limited_to_the_first_fragment_page() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let first = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("first import");
+        let mut ids = vec![first.id.clone()];
+        for index in 0..64 {
+            let frame = core
+                .create_frame(None, format!("Frame {index}"))
+                .expect("create frame");
+            let membership = core
+                .add_existing_fragment_to_frame(first.id.clone(), Some(frame.id))
+                .expect("add membership");
+            ids.push(membership.id);
+        }
+        core.delete_fragments_with_policy(&ids, Some(31))
+            .expect("trash all memberships");
+
+        let report = core.empty_trash().expect("empty trash");
+
+        assert_eq!(report.fragments, 65);
+        assert_eq!(report.frames, 0);
+        assert_eq!(report.assets, 1);
+        assert!(core.list_trashed_fragments().expect("trash").is_empty());
+    }
+
+    #[test]
+    fn empty_trash_rolls_back_every_database_change_on_failure() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let frame = core
+            .create_frame(None, "Blocked".to_string())
+            .expect("frame");
+        let standalone = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("standalone import");
+        core.add_existing_fragment_to_frame(standalone.id.clone(), Some(frame.id.clone()))
+            .expect("frame membership");
+        let original_path = core
+            .paths()
+            .resolve_relative_path(&standalone.original_path)
+            .expect("original path");
+        core.delete_fragment_with_policy(standalone.id, Some(31))
+            .expect("trash fragment");
+        core.delete_frame_with_policy(frame.id, Some(31))
+            .expect("trash frame");
+        {
+            let conn = core.conn().expect("conn");
+            conn.execute_batch(
+                "
+                CREATE TRIGGER block_empty_trash
+                BEFORE DELETE ON frames
+                BEGIN
+                  SELECT RAISE(ABORT, 'blocked for rollback test');
+                END;
+                ",
+            )
+            .expect("install failure trigger");
+        }
+
+        core.empty_trash()
+            .expect_err("frame deletion must abort the full transaction");
+
+        assert_eq!(core.list_trashed_fragments().expect("fragments").len(), 1);
+        assert_eq!(core.list_trashed_frames().expect("frames").len(), 1);
+        assert!(original_path.exists());
+        let conn = core.conn().expect("conn");
+        let fragments: i64 = conn
+            .query_row("SELECT count(*) FROM fragments", [], |row| row.get(0))
+            .expect("fragment count");
+        let pending_cleanup: i64 = conn
+            .query_row("SELECT count(*) FROM pending_file_deletions", [], |row| {
+                row.get(0)
+            })
+            .expect("pending cleanup count");
+        assert_eq!(fragments, 2);
+        assert_eq!(pending_cleanup, 0);
+    }
+
+    #[test]
+    fn empty_trash_stays_successful_when_post_commit_cleanup_fails() {
+        let temp = tempdir().expect("tempdir");
+        let source_path = temp.path().join("source.png");
+        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
+        let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let fragment = core
+            .import_image(None, source_path.to_string_lossy().to_string(), None)
+            .expect("import");
+        core.delete_fragment_with_policy(fragment.id, Some(31))
+            .expect("trash fragment");
+        {
+            let conn = core.conn().expect("conn");
+            conn.execute_batch(
+                "
+                CREATE TRIGGER block_post_commit_cleanup
+                BEFORE DELETE ON pending_file_deletions
+                BEGIN
+                  SELECT RAISE(ABORT, 'blocked after empty trash commit');
+                END;
+                ",
+            )
+            .expect("install cleanup failure trigger");
+        }
+
+        let report = core
+            .empty_trash()
+            .expect("committed Trash deletion must remain successful");
+
+        assert_eq!(report.fragments, 1);
+        assert_eq!(report.frames, 0);
+        assert_eq!(report.assets, 1);
+        assert_eq!(report.cleanup.removed, 0);
+        assert_eq!(report.cleanup.deferred, 0);
+        assert!(core.list_trashed_fragments().expect("trash").is_empty());
+        let conn = core.conn().expect("conn");
+        let fragments: i64 = conn
+            .query_row("SELECT count(*) FROM fragments", [], |row| row.get(0))
+            .expect("fragment count");
+        let assets: i64 = conn
+            .query_row("SELECT count(*) FROM assets", [], |row| row.get(0))
+            .expect("asset count");
+        let pending_cleanup: i64 = conn
+            .query_row("SELECT count(*) FROM pending_file_deletions", [], |row| {
+                row.get(0)
+            })
+            .expect("pending cleanup count");
+        assert_eq!(fragments, 0);
+        assert_eq!(assets, 0);
+        assert!(pending_cleanup > 0);
     }
 
     #[test]

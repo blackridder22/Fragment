@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -11,6 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,11 +24,34 @@ const version = packageJson.version;
 const releaseDir = join(root, "target", "release", "artifacts", `v${version}`);
 const extensionDist = join(root, "apps", "extension", "dist");
 const extensionZip = join(releaseDir, `Fragment-Extension-v${version}.zip`);
+const nativeProtocolVersion = 2;
+const minimumNativeProtocolVersion = 1;
+const maxNativeMessageBytes = 1024 * 1024;
 
 if (process.env.FRAGMENT_SKIP_BUILD !== "1") {
   run("pnpm", ["build:extension"]);
-  run("pnpm", ["build:desktop"], { APPLE_SIGNING_IDENTITY: "-" });
+  run("pnpm", ["build:desktop"], {
+    APPLE_SIGNING_IDENTITY: "-",
+    CI: "true",
+  });
 }
+
+const bundleDir = join(root, "target", "release", "bundle");
+const appPath = join(bundleDir, "macos", "Fragment.app");
+const bundledHost = join(appPath, "Contents", "Resources", "fragment-host");
+if (!existsSync(appPath)) {
+  throw new Error(`Missing app bundle at ${appPath}`);
+}
+if (!existsSync(bundledHost)) {
+  throw new Error(
+    `Fragment.app does not contain the native host at ${bundledHost}`,
+  );
+}
+if ((statSync(bundledHost).mode & 0o111) === 0) {
+  throw new Error(`Bundled native host is not executable at ${bundledHost}`);
+}
+verifyBundledNativeHost(bundledHost, version);
+
 rmSync(releaseDir, { recursive: true, force: true });
 mkdirSync(releaseDir, { recursive: true });
 
@@ -45,18 +70,6 @@ execFileSync("/usr/bin/zip", ["-X", "-q", extensionZip, "-@"], {
   input: `${extensionFiles.join("\n")}\n`,
   stdio: ["pipe", "inherit", "inherit"],
 });
-
-const bundleDir = join(root, "target", "release", "bundle");
-const appPath = join(bundleDir, "macos", "Fragment.app");
-const bundledHost = join(appPath, "Contents", "Resources", "fragment-host");
-if (!existsSync(appPath)) {
-  throw new Error(`Missing app bundle at ${appPath}`);
-}
-if (!existsSync(bundledHost)) {
-  throw new Error(
-    `Fragment.app does not contain the native host at ${bundledHost}`,
-  );
-}
 
 const bundleDmgs = findByExtension(bundleDir, ".dmg");
 const intermediateDmgs = bundleDmgs.filter((path) =>
@@ -124,6 +137,94 @@ function run(command, args, env = {}) {
     env: { ...process.env, ...env },
     stdio: "inherit",
   });
+}
+
+function verifyBundledNativeHost(hostPath, expectedVersion) {
+  const requestId = "fragment-release-packaging";
+  const requestBody = Buffer.from(
+    JSON.stringify({
+      type: "ping",
+      requestId,
+      protocolVersion: nativeProtocolVersion,
+      minimumProtocolVersion: minimumNativeProtocolVersion,
+    }),
+    "utf8",
+  );
+  const request = Buffer.allocUnsafe(4 + requestBody.byteLength);
+  request.writeUInt32LE(requestBody.byteLength, 0);
+  requestBody.copy(request, 4);
+
+  const probeRoot = mkdtempSync(
+    join(tmpdir(), "fragment-release-native-host-"),
+  );
+  let result;
+  try {
+    result = spawnSync(hostPath, [], {
+      cwd: root,
+      env: { ...process.env, FRAGMENT_APP_DATA_DIR: probeRoot },
+      input: request,
+      timeout: 5000,
+      maxBuffer: maxNativeMessageBytes + 4,
+    });
+  } finally {
+    rmSync(probeRoot, { recursive: true, force: true });
+  }
+
+  if (result.error) {
+    throw new Error(
+      `Bundled native host probe failed: ${result.error.message}`,
+    );
+  }
+  const stderr = Buffer.isBuffer(result.stderr)
+    ? result.stderr.toString("utf8").trim()
+    : "";
+  if (result.status !== 0) {
+    throw new Error(
+      `Bundled native host exited unsuccessfully: status=${result.status ?? "null"} signal=${result.signal ?? "null"}${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+
+  const output = result.stdout;
+  if (!Buffer.isBuffer(output) || output.byteLength < 4) {
+    throw new Error("Bundled native host returned no framed response");
+  }
+  const responseLength = output.readUInt32LE(0);
+  if (
+    responseLength > maxNativeMessageBytes ||
+    output.byteLength !== responseLength + 4
+  ) {
+    throw new Error("Bundled native host returned an invalid response frame");
+  }
+
+  let response;
+  try {
+    response = JSON.parse(output.subarray(4).toString("utf8"));
+  } catch (error) {
+    throw new Error(
+      `Bundled native host returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const compatibleProtocol =
+    response.compatible === true &&
+    Number.isSafeInteger(response.protocolVersion) &&
+    response.protocolVersion >= minimumNativeProtocolVersion &&
+    Number.isSafeInteger(response.minimumProtocolVersion) &&
+    response.minimumProtocolVersion <= nativeProtocolVersion;
+  if (
+    response.type !== "pong" ||
+    response.requestId !== requestId ||
+    response.ok !== true ||
+    response.app !== "Fragment" ||
+    response.version !== expectedVersion ||
+    !compatibleProtocol
+  ) {
+    throw new Error(
+      `Bundled native host handshake is incompatible: ${JSON.stringify(response)}`,
+    );
+  }
+  console.log(
+    `Verified bundled native host v${response.version} protocol ${response.protocolVersion}`,
+  );
 }
 
 function walkFiles(directory) {

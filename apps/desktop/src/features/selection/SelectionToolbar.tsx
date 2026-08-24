@@ -30,7 +30,7 @@ export function SelectionToolbar({
     <div
       className="selection-toolbar"
       role="toolbar"
-      aria-label={`${context === "trash" ? "Trash" : "Fragment"} selection actions`}
+      aria-label={`${context === "trash" ? "Trash" : "Frame"} selection actions`}
     >
       <span className="selection-count" aria-live="polite">
         {allMatching && allSelected ? "All " : ""}
@@ -40,7 +40,7 @@ export function SelectionToolbar({
         <button
           className="button compact"
           onClick={onSelectAll}
-          title="Select every matching Fragment (Command+A)"
+          title="Select every matching Frame (Command+A)"
           type="button"
         >
           <CheckSquare aria-hidden="true" size={15} />

@@ -5,6 +5,7 @@ type AppShellProps = {
   navigator: ReactNode;
   navigatorCollapsed: boolean;
   navigatorWidth: number;
+  windowBar: ReactNode;
 };
 
 export function AppShell({
@@ -12,6 +13,7 @@ export function AppShell({
   navigator,
   navigatorCollapsed,
   navigatorWidth,
+  windowBar,
 }: AppShellProps) {
   return (
     <div
@@ -20,12 +22,15 @@ export function AppShell({
       style={
         {
           "--frame-tree-width": `${navigatorWidth}px`,
-          "--app-sidebar-width": `${navigatorCollapsed ? 78 : navigatorWidth + 78}px`,
+          "--app-sidebar-width": `${navigatorCollapsed ? 64 : navigatorWidth}px`,
         } as CSSProperties
       }
     >
-      {navigator}
-      <main className="app-main">{children}</main>
+      {windowBar}
+      <div className="app-body">
+        {navigator}
+        <main className="app-main">{children}</main>
+      </div>
     </div>
   );
 }

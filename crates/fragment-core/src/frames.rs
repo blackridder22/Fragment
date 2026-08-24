@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
-use crate::fragments::{enqueue_orphan_asset_cleanup, usize_to_u64};
+use crate::fragments::{
+    enqueue_fragment_cleanup, enqueue_orphan_asset_cleanup, fragment_by_id_in_conn, usize_to_u64,
+};
 use crate::models::Frame;
 
 const DEFAULT_FRAME_RETENTION_DAYS: u32 = 31;
@@ -556,6 +558,41 @@ fn frame_by_id_in_conn(
         .optional()?)
 }
 
+pub(crate) fn hard_delete_trashed_frames_in_conn(
+    connection: &Connection,
+) -> CoreResult<(u64, u64)> {
+    let roots = {
+        let mut stmt = connection.prepare(
+            "
+            SELECT frame.id
+            FROM frames AS frame
+            WHERE frame.deleted_at IS NOT NULL
+              AND frame.is_system = 0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM frames AS parent
+                WHERE parent.id = frame.parent_id
+                  AND parent.deleted_at IS NOT NULL
+              )
+            ORDER BY frame.deleted_at ASC, frame.id ASC
+            ",
+        )?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let mut frames = 0_u64;
+    let mut assets = 0_u64;
+    for frame_id in roots {
+        let (removed_frames, removed_assets) = hard_delete_frame_in_conn(connection, &frame_id)?;
+        frames = frames.saturating_add(removed_frames);
+        assets = assets.saturating_add(removed_assets);
+    }
+    Ok((frames, assets))
+}
+
 fn hard_delete_frame_in_conn(connection: &Connection, frame_id: &str) -> CoreResult<(u64, u64)> {
     let frame_ids = {
         let mut stmt = connection.prepare(
@@ -597,6 +634,31 @@ fn hard_delete_frame_in_conn(connection: &Connection, frame_id: &str) -> CoreRes
         rows
     };
 
+    let legacy_fragments = {
+        let mut stmt = connection.prepare(
+            "
+            WITH RECURSIVE frame_tree(id) AS (
+              SELECT id FROM frames WHERE id = ?1
+              UNION ALL
+              SELECT frames.id FROM frames
+              INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
+            )
+            SELECT id FROM fragments
+            WHERE frame_id IN (SELECT id FROM frame_tree) AND asset_id IS NULL
+            ",
+        )?;
+        let ids = stmt
+            .query_map(params![frame_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut fragments = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(fragment) = fragment_by_id_in_conn(connection, &id, true)? {
+                fragments.push(fragment);
+            }
+        }
+        fragments
+    };
+
     connection.execute(
         "
         WITH RECURSIVE frame_tree(id) AS (
@@ -627,6 +689,9 @@ fn hard_delete_frame_in_conn(connection: &Connection, frame_id: &str) -> CoreRes
         if enqueue_orphan_asset_cleanup(connection, &asset_id)? {
             removed_assets = removed_assets.saturating_add(1);
         }
+    }
+    for fragment in &legacy_fragments {
+        enqueue_fragment_cleanup(connection, fragment)?;
     }
     Ok((usize_to_u64(frame_ids.len()), removed_assets))
 }

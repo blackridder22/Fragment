@@ -41,7 +41,7 @@ export function FrameCard({
               const asset = assetFor(fragment);
               return (
                 <img
-                  alt={fragment.title ?? "Fragment thumbnail"}
+                  alt={fragment.title ?? "Frame thumbnail"}
                   data-transparent={isTransparentAsset(fragment)}
                   draggable={false}
                   key={fragment.id}
@@ -66,7 +66,7 @@ export function FrameCard({
         <button className="frame-title-button" onClick={onOpen} type="button">
           <strong>{frame.name}</strong>
           <span>
-            {fragments.length} Fragments
+            {fragments.length} {fragments.length === 1 ? "Frame" : "Frames"}
             {protectedFrame ? " · Protected" : ""}
           </span>
         </button>
@@ -78,7 +78,7 @@ export function FrameCard({
             <button
               className="icon-button small"
               onClick={onRename}
-              title="Rename Frame"
+              title="Rename Fragment"
               type="button"
             >
               <Pencil size={15} />
@@ -86,7 +86,7 @@ export function FrameCard({
             <button
               className="icon-button small danger"
               onClick={onDelete}
-              title="Delete Frame"
+              title="Delete Fragment"
               type="button"
             >
               <Trash2 size={15} />

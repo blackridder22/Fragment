@@ -112,7 +112,7 @@ describe("Frame tree model", () => {
       pinnedIds: ["logos"],
       includeDescendants: true,
     });
-    expect(parseFrameNavigatorPreferences("not json").width).toBe(272);
+    expect(parseFrameNavigatorPreferences("not json").width).toBe(240);
   });
 });
 

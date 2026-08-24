@@ -1,7 +1,7 @@
 # Architecture
 
-Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.6 is
-developed on branch `vbeta0.0.6`.
+Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.7 is
+developed on branch `vbeta0.0.7`.
 
 ## Runtime components
 
@@ -48,7 +48,7 @@ only after no active or retained membership references them.
 
 Trash is lifecycle state, not a second copy of an image. A retained membership
 has `deleted_at` and `delete_after`; Restore clears both fields. Supported
-retention choices are 7, 14, 24, or 31 days, plus Delete Forever. The v0.0.3
+retention choices are 7, 14, 24, or 31 days, plus Delete Forever. The v0.0.7
 product default is 31 days.
 
 Frame Trash, restart-safe expiry purge, and atomic Delete Everywhere are
@@ -92,7 +92,7 @@ possible.
 ```
 
 Originals are the source of truth. Derived thumbnails and previews are
-replaceable caches and remain PNG during v0.0.3 for transparent-image and
+replaceable caches and remain PNG during v0.0.7 for transparent-image and
 macOS WebKit reliability.
 
 ## Data flow
@@ -110,8 +110,12 @@ User capture action -> content overlay -> service worker -> native host
   -> fragment-core -> one asset + one or more memberships -> overlay result
 ```
 
-Production capture uses Native Messaging. The localhost bridge and unpacked
-host installer are development tools only.
+Production capture uses Native Messaging. On macOS, the desktop app makes a
+best-effort startup attempt to create or repair Chrome's native-host manifest
+so it points to the bundled `fragment-host` and permits the packaged extension
+origin. Setup failure is non-fatal and is surfaced through diagnostics and the
+Settings status. The manual installer script remains available as a repair and
+development fallback. The localhost bridge is a development tool only.
 
 ## Version semantics
 
@@ -121,8 +125,10 @@ host installer are development tools only.
 - `extensionVersion` in a capture request identifies the sending extension
   build; it is not a negotiated protocol revision.
 - `pong.version` identifies the running native host build.
-- Native protocol version negotiation is not implemented yet. When added, it
-  must retain one-version backward compatibility.
+- Native Messaging negotiates protocol version `2` with minimum compatible
+  version `1`. The extension and desktop readiness probe both reject a host
+  whose supported range does not overlap their own; version-1 clients remain
+  compatible during the v0.0.7 transition.
 
 ## Performance fixtures
 

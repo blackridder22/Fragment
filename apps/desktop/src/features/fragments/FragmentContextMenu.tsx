@@ -6,14 +6,24 @@ import {
   Image as ImageIcon,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Fragment, Frame } from "@fragment/shared";
+import {
+  DEFAULT_SHORTCUT_BINDINGS,
+  matchesShortcut,
+  type ShortcutBinding,
+} from "../shortcuts/shortcut-model";
+import {
+  clampContextMenuPosition,
+  type ContextMenuPosition,
+} from "./context-menu-position";
 
 export type FragmentContextMenuState = {
   fragment: Fragment;
   fragmentIds: string[];
   x: number;
   y: number;
+  layer?: "base" | "overlay";
 };
 
 type FragmentContextMenuProps = FragmentContextMenuState & {
@@ -27,6 +37,7 @@ type FragmentContextMenuProps = FragmentContextMenuState & {
   onOpenSource?: () => void;
   onReveal: () => void;
   onTrash: () => void;
+  closeShortcut?: ShortcutBinding;
 };
 
 export function FragmentContextMenu({
@@ -35,6 +46,7 @@ export function FragmentContextMenu({
   frames,
   x,
   y,
+  layer = "base",
   canUseNativeActions,
   canTrash,
   onAddToFrame,
@@ -44,25 +56,89 @@ export function FragmentContextMenu({
   onOpenSource,
   onReveal,
   onTrash,
+  closeShortcut = DEFAULT_SHORTCUT_BINDINGS.closeOverlay,
 }: FragmentContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<ContextMenuPosition | null>(null);
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+
+    const positionMenu = () => {
+      const bounds = menu.getBoundingClientRect();
+      setPosition(
+        clampContextMenuPosition({
+          x,
+          y,
+          menuWidth: bounds.width,
+          menuHeight: bounds.height,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+        }),
+      );
+    };
+
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(positionMenu);
+    resizeObserver?.observe(menu);
+
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      resizeObserver?.disconnect();
+    };
+  }, [x, y]);
+
   useEffect(() => {
     const close = (event: PointerEvent) => {
-      if (event.target instanceof Node && menuRef.current?.contains(event.target)) {
+      if (
+        event.target instanceof Node &&
+        menuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      if (
+        layer === "overlay" &&
+        event.target instanceof Element &&
+        event.target.closest(".v7-focused-more")
+      ) {
         return;
       }
       onClose();
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (matchesShortcut(event, closeShortcut)) {
+        event.preventDefault();
+        onClose();
+      }
     };
-    window.addEventListener("pointerdown", close, true);
+    const closeOnScroll = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        menuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      onClose();
+    };
+
+    const capturePointer = layer === "base";
+    window.addEventListener("pointerdown", close, capturePointer);
     window.addEventListener("keydown", escape);
+    if (layer === "base") {
+      window.addEventListener("scroll", closeOnScroll, true);
+    }
     return () => {
-      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("pointerdown", close, capturePointer);
       window.removeEventListener("keydown", escape);
+      window.removeEventListener("scroll", closeOnScroll, true);
     };
-  }, [onClose]);
+  }, [closeShortcut, layer, onClose]);
 
   function run(action: () => void) {
     action();
@@ -72,12 +148,14 @@ export function FragmentContextMenu({
   return (
     <div
       className="fragment-context-menu"
+      data-layer={layer}
       onContextMenu={(event) => event.preventDefault()}
       ref={menuRef}
       role="menu"
       style={{
-        left: Math.max(8, Math.min(x, window.innerWidth - 276)),
-        top: Math.max(8, Math.min(y, window.innerHeight - 430)),
+        left: position?.left ?? x,
+        top: position?.top ?? y,
+        visibility: position ? "visible" : "hidden",
       }}
     >
       <header>
@@ -85,10 +163,10 @@ export function FragmentContextMenu({
         <div>
           <strong>
             {fragmentIds.length > 1
-              ? `${fragmentIds.length} Fragments`
-              : (fragment.title ?? "Untitled Fragment")}
+              ? `${fragmentIds.length} Frames`
+              : (fragment.title ?? "Untitled Frame")}
           </strong>
-          <span>{fragmentIds.length > 1 ? "Selection" : "Fragment"}</span>
+          <span>{fragmentIds.length > 1 ? "Selection" : "Frame"}</span>
         </div>
       </header>
       {fragmentIds.length === 1 ? (
@@ -123,7 +201,9 @@ export function FragmentContextMenu({
       ) : null}
       <div className="fragment-context-divider" />
       <div className="fragment-context-submenu">
-        <span><FolderPlus aria-hidden="true" size={14} /> Add to Frame</span>
+        <span>
+          <FolderPlus aria-hidden="true" size={14} /> Add to Fragment
+        </span>
         <div>
           {frames.map((frame) => (
             <button
@@ -142,7 +222,6 @@ export function FragmentContextMenu({
           <div className="fragment-context-divider" />
           <button
             className="danger"
-            disabled={!canUseNativeActions}
             onClick={() => run(onTrash)}
             role="menuitem"
             type="button"

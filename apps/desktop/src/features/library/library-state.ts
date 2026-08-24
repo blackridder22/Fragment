@@ -1,9 +1,40 @@
 import type { Fragment } from "@fragment/shared";
+import {
+  activeFilterCount,
+  type FragmentFilter,
+} from "../filters/filter-model";
 
 export type SnapshotMetadata = {
   frameCounts: Record<string, number>;
   trashTotal: number;
 };
+
+type RootSnapshotContext = {
+  frameId: string | null;
+  smartFrameId: string | null;
+  query: string;
+  sourceFilter: "all" | "source" | "local" | "png";
+  filter: FragmentFilter;
+  sortMode: "newest" | "oldest" | "name" | "largest";
+};
+
+export function canReuseUnfilteredRootSnapshot({
+  frameId,
+  smartFrameId,
+  query,
+  sourceFilter,
+  filter,
+  sortMode,
+}: RootSnapshotContext): boolean {
+  return (
+    frameId === null &&
+    smartFrameId === null &&
+    query.trim() === "" &&
+    sourceFilter === "all" &&
+    sortMode === "newest" &&
+    activeFilterCount(filter) === 0
+  );
+}
 
 export function mergeUniqueFragments(
   current: Fragment[],

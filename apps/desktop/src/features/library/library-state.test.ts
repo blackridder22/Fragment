@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Fragment } from "@fragment/shared";
-import { mergeUniqueFragments, readSnapshotMetadata } from "./library-state";
+import {
+  canReuseUnfilteredRootSnapshot,
+  mergeUniqueFragments,
+  readSnapshotMetadata,
+} from "./library-state";
 
 function fragment(id: string, title = id): Fragment {
   return {
@@ -46,5 +50,56 @@ describe("readSnapshotMetadata", () => {
         trashTotal: 3,
       }),
     ).toEqual({ frameCounts: { inbox: 4 }, trashTotal: 3 });
+  });
+});
+
+describe("canReuseUnfilteredRootSnapshot", () => {
+  const defaultContext = {
+    frameId: null,
+    smartFrameId: null,
+    query: "",
+    sourceFilter: "all" as const,
+    filter: { tags: [], mimeTypes: [], sourceKind: "all" as const },
+    sortMode: "newest" as const,
+  };
+
+  it("uses the fast snapshot only for the exact unfiltered newest root", () => {
+    expect(canReuseUnfilteredRootSnapshot(defaultContext)).toBe(true);
+    expect(
+      canReuseUnfilteredRootSnapshot({
+        ...defaultContext,
+        filter: { ...defaultContext.filter, tags: ["editorial"] },
+      }),
+    ).toBe(false);
+    expect(
+      canReuseUnfilteredRootSnapshot({
+        ...defaultContext,
+        sortMode: "oldest",
+      }),
+    ).toBe(false);
+    expect(
+      canReuseUnfilteredRootSnapshot({
+        ...defaultContext,
+        query: "poster",
+      }),
+    ).toBe(false);
+    expect(
+      canReuseUnfilteredRootSnapshot({
+        ...defaultContext,
+        sourceFilter: "source",
+      }),
+    ).toBe(false);
+    expect(
+      canReuseUnfilteredRootSnapshot({
+        ...defaultContext,
+        frameId: "frame-1",
+      }),
+    ).toBe(false);
+    expect(
+      canReuseUnfilteredRootSnapshot({
+        ...defaultContext,
+        smartFrameId: "smart-1",
+      }),
+    ).toBe(false);
   });
 });

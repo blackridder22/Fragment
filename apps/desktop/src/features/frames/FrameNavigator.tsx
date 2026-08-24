@@ -5,6 +5,8 @@ import {
   FolderOpen,
   Inbox,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pin,
   Plus,
   Search,
@@ -196,34 +198,32 @@ export function FrameNavigator({
 
   return (
     <aside
-      aria-label="Frame Navigator"
+      aria-label="Fragment Navigator"
       className="frame-sidebar"
       data-collapsed={collapsed}
       onPointerDown={onPointerDown}
-      style={{ width: collapsed ? 78 : width + 78 }}
+      style={{ width: collapsed ? 64 : width }}
     >
       <IconRail
         activeView={activeView}
-        collapsed={collapsed}
         dropTarget={dropTarget}
-        onNavigatorToggle={() => onCollapsedChange(!collapsed)}
         onViewChange={onViewChange}
         trashDropState={trashDropState}
       />
 
       {!collapsed ? (
-        <section className="frame-navigator" aria-label="Frame tree">
+        <section className="frame-navigator" aria-label="Fragment tree">
           <header className="frame-tree-panel-header">
             <div>
-              <span>Vault structure</span>
-              <strong>Frames</strong>
+              <span>Your library</span>
+              <strong>Fragments</strong>
             </div>
             <button
-              aria-label="New root Frame"
+              aria-label="New root Fragment"
               className="frame-nav-icon-button"
               data-no-frame-drag="true"
               onClick={() => onCreateFrame(null)}
-              title="New root Frame"
+              title="New root Fragment"
               type="button"
             >
               <Plus aria-hidden="true" size={16} />
@@ -231,257 +231,282 @@ export function FrameNavigator({
           </header>
 
           <div className="frame-nav-expanded-content">
-        {pinnedFrames.length > 0 ? (
-          <section className="frame-nav-section frame-nav-quick-access">
-            <div className="frame-nav-section-heading">
-              <span>Quick Access</span>
-            </div>
-            {pinnedFrames.map((frame) => (
-              <button
-                className="frame-quick-row"
-                data-active={
-                  activeView === "home" && selectedFrameId === frame.id
-                }
-                data-drop-state={
-                  dropTarget === `frame-tree:${frame.id}` ? "armed" : "idle"
-                }
-                data-drop-target={`frame-tree:${frame.id}`}
-                data-frame-drag-id={frame.id}
-                key={frame.id}
-                onClick={() => onSelectFrame(frame.id)}
-                type="button"
-              >
-                <Pin aria-hidden="true" size={13} />
-                <span>{frame.name}</span>
-                <small
-                  aria-label={`${directCounts.get(frame.id) ?? 0} direct, ${recursiveCounts.get(frame.id) ?? 0} including Sub-frames`}
-                >
-                  {countLabel(frame.id)}
-                </small>
-              </button>
-            ))}
-          </section>
-        ) : null}
-
-        {smartFrames.length > 0 ? (
-          <section className="frame-nav-section smart-frame-section">
-            <div className="frame-nav-section-heading">
-              <span>Smart Frames</span>
-              <Sparkles aria-hidden="true" size={13} />
-            </div>
-            <div className="smart-frame-list">
-              {smartFrames.map((smartFrame) => (
-                <div
-                  className="smart-frame-row"
-                  data-active={selectedSmartFrameId === smartFrame.id}
-                  key={smartFrame.id}
-                >
-                  <button
-                    onClick={() => onSelectSmartFrame(smartFrame.id)}
-                    title="Dynamic filtered Frame"
-                    type="button"
-                  >
-                    <Sparkles aria-hidden="true" size={14} />
-                    <span>{smartFrame.name}</span>
-                  </button>
-                  <button
-                    aria-label={`Delete ${smartFrame.name}`}
-                    className="smart-frame-delete"
-                    onClick={() => onDeleteSmartFrame(smartFrame)}
-                    title="Delete Smart Frame"
-                    type="button"
-                  >
-                    <X aria-hidden="true" size={12} />
-                  </button>
+            {pinnedFrames.length > 0 ? (
+              <section className="frame-nav-section frame-nav-quick-access">
+                <div className="frame-nav-section-heading">
+                  <span>Quick Access</span>
                 </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        <section className="frame-nav-section frame-nav-tree-section">
-          <div className="frame-nav-section-heading">
-            <span>Frames</span>
-            <button
-              aria-label="New root Frame"
-              data-no-frame-drag="true"
-              onClick={() => onCreateFrame(null)}
-              title="New root Frame"
-              type="button"
-            >
-              <Plus aria-hidden="true" size={15} />
-            </button>
-          </div>
-          <label className="frame-nav-search">
-            <Search aria-hidden="true" size={14} />
-            <input
-              aria-label="Search Frames"
-              data-no-frame-drag="true"
-              onChange={(event) => setFrameQuery(event.target.value)}
-              placeholder="Find a Frame"
-              value={frameQuery}
-            />
-          </label>
-
-          <div className="frame-tree" role="tree" aria-label="Frames">
-            {rows.map(
-              ({ frame, depth, expanded, hasChildren, matchesQuery }) => {
-                const protectedFrame = frame.id === defaultFrameId;
-                const direct = directCounts.get(frame.id) ?? 0;
-                const recursive = recursiveCounts.get(frame.id) ?? direct;
-                const editing = editingId === frame.id;
-                return (
-                  <div
-                    className="frame-tree-row"
+                {pinnedFrames.map((frame) => (
+                  <button
+                    className="frame-quick-row"
                     data-active={
                       activeView === "home" && selectedFrameId === frame.id
                     }
+                    data-drop-state={
+                      dropTarget === `frame-tree:${frame.id}` ? "armed" : "idle"
+                    }
+                    data-drop-target={`frame-tree:${frame.id}`}
                     data-frame-drag-id={frame.id}
-                    data-match={matchesQuery}
                     key={frame.id}
-                    style={{ "--frame-depth": depth } as CSSProperties}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      setContextMenu({
-                        frame,
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
-                    }}
+                    onClick={() => onSelectFrame(frame.id)}
+                    type="button"
                   >
-                    <span
-                      aria-hidden="true"
-                      className="frame-drop-line frame-drop-line-before"
-                      data-drop-state={
-                        dropTarget === `frame-before:${frame.id}`
-                          ? "armed"
-                          : "idle"
-                      }
-                      data-drop-target={`frame-before:${frame.id}`}
-                    />
-                    <button
-                      aria-expanded={hasChildren ? expanded : undefined}
-                      aria-label={
-                        hasChildren
-                          ? `${expanded ? "Collapse" : "Expand"} ${frame.name}`
-                          : undefined
-                      }
-                      className="frame-tree-chevron"
-                      data-no-frame-drag="true"
-                      disabled={!hasChildren}
-                      onClick={() => onToggleExpanded(frame.id)}
-                      tabIndex={-1}
-                      type="button"
+                    <Pin aria-hidden="true" size={13} />
+                    <span>{frame.name}</span>
+                    <small
+                      aria-label={`${directCounts.get(frame.id) ?? 0} direct, ${recursiveCounts.get(frame.id) ?? 0} including nested Fragments`}
                     >
-                      {hasChildren ? (
-                        expanded ? (
-                          <ChevronDown size={14} />
-                        ) : (
-                          <ChevronRight size={14} />
-                        )
-                      ) : (
-                        <span />
-                      )}
-                    </button>
-                    {editing ? (
-                      <input
-                        aria-label={`Rename ${frame.name}`}
-                        autoFocus
-                        className="frame-tree-rename"
-                        data-no-frame-drag="true"
-                        onBlur={() => void commitRename(frame)}
-                        onChange={(event) => setEditingName(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            event.currentTarget.blur();
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            cancelRenameRef.current = true;
-                            setEditingId(null);
-                          }
-                        }}
-                        onFocus={(event) => event.currentTarget.select()}
-                        value={editingName}
-                      />
-                    ) : (
+                      {countLabel(frame.id)}
+                    </small>
+                  </button>
+                ))}
+              </section>
+            ) : null}
+
+            {smartFrames.length > 0 ? (
+              <section className="frame-nav-section smart-frame-section">
+                <div className="frame-nav-section-heading">
+                  <span>Smart Fragments</span>
+                  <Sparkles aria-hidden="true" size={13} />
+                </div>
+                <div className="smart-frame-list">
+                  {smartFrames.map((smartFrame) => (
+                    <div
+                      className="smart-frame-row"
+                      data-active={selectedSmartFrameId === smartFrame.id}
+                      key={smartFrame.id}
+                    >
                       <button
-                        aria-level={depth + 1}
-                        className="frame-tree-main"
-                        data-drop-state={
-                          dropTarget === `frame-tree:${frame.id}`
-                            ? "armed"
-                            : "idle"
-                        }
-                        data-drop-target={`frame-tree:${frame.id}`}
-                        onClick={() => onSelectFrame(frame.id)}
-                        onDoubleClick={() => beginRename(frame)}
-                        onKeyDown={(event) =>
-                          handleTreeKeyDown(event, frame, hasChildren, expanded)
-                        }
-                        role="treeitem"
-                        title={`${direct} direct · ${recursive} including Sub-frames`}
+                        onClick={() => onSelectSmartFrame(smartFrame.id)}
+                        title="Dynamic filtered Fragment"
                         type="button"
                       >
-                        {protectedFrame ? (
-                          <Inbox aria-hidden="true" size={15} />
-                        ) : expanded && hasChildren ? (
-                          <FolderOpen aria-hidden="true" size={15} />
-                        ) : (
-                          <Folder aria-hidden="true" size={15} />
-                        )}
-                        <span>{frame.name}</span>
-                        <small
-                          aria-label={`${direct} direct, ${recursive} including Sub-frames`}
-                        >
-                          {countLabel(frame.id)}
-                        </small>
+                        <Sparkles aria-hidden="true" size={14} />
+                        <span>{smartFrame.name}</span>
                       </button>
-                    )}
-                    <button
-                      aria-label={`More actions for ${frame.name}`}
-                      className="frame-tree-more"
-                      data-no-frame-drag="true"
-                      onClick={(event) => {
-                        const rect =
-                          event.currentTarget.getBoundingClientRect();
-                        setContextMenu({
-                          frame,
-                          x: rect.right,
-                          y: rect.bottom,
-                        });
-                      }}
-                      type="button"
-                    >
-                      <MoreHorizontal aria-hidden="true" size={14} />
-                    </button>
-                    <span
-                      aria-hidden="true"
-                      className="frame-drop-line frame-drop-line-after"
-                      data-drop-state={
-                        dropTarget === `frame-after:${frame.id}`
-                          ? "armed"
-                          : "idle"
-                      }
-                      data-drop-target={`frame-after:${frame.id}`}
-                    />
-                  </div>
-                );
-              },
-            )}
-            {rows.length === 0 ? (
-              <p className="frame-tree-empty">No matching Frames</p>
+                      <button
+                        aria-label={`Delete ${smartFrame.name}`}
+                        className="smart-frame-delete"
+                        onClick={() => onDeleteSmartFrame(smartFrame)}
+                        title="Delete Smart Fragment"
+                        type="button"
+                      >
+                        <X aria-hidden="true" size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
             ) : null}
-          </div>
-        </section>
+
+            <section className="frame-nav-section frame-nav-tree-section">
+              <div className="frame-nav-section-heading">
+                <span>Fragments</span>
+                <button
+                  aria-label="New root Fragment"
+                  data-no-frame-drag="true"
+                  onClick={() => onCreateFrame(null)}
+                  title="New root Fragment"
+                  type="button"
+                >
+                  <Plus aria-hidden="true" size={15} />
+                </button>
+              </div>
+              <label className="frame-nav-search">
+                <Search aria-hidden="true" size={14} />
+                <input
+                  aria-label="Search Fragments"
+                  data-no-frame-drag="true"
+                  onChange={(event) => setFrameQuery(event.target.value)}
+                  placeholder="Find a Fragment"
+                  value={frameQuery}
+                />
+              </label>
+
+              <div className="frame-tree" role="tree" aria-label="Fragments">
+                {rows.map(
+                  ({ frame, depth, expanded, hasChildren, matchesQuery }) => {
+                    const protectedFrame = frame.id === defaultFrameId;
+                    const direct = directCounts.get(frame.id) ?? 0;
+                    const recursive = recursiveCounts.get(frame.id) ?? direct;
+                    const editing = editingId === frame.id;
+                    return (
+                      <div
+                        className="frame-tree-row"
+                        data-active={
+                          activeView === "home" && selectedFrameId === frame.id
+                        }
+                        data-frame-drag-id={frame.id}
+                        data-match={matchesQuery}
+                        key={frame.id}
+                        style={{ "--frame-depth": depth } as CSSProperties}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          setContextMenu({
+                            frame,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="frame-drop-line frame-drop-line-before"
+                          data-drop-state={
+                            dropTarget === `frame-before:${frame.id}`
+                              ? "armed"
+                              : "idle"
+                          }
+                          data-drop-target={`frame-before:${frame.id}`}
+                        />
+                        <button
+                          aria-expanded={hasChildren ? expanded : undefined}
+                          aria-label={
+                            hasChildren
+                              ? `${expanded ? "Collapse" : "Expand"} ${frame.name}`
+                              : undefined
+                          }
+                          className="frame-tree-chevron"
+                          data-no-frame-drag="true"
+                          disabled={!hasChildren}
+                          onClick={() => onToggleExpanded(frame.id)}
+                          tabIndex={-1}
+                          type="button"
+                        >
+                          {hasChildren ? (
+                            expanded ? (
+                              <ChevronDown size={14} />
+                            ) : (
+                              <ChevronRight size={14} />
+                            )
+                          ) : (
+                            <span />
+                          )}
+                        </button>
+                        {editing ? (
+                          <input
+                            aria-label={`Rename ${frame.name}`}
+                            autoFocus
+                            className="frame-tree-rename"
+                            data-no-frame-drag="true"
+                            onBlur={() => void commitRename(frame)}
+                            onChange={(event) =>
+                              setEditingName(event.target.value)
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                event.currentTarget.blur();
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelRenameRef.current = true;
+                                setEditingId(null);
+                              }
+                            }}
+                            onFocus={(event) => event.currentTarget.select()}
+                            value={editingName}
+                          />
+                        ) : (
+                          <button
+                            aria-level={depth + 1}
+                            className="frame-tree-main"
+                            data-drop-state={
+                              dropTarget === `frame-tree:${frame.id}`
+                                ? "armed"
+                                : "idle"
+                            }
+                            data-drop-target={`frame-tree:${frame.id}`}
+                            onClick={() => onSelectFrame(frame.id)}
+                            onDoubleClick={() => beginRename(frame)}
+                            onKeyDown={(event) =>
+                              handleTreeKeyDown(
+                                event,
+                                frame,
+                                hasChildren,
+                                expanded,
+                              )
+                            }
+                            role="treeitem"
+                            title={`${direct} direct · ${recursive} including nested Fragments`}
+                            type="button"
+                          >
+                            {protectedFrame ? (
+                              <Inbox aria-hidden="true" size={15} />
+                            ) : expanded && hasChildren ? (
+                              <FolderOpen aria-hidden="true" size={15} />
+                            ) : (
+                              <Folder aria-hidden="true" size={15} />
+                            )}
+                            <span>{frame.name}</span>
+                            <small
+                              aria-label={`${direct} direct, ${recursive} including nested Fragments`}
+                            >
+                              {countLabel(frame.id)}
+                            </small>
+                          </button>
+                        )}
+                        <button
+                          aria-label={`More actions for ${frame.name}`}
+                          className="frame-tree-more"
+                          data-no-frame-drag="true"
+                          onClick={(event) => {
+                            const rect =
+                              event.currentTarget.getBoundingClientRect();
+                            setContextMenu({
+                              frame,
+                              x: rect.right,
+                              y: rect.bottom,
+                            });
+                          }}
+                          type="button"
+                        >
+                          <MoreHorizontal aria-hidden="true" size={14} />
+                        </button>
+                        <span
+                          aria-hidden="true"
+                          className="frame-drop-line frame-drop-line-after"
+                          data-drop-state={
+                            dropTarget === `frame-after:${frame.id}`
+                              ? "armed"
+                              : "idle"
+                          }
+                          data-drop-target={`frame-after:${frame.id}`}
+                        />
+                      </div>
+                    );
+                  },
+                )}
+                {rows.length === 0 ? (
+                  <p className="frame-tree-empty">No matching Fragments</p>
+                ) : null}
+              </div>
+            </section>
           </div>
         </section>
       ) : null}
 
+      <div className="sidebar-footer">
+        <button
+          aria-label={collapsed ? "Show Fragments" : "Hide Fragments"}
+          className="rail-button rail-navigator-toggle"
+          data-no-frame-drag="true"
+          onClick={() => onCollapsedChange(!collapsed)}
+          title={collapsed ? "Show Fragments" : "Hide Fragments"}
+          type="button"
+        >
+          {collapsed ? (
+            <PanelLeftOpen aria-hidden="true" size={19} strokeWidth={1.9} />
+          ) : (
+            <PanelLeftClose aria-hidden="true" size={19} strokeWidth={1.9} />
+          )}
+          <span>{collapsed ? "Show Fragments" : "Hide Fragments"}</span>
+        </button>
+      </div>
+
       {!collapsed ? (
         <div
-          aria-label="Resize Frame Navigator"
+          aria-label="Resize Fragment Navigator"
           className="frame-nav-resizer"
           data-no-frame-drag="true"
           onPointerDown={beginResize}
@@ -508,7 +533,7 @@ export function FrameNavigator({
             role="menuitem"
             type="button"
           >
-            New Sub-frame
+            New nested Fragment
           </button>
           {contextMenu.frame.id !== defaultFrameId ? (
             <button

@@ -1,17 +1,22 @@
 mod commands;
+mod native_host;
 mod state;
+
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 
 use commands::{
     add_existing_fragment_to_frame, asset_data_url, asset_root, cancel_import_job,
     copy_fragment_image, create_frame, create_smart_frame, delete_fragment,
-    delete_fragment_everywhere, delete_fragments, delete_frame, delete_smart_frame,
+    delete_fragment_everywhere, delete_fragments, delete_frame, delete_smart_frame, empty_trash,
     ensure_default_frame, fragment_membership_count, get_fragment, get_fragment_any,
     get_fragment_tags, get_library_revision, hard_delete_frame, import_image, import_image_batch,
     list_all_fragments, list_child_frames, list_fragment_ids, list_fragment_page, list_fragments,
     list_frames, list_smart_frames, list_tags, list_trashed_fragments, list_trashed_frames,
-    load_library_snapshot, move_frame, open_fragment_source, purge_expired_trash, rename_frame,
-    restore_fragment, restore_fragments, restore_frame, reveal_fragment_in_finder,
-    set_fragment_tags, update_fragment, update_smart_frame,
+    load_library_snapshot, move_fragment_to_frame, move_frame, native_host_status,
+    open_fragment_source, purge_expired_trash, rename_frame, restore_fragment, restore_fragments,
+    restore_frame, reveal_fragment_in_finder, reveal_vault_in_finder, set_fragment_tags,
+    update_fragment, update_smart_frame,
 };
 use state::FragmentState;
 
@@ -23,6 +28,26 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            #[cfg(target_os = "macos")]
+            match app.path().resource_dir() {
+                Ok(resource_dir) => {
+                    if let Err(error) = native_host::install_bundled_native_host(&resource_dir) {
+                        tracing::warn!(
+                            %error,
+                            "Chrome native-host auto-install did not complete; Fragment will continue without browser capture"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "Chrome native-host auto-install could not locate bundled resources; Fragment will continue without browser capture"
+                    );
+                }
+            }
+            Ok(())
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             ensure_default_frame,
@@ -36,6 +61,7 @@ pub fn run() {
             list_trashed_frames,
             restore_frame,
             purge_expired_trash,
+            empty_trash,
             list_all_fragments,
             load_library_snapshot,
             list_fragment_page,
@@ -54,6 +80,7 @@ pub fn run() {
             list_tags,
             set_fragment_tags,
             add_existing_fragment_to_frame,
+            move_fragment_to_frame,
             update_fragment,
             import_image,
             import_image_batch,
@@ -64,10 +91,12 @@ pub fn run() {
             delete_fragments,
             restore_fragments,
             reveal_fragment_in_finder,
+            reveal_vault_in_finder,
             open_fragment_source,
             copy_fragment_image,
             asset_data_url,
-            asset_root
+            asset_root,
+            native_host_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running Fragment");

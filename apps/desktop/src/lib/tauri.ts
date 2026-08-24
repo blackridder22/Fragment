@@ -25,6 +25,14 @@ export type FragmentPage = {
   revision: string;
 };
 
+export type FragmentPageSortMode =
+  | "newest"
+  | "oldest"
+  | "name"
+  | "largest"
+  | "deleted"
+  | "deleted-oldest";
+
 export type ImportBatchItem = {
   requestId: string;
   frameId: string | null;
@@ -80,6 +88,12 @@ export type ImportBatchEvent =
       cancelled: number;
     };
 
+export type NativeHostStatus = {
+  ready: boolean;
+  label: string;
+  description?: string;
+};
+
 export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -101,7 +115,7 @@ export async function listFragmentPage(options: {
   offset?: number;
   limit?: number;
   filter?: FragmentFilter;
-  sortMode?: "newest" | "oldest" | "name" | "largest";
+  sortMode?: FragmentPageSortMode;
 }): Promise<FragmentPage> {
   return invoke("list_fragment_page", {
     frameId: options.frameId ?? null,
@@ -213,6 +227,10 @@ export async function purgeExpiredTrash(): Promise<PurgeReport> {
   return invoke("purge_expired_trash");
 }
 
+export async function emptyTrash(): Promise<PurgeReport> {
+  return invoke("empty_trash");
+}
+
 export async function listAllFragments(): Promise<Fragment[]> {
   return invoke("list_all_fragments");
 }
@@ -260,6 +278,13 @@ export async function addExistingFragmentToFrame(
     existingFragmentId,
     frameId,
   });
+}
+
+export async function moveFragmentToFrame(
+  id: string,
+  frameId: string,
+): Promise<Fragment> {
+  return invoke("move_fragment_to_frame", { id, frameId });
 }
 
 export async function importImage(
@@ -317,6 +342,10 @@ export async function revealFragmentInFinder(id: string): Promise<void> {
   return invoke("reveal_fragment_in_finder", { id });
 }
 
+export async function revealVaultInFinder(): Promise<void> {
+  return invoke("reveal_vault_in_finder");
+}
+
 export async function openFragmentSource(id: string): Promise<void> {
   return invoke("open_fragment_source", { id });
 }
@@ -327,6 +356,10 @@ export async function copyFragmentImage(id: string): Promise<void> {
 
 export async function loadAssetRoot(): Promise<string> {
   return invoke("asset_root");
+}
+
+export async function nativeHostStatus(): Promise<NativeHostStatus> {
+  return invoke("native_host_status");
 }
 
 export async function loadAssetDataUrl(relativePath: string): Promise<string> {

@@ -1,48 +1,72 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
+import {
+  formatShortcutBinding,
+  matchesShortcut,
+  type ShortcutBinding,
+  type ShortcutActionId,
+} from "../shortcuts/shortcut-model";
 
-type KeyboardShortcutsHelpProps = { onClose: () => void };
+type KeyboardShortcutsHelpProps = {
+  closeShortcut: ShortcutBinding;
+  shortcuts: Readonly<Record<ShortcutActionId, ShortcutBinding>>;
+  onClose: () => void;
+};
 
-const SHORTCUTS = [
-  ["Search Vault", "⌘ K"],
-  ["Advanced filters", "⌘ ⇧ F"],
-  ["New Frame", "⌘ N"],
-  ["Import images", "⌘ I"],
-  ["Masonry / Grid / List", "⌘ 1 / 2 / 3"],
-  ["Quick Preview", "Space"],
-  ["Open Preview", "Enter"],
-  ["Previous / next Fragment", "← / →"],
-  ["Select all matching", "⌘ A"],
-  ["Copy selected image", "⌘ C"],
-  ["Move selection to Trash", "⌫"],
-  ["Clear selection / close", "Esc"],
-] as const;
+export function KeyboardShortcutsHelp({
+  closeShortcut,
+  shortcuts,
+  onClose,
+}: KeyboardShortcutsHelpProps) {
+  const shortcutRows = [
+    ["Search Vault", formatShortcutBinding(shortcuts.search)],
+    ["Advanced filters", "⌘ ⇧ F"],
+    ["New Fragment", "⌘ N"],
+    ["Import images", formatShortcutBinding(shortcuts.importFrames)],
+    ["Masonry / Grid / List", "⌘ 1 / 2 / 3"],
+    ["Quick Preview", formatShortcutBinding(shortcuts.quickPreview)],
+    ["Open Preview", "Enter"],
+    ["Previous / next Frame", "← / →"],
+    ["Select all matching", "⌘ A"],
+    ["Copy selected image", "⌘ C"],
+    ["Move selection to Trash", "⌫"],
+    ["Clear selection / close", formatShortcutBinding(shortcuts.closeOverlay)],
+  ] as const;
 
-export function KeyboardShortcutsHelp({ onClose }: KeyboardShortcutsHelpProps) {
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (matchesShortcut(event, closeShortcut)) onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, [closeShortcut, onClose]);
 
   return (
-    <div className="shortcuts-backdrop" onMouseDown={onClose} role="presentation">
+    <div
+      className="shortcuts-backdrop"
+      onMouseDown={onClose}
+      role="presentation"
+    >
       <section
         aria-label="Keyboard shortcuts"
         className="shortcuts-sheet"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
-          <div><span>Fragment fluency</span><h2>Keyboard Shortcuts</h2></div>
+          <div>
+            <span>Fragment fluency</span>
+            <h2>Keyboard Shortcuts</h2>
+          </div>
           <button className="icon-button" onClick={onClose} type="button">
             <X aria-hidden="true" size={16} />
           </button>
         </header>
         <div>
-          {SHORTCUTS.map(([label, shortcut]) => (
-            <div key={label}><span>{label}</span><kbd>{shortcut}</kbd></div>
+          {shortcutRows.map(([label, shortcut]) => (
+            <div key={label}>
+              <span>{label}</span>
+              <kbd>{shortcut}</kbd>
+            </div>
           ))}
         </div>
         <footer>Press ? or ⌘ / to show this guide.</footer>

@@ -14,8 +14,8 @@ export function MarqueeOverlay({ rect }: MarqueeOverlayProps) {
       aria-hidden="true"
       className="marquee-selection"
       style={{
-        left: rect.left - window.scrollX,
-        top: rect.top - window.scrollY,
+        left: rect.left,
+        top: rect.top,
         width: rect.width,
         height: rect.height,
       }}

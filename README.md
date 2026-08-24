@@ -104,16 +104,18 @@ Build the host:
 cargo build --bin fragment-host
 ```
 
-Install the macOS Native Messaging manifest after loading the extension and
-copying its Chrome extension ID:
+The packaged macOS app now creates or repairs Chrome's Native Messaging
+manifest at startup for the stable extension ID derived from the extension
+manifest's public key. If automatic setup cannot complete, use the installer as
+a repair or development fallback:
 
 ```bash
 scripts/install-native-host-macos.sh <chrome-extension-id>
 ```
 
-The installer prefers the host bundled inside an installed or locally built
-`Fragment.app`, then falls back to a release/debug workspace binary. This keeps
-Chrome connected after the source checkout is moved or cleaned.
+The fallback installer prefers the host bundled inside an installed or locally
+built `Fragment.app`, then falls back to a release/debug workspace binary. This
+keeps Chrome connected after the source checkout is moved or cleaned.
 
 Uninstall it with:
 
@@ -121,19 +123,23 @@ Uninstall it with:
 scripts/uninstall-native-host-macos.sh
 ```
 
-Build a complete local app/extension release with checksums and a release
+Build local ad-hoc beta app/extension artifacts with checksums and a release
 manifest:
 
 ```bash
 pnpm release:local
 ```
 
-After a signed Tauri bundle has already been verified, regenerate only the ZIP,
-checksums, and release manifest without rebuilding the app:
+To regenerate only the ZIP, checksums, and release manifest without rebuilding
+the app:
 
 ```bash
 FRAGMENT_SKIP_BUILD=1 pnpm release:local
 ```
+
+`FRAGMENT_SKIP_BUILD=1` reuses the existing local app bundle and DMG exactly as
+they are. It does not verify their version, freshness, signing, or contents, so
+use it only after manually validating those exact local ad-hoc beta artifacts.
 
 Artifacts are written under `target/release/artifacts/v<version>/`; the app
 bundle remains under `target/release/bundle/macos/Fragment.app`.
