@@ -49,12 +49,6 @@ body[data-marquee-active] * {
   transform: none;
 }
 
-.v7-frame-card.fragment-card[data-variant="vault"] {
-  width: auto;
-  height: 100%;
-  flex: var(--v7-card-weight, 1) 1 0;
-}
-
 .v7-frame-card.fragment-card[data-selected="true"] {
   border-color: var(--focus, #89f7ff);
   box-shadow: inset 0 0 0 1px var(--focus, #89f7ff);
