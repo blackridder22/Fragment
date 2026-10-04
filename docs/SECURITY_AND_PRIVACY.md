@@ -27,6 +27,9 @@ Frames and URL schemes before saving.
 - Database paths are stored relative to the Vault root.
 - Relative paths are checked for traversal before resolving.
 - Originals, thumbnails, and previews are stored on disk, not in SQLite.
+- Derivatives are generated filenames under `thumbnails/` and `previews/`;
+  raster derivatives are WebP, SVG tiers are PNG. Background regeneration
+  commits new paths before the replaced files are deleted.
 
 ## URL Safety
 
@@ -42,8 +45,9 @@ debugging.
 ## Static SVG support (0.0.8)
 
 SVG originals are saved unchanged and are never injected as WebView markup.
-The app displays Rust-rendered PNG derivatives. Parsing/rendering runs in a
-killable subprocess; this is not a claim of a complete OS sandbox.
+The app displays Rust-rendered PNG derivatives (SVG tiers stay PNG even though
+raster derivatives are WebP). Parsing/rendering runs in a killable subprocess;
+this is not a claim of a complete OS sandbox.
 
 Inputs are limited to 5 MiB of UTF-8 XML, 100,000 elements and depth 128.
 DTD/entity declarations, processing instructions, scripts, animation,

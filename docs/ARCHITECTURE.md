@@ -92,8 +92,43 @@ possible.
 ```
 
 Originals are the source of truth. Derived thumbnails and previews are
-replaceable caches and remain PNG during v0.0.7 for transparent-image and
-macOS WebKit reliability.
+replaceable caches.
+
+### Derivative format (v0.0.9)
+
+Raster derivatives are lossy WebP encoded with libwebp (`webp` crate):
+thumbnails fit 640 px at quality 82, previews fit 1600 px at quality 85, and
+the alpha plane is kept lossless so transparent PNG sources stay transparent.
+Opaque sources are encoded without an alpha plane. WKWebView on macOS 11+
+decodes WebP natively.
+
+Why: v0.0.8 wrote lossless PNG. On the author's 169-item Vault thumbnails were
+median 273 KB (p90 439 KB) and previews median 1.3 MB (p90 2.3 MB), so one
+60-item gallery page moved ~16 MB and the previews folder was 2.4x the size of
+the originals. Re-encoding 12 real thumbnails gave PNG 2.99 MB -> WebP q82
+0.37 MB (8.2x); one 1600x702 preview went 1.39 MB -> 175 KB.
+
+No preview file is written when the original's longest edge is <= 1600 px and
+the format is browser-displayable (JPEG, PNG, WebP, GIF). `preview_path` then
+equals `original_path`; the desktop asset candidate chain deduplicates the two.
+
+SVG tiers (`svg.rs`, `previews.rs`) stay PNG. tiny-skia emits exact
+straight-alpha PNG, vector art is mostly flat colour where PNG is already
+small, lossy encoding would ring on crisp edges, and the private worker
+protocol and release verification check PNG magic. Converting them would mean
+decoding and re-encoding every tier in the parent for little gain.
+
+`assets.derivatives_version` (migration 0006) records the policy an asset was
+written with: 1 = PNG, 2 = WebP with the skip rule. `derivative_jobs.rs` runs
+one background worker, started by the desktop shell about 3 s after launch, that
+leases assets below the current version (active Fragments first, Trash last),
+decodes the original outside the SQLite lock, writes the new files atomically,
+then updates paths and version for the asset and its memberships, queues the
+old files in `pending_file_deletions`, and commits, all in one transaction. The
+old files are removed only after that commit; a crash at any point leaves a
+browsable Vault. Leases expire after 120 s, three failed attempts mark the job
+`failed`, and the worker pauses while an import or preview holds a foreground
+permit. `derivatives_status` reports `{ pending, done, failed }`.
 
 ## Data flow
 
@@ -130,6 +165,21 @@ development fallback. The localhost bridge is a development tool only.
   whose supported range does not overlap their own; version-1 clients remain
   compatible during the v0.0.7 transition.
 
+## Background workers in the desktop shell
+
+The palette worker drains its queue, then sleeps on a `Condvar` until an
+import completes, a palette is retried, a priority or Frame changes, or the
+window regains focus, with a 30 s fallback poll for captures written by the
+native host process. It pauses while a foreground import or preview runs.
+
+The derivative regeneration worker starts about 3 s after launch, exits once
+nothing is pending, and emits `derivatives-changed` with the regenerated asset
+IDs. Both workers stop on `ExitRequested`.
+
+macOS window-control realignment (`window_chrome.rs`) runs immediately on focus
+and theme changes; `Resized` events are coalesced into one refresh 150 ms after
+the last event so a resize drag no longer forces a synchronous redraw per tick.
+
 ## Performance fixtures
 
 `scripts/vault-fixture-lib.mjs` creates deterministic synthetic metadata for
@@ -147,8 +197,9 @@ pnpm benchmark:vault:metadata
 
 `media.rs` detects raster signatures or bounded UTF-8 SVG input. Desktop imports
 and host captures call the same preparation path. A SHA-256 hit reuses the
-existing asset before decoding. New files receive transparent 640/1600 PNGs;
-original SVG bytes and nominal dimensions are retained unchanged.
+existing asset before decoding. Raster files receive 640/1600 WebP derivatives
+(see "Derivative format"); SVG files receive transparent 640/1600 PNG tiers;
+original bytes and nominal dimensions are retained unchanged.
 
 `fragment-host --render-svg` is a private child process, entered before Vault
 initialization. `svg_worker.rs` owns a five-second deadline, cancellation,
