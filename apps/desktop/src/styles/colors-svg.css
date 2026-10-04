@@ -221,3 +221,52 @@
   border: 1px solid var(--v7-border-strong);
   font: inherit;
 }
+
+/* Progressive SVG preview: the gallery thumbnail sits under the render until it decodes. */
+.fragment-svg-surface {
+  position: relative;
+}
+.fragment-svg-thumb {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.fragment-svg-surface > img:not(.fragment-svg-thumb) {
+  position: relative;
+}
+
+/* Swatch copy feedback stays inside the swatch so the row never reflows. */
+.fragment-swatch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #fff;
+  transition:
+    transform var(--dur-fast, 120ms) var(--ease-out, ease-out),
+    outline-color var(--dur-fast, 120ms) linear;
+}
+.fragment-swatch:hover {
+  transform: translateY(-1px);
+}
+.fragment-swatch[data-copied="true"] {
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+}
+.fragment-swatch[data-copied="true"] > svg {
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 80%));
+}
+.fragment-color-status {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fragment-color-link:not(:disabled):hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
