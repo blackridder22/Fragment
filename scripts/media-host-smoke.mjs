@@ -229,11 +229,22 @@ try {
     assert.equal(row.page_url, "https://example.com/fragment-svg-smoke");
     assert.equal(row.status, "ready");
     assert(row.color_count > 0 && row.color_count <= 6);
-    for (const path of [row.thumbnail_path, row.preview_path])
-      assert.equal(
-        readFileSync(join(vault, path)).subarray(0, 8).toString("hex"),
-        "89504e470d0a1a0a",
-      );
+    // SVG tiers stay PNG; raster derivatives are WebP, and a raster original at
+    // or below 1600 px doubles as its own preview.
+    const isSvg = row.mime_type === "image/svg+xml";
+    const magic = (path) => {
+      const head = readFileSync(join(vault, path)).subarray(0, 12);
+      return head.subarray(0, 8).toString("hex") === "89504e470d0a1a0a"
+        ? "png"
+        : head.subarray(0, 4).toString("ascii") === "RIFF" &&
+            head.subarray(8, 12).toString("ascii") === "WEBP"
+          ? "webp"
+          : "unknown";
+    };
+    assert.equal(magic(row.thumbnail_path), isSvg ? "png" : "webp");
+    if (isSvg) assert.equal(magic(row.preview_path), "png");
+    else if (row.preview_path !== row.original_path)
+      assert.equal(magic(row.preview_path), "webp");
   }
   assert(existsSync(join(vault, "fragment.db")));
   const report = {
