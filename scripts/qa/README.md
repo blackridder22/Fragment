@@ -50,3 +50,30 @@ plateau after each cycle. Worker RSS alone does not satisfy it.
 See `docs/V0.0.8_QA.md` for evidence. The hooks and real 1,000-asset Vaults are
 prepared; native frame-time and retained-memory measurements remain unverified
 because the macOS automation session did not reliably capture/control windows.
+
+## Frames gallery harness (browser, worktree 20)
+
+`apps/desktop/qa/gallery-harness.html` fakes the Tauri IPC bridge with a
+1,000-item Vault so the Frames gallery can be measured in any Chromium
+browser against the Vite dev server. It is never shipped: it lives outside
+`src/`, is not an entry of `vite build`, and the thumbnails it needs are
+generated and git-ignored.
+
+```sh
+python3 scripts/qa/gallery-harness-thumbs.py        # 36 PNGs incl. 3:1 and 1:3 shapes
+cd apps/desktop && pnpm exec vite --port 5180 --strictPort
+open http://127.0.0.1:5180/qa/gallery-harness.html  # ?count=1000&latency=20&fail=page
+```
+
+Open the Frames page, then in DevTools count `document.querySelectorAll(".fragment-card").length`
+while scrolling. For before/after numbers run the headless driver against each
+build (it loads all pages, then scrolls continuously for 30 s per run and
+samples `requestAnimationFrame` intervals, mounted cards, layout shift and long
+tasks in Chromium via the repo's Playwright devDependency):
+
+```sh
+node scripts/qa/gallery-scroll-benchmark.mjs http://127.0.0.1:5180/qa/gallery-harness.html 3 30 after
+```
+
+Numbers from this harness are Chromium numbers; the native WebKit recording
+above remains the release gate.

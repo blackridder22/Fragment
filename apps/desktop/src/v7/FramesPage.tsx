@@ -1,7 +1,10 @@
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { SourceFilter } from "../components/TopCommandBar";
-import type { FragmentFilter } from "../features/filters/filter-model";
+import {
+  activeFilterCount,
+  type FragmentFilter,
+} from "../features/filters/filter-model";
 import type { BrowsingDensity } from "../features/library/BrowsingModeControl";
 import {
   FrameCanvas,
@@ -20,7 +23,11 @@ export type FramesPageProps = FrameGalleryProps & {
   colorResultsChanged?: boolean;
   onRefreshColors?: () => void;
   density?: BrowsingDensity;
+  /** Message shown when a page failed to load; the footer offers a retry. */
+  error?: string | null;
   filter?: FragmentFilter;
+  /** Name of the open Frame for the empty state copy. */
+  frameName?: string | null;
   knownTags?: readonly string[];
   hasMore?: boolean;
   loading?: boolean;
@@ -30,14 +37,22 @@ export type FramesPageProps = FrameGalleryProps & {
   onFilterChange?: (filter: FragmentFilter) => void;
   onPointerDown?: FrameCanvasProps["onPointerDown"];
   onLoadMore?: () => void;
+  onRetry?: () => void;
   onSourceFilterChange?: (filter: SourceFilter) => void;
 };
 
 type PopoverFilter = Exclude<V7FrameFilter, "all">;
 
+type FilterChip = {
+  key: string;
+  label: string;
+  swatch?: string;
+  onClear: () => void;
+};
+
 const FILTERS: Array<{ key: V7FrameFilter; label: string }> = [
-  { key: "all", label: "All Frames" },
-  { key: "fragment", label: "Fragment" },
+  { key: "all", label: "All Fragments" },
+  { key: "fragment", label: "Format" },
   { key: "source", label: "Source" },
   { key: "tags", label: "Tags" },
 ];
@@ -106,12 +121,21 @@ function FilterMenuItem({
   );
 }
 
+function formatLabel(mimeType: string) {
+  return (
+    FORMAT_OPTIONS.find((option) => option.value === mimeType)?.label ??
+    mimeType.replace(/^image\//, "").toUpperCase()
+  );
+}
+
 export function FramesPage({
   paletteIndex,
   colorResultsChanged = false,
   onRefreshColors,
   density = "comfortable",
+  error = null,
   filter = {},
+  frameName,
   hasMore = false,
   knownTags = [],
   loading = false,
@@ -121,25 +145,32 @@ export function FramesPage({
   onFilterChange,
   onLoadMore,
   onPointerDown,
+  onRetry,
   onSourceFilterChange,
   ...galleryProps
 }: FramesPageProps) {
   const [openFilter, setOpenFilter] = useState<PopoverFilter | null>(null);
   const filterGroupRef = useRef<HTMLDivElement>(null);
   const menuIdPrefix = useId();
+  const activeMimeTypes = filter.mimeTypes ?? [];
   const activeMimeType =
-    filter.mimeTypes?.length === 1 ? filter.mimeTypes[0] : "";
+    activeMimeTypes.length === 1 ? activeMimeTypes[0]! : "";
   const activeOrientation = filter.orientation ?? "all";
   const activeTags = filter.tags ?? [];
   const hasFragmentFilter =
-    Boolean(filter.mimeTypes?.length) || activeOrientation !== "all";
+    activeMimeTypes.length > 0 || activeOrientation !== "all";
   const hasSourceFilter =
     sourceFilter !== "all" ||
     Boolean(
       filter.sourceDomain || filter.siteContains || filter.creatorContains,
     );
   const hasTagFilter = activeTags.length > 0;
-  const hasAnyFilter = hasFragmentFilter || hasSourceFilter || hasTagFilter || Boolean(filter.color);
+  const hasAnyFilter =
+    hasFragmentFilter ||
+    hasSourceFilter ||
+    hasTagFilter ||
+    Boolean(filter.color) ||
+    activeFilterCount(filter) > 0;
 
   useEffect(() => {
     if (!openFilter) return;
@@ -188,6 +219,86 @@ export function FramesPage({
     return hasTagFilter;
   }
 
+  const chips: FilterChip[] = [];
+  if (activeMimeType) {
+    chips.push({
+      key: "format",
+      label: formatLabel(activeMimeType),
+      onClear: () => patchFilter({ mimeTypes: [] }),
+    });
+  } else if (activeMimeTypes.length > 1) {
+    chips.push({
+      key: "format",
+      label: activeMimeTypes.map(formatLabel).join(", "),
+      onClear: () => patchFilter({ mimeTypes: [] }),
+    });
+  }
+  if (activeOrientation !== "all") {
+    chips.push({
+      key: "orientation",
+      label:
+        ORIENTATION_OPTIONS.find((option) => option.value === activeOrientation)
+          ?.label ?? activeOrientation,
+      onClear: () => patchFilter({ orientation: "all" }),
+    });
+  }
+  if (sourceFilter !== "all") {
+    chips.push({
+      key: "source",
+      label:
+        SOURCE_OPTIONS.find((option) => option.value === sourceFilter)?.label ??
+        sourceFilter,
+      onClear: () => onSourceFilterChange?.("all"),
+    });
+  }
+  if (filter.sourceDomain) {
+    chips.push({
+      key: "domain",
+      label: `Site: ${filter.sourceDomain}`,
+      onClear: () => patchFilter({ sourceDomain: null }),
+    });
+  }
+  if (filter.siteContains) {
+    chips.push({
+      key: "site",
+      label: `Site contains “${filter.siteContains}”`,
+      onClear: () => patchFilter({ siteContains: null }),
+    });
+  }
+  if (filter.creatorContains) {
+    chips.push({
+      key: "creator",
+      label: `Creator: ${filter.creatorContains}`,
+      onClear: () => patchFilter({ creatorContains: null }),
+    });
+  }
+  for (const tag of activeTags) {
+    chips.push({
+      key: `tag:${tag}`,
+      label: tag,
+      onClear: () =>
+        patchFilter({ tags: activeTags.filter((item) => item !== tag) }),
+    });
+  }
+  if (filter.color) {
+    chips.push({
+      key: "color",
+      label: filter.color.hex,
+      swatch: filter.color.hex,
+      onClear: () => patchFilter({ color: null }),
+    });
+  }
+
+  const resultLabel = `${resultCount.toLocaleString()} ${
+    hasAnyFilter
+      ? resultCount === 1
+        ? "match"
+        : "matches"
+      : resultCount === 1
+        ? "Fragment"
+        : "Fragments"
+  }`;
+
   return (
     <FrameCanvas
       className="v7-frames-page"
@@ -197,7 +308,7 @@ export function FramesPage({
       <div
         className="v7-frame-filters"
         data-canvas-control
-        aria-label="Frame filters"
+        aria-label="Fragment filters"
       >
         <div className="v7-frame-filter-group" ref={filterGroupRef}>
           {FILTERS.map((filterItem) => {
@@ -247,7 +358,7 @@ export function FramesPage({
 
                 {expanded && filterItem.key === "fragment" ? (
                   <div
-                    aria-label="Filter Frames by image properties"
+                    aria-label="Filter Fragments by format and orientation"
                     className="v7-filter-popover"
                     id={menuId}
                     role="menu"
@@ -288,7 +399,7 @@ export function FramesPage({
 
                 {expanded && filterItem.key === "source" ? (
                   <div
-                    aria-label="Filter Frames by source"
+                    aria-label="Filter Fragments by source"
                     className="v7-filter-popover"
                     id={menuId}
                     role="menu"
@@ -313,7 +424,7 @@ export function FramesPage({
 
                 {expanded && filterItem.key === "tags" ? (
                   <div
-                    aria-label="Filter Frames by tags"
+                    aria-label="Filter Fragments by tags"
                     className="v7-filter-popover v7-filter-popover-tags"
                     id={menuId}
                     role="menu"
@@ -338,7 +449,7 @@ export function FramesPage({
                         ))
                       ) : (
                         <span className="v7-filter-menu-empty">
-                          Add tags to Frames to filter them here.
+                          Add tags to Fragments to filter them here.
                         </span>
                       )}
                     </section>
@@ -359,28 +470,94 @@ export function FramesPage({
               </div>
             );
           })}
-          <ColorFilterControl value={filter.color} onChange={(color) => { setOpenFilter(null); patchFilter({ color }); }} />
+          <ColorFilterControl
+            value={filter.color}
+            onChange={(color) => {
+              setOpenFilter(null);
+              patchFilter({ color });
+            }}
+          />
         </div>
 
-        <span className="v7-frame-result-count">
-          {resultCount.toLocaleString()} results
+        <span aria-live="polite" className="v7-frame-result-count">
+          {resultLabel}
         </span>
       </div>
 
-      {filter.color && (Boolean(paletteIndex?.pending) || colorResultsChanged) ? <div className="fragment-index-status" role="status">
-        {paletteIndex?.pending ? <span>Colors are still being extracted · {paletteIndex.ready + paletteIndex.empty} processed, {paletteIndex.pending} remaining</span> : null}
-        {colorResultsChanged ? <><span>More color results available</span><button type="button" onClick={onRefreshColors}>Refresh</button></> : null}
-      </div> : null}
+      {hasAnyFilter ? (
+        <div
+          aria-label="Active filters"
+          className="v7-frame-filter-chips"
+          data-canvas-control
+        >
+          {chips.map((chip) => (
+            <span className="v7-filter-chip" key={chip.key}>
+              {chip.swatch ? (
+                <span
+                  aria-hidden="true"
+                  className="v7-filter-chip-swatch"
+                  style={{ backgroundColor: chip.swatch }}
+                />
+              ) : null}
+              <span>{chip.label}</span>
+              <button
+                aria-label={`Remove filter ${chip.label}`}
+                className="v7-filter-chip-clear"
+                onClick={chip.onClear}
+                type="button"
+              >
+                <X aria-hidden="true" size={12} strokeWidth={2} />
+              </button>
+            </span>
+          ))}
+          <button
+            className="v7-filter-clear-all"
+            onClick={clearAllFilters}
+            type="button"
+          >
+            Clear filters
+          </button>
+        </div>
+      ) : null}
+
+      {filter.color &&
+      (Boolean(paletteIndex?.pending) || colorResultsChanged) ? (
+        <div className="fragment-index-status" role="status">
+          {paletteIndex?.pending ? (
+            <span>
+              Colors are still being extracted ·{" "}
+              {paletteIndex.ready + paletteIndex.empty} processed,{" "}
+              {paletteIndex.pending} remaining
+            </span>
+          ) : null}
+          {colorResultsChanged ? (
+            <>
+              <span>More color results available</span>
+              <button type="button" onClick={onRefreshColors}>
+                Refresh
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       <FrameGallery
         density={density}
+        error={error}
+        frameName={frameName}
+        hasActiveFilters={hasAnyFilter}
+        loading={loading}
+        onClearFilters={clearAllFilters}
+        onRetry={onRetry}
         resultCount={resultCount}
         {...galleryProps}
       />
       <PaginationFooter
+        error={galleryProps.fragments.length > 0 ? error : null}
         hasMore={hasMore}
         loadedCount={galleryProps.fragments.length}
         loading={loading}
         onLoadMore={onLoadMore}
+        onRetry={onRetry}
         totalCount={resultCount}
       />
     </FrameCanvas>

@@ -1,5 +1,8 @@
 import {
+  memo,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -7,11 +10,33 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { Check, ImageOff } from "lucide-react";
 import type { Fragment } from "@fragment/shared";
 import type { AssetSource } from "../lib/assets";
 import type { BrowsingDensity } from "../features/library/BrowsingModeControl";
+import { registerSelectableRects } from "../features/selection/selection-geometry";
+import { GalleryEmptyState } from "./GalleryEmptyState";
+import {
+  columnCountFor,
+  columnWidthFor,
+  gridRowHeightFor,
+  MASONRY_GAP,
+  placeMasonry,
+  type MasonryLayout,
+  type MasonryPlacement,
+} from "./masonry-layout";
+import {
+  measureGalleryTop,
+  toWindow,
+  useGalleryWindow,
+} from "./useGalleryWindow";
+import {
+  scrollTopToReveal,
+  windowRange,
+  windowedIndices,
+} from "./virtual-window";
 import "../styles/v7-gallery.css";
 
 export type V7GalleryLayout = "masonry" | "grid";
@@ -28,9 +53,17 @@ export type FrameGalleryProps = {
   layout: V7GalleryLayout;
   resultCount?: number;
   selectedIds: Set<string>;
+  /** Name of the open Frame, used by the empty state copy. */
+  frameName?: string | null;
+  hasActiveFilters?: boolean;
+  loading?: boolean;
+  /** Message shown when the first page failed to load. */
+  error?: string | null;
   onAssetFallback?: V7AssetFallback;
+  onClearFilters?: () => void;
   onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
   onOpen: (fragment: Fragment) => void;
+  onRetry?: () => void;
   onSelect: (fragment: Fragment, event: MouseEvent<HTMLButtonElement>) => void;
 };
 
@@ -53,21 +86,58 @@ type V7AssetImageProps = {
 type V7FrameCardStyle = CSSProperties & {
   "--v7-card-height"?: string;
   "--v7-card-weight"?: number;
+  "--v7-enter-delay"?: string;
 };
 
 export type V7FrameCardProps = {
   assetSources: AssetSource[];
   className?: string;
+  /** Short boxes keep their title hidden until hovered so the image shows whole. */
+  compact?: boolean;
+  /** Grid cells crop to a uniform box; masonry boxes match the image. */
+  cropped?: boolean;
+  /** Milliseconds to wait before the card fades in after a page append. */
+  enterDelay?: number | null;
   folderName: string;
   fragment: Fragment;
+  index?: number;
   onAssetFallback?: V7AssetFallback;
   onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
   onOpen: (fragment: Fragment) => void;
   onSelect: (fragment: Fragment, event: MouseEvent<HTMLButtonElement>) => void;
   selected: boolean;
+  setSize?: number;
   style?: V7FrameCardStyle;
   variant?: "gallery" | "vault";
 };
+
+type AssetLoadState = "pending" | "loaded" | "instant";
+
+type AppendMarker = {
+  from: number;
+  until: number;
+  length: number;
+  firstId: string | undefined;
+};
+
+/** Column math before measurement; the layout effect corrects it before paint. */
+const ASSUMED_WIDTH = 1072;
+const ENTER_STAGGER_MS = 20;
+const ENTER_STAGGER_CAP = 8;
+const ENTER_WINDOW_MS = 1000;
+/** Below this height the title bar would hide most of the image. */
+const COMPACT_CARD_HEIGHT = 128;
+const EMPTY_INDICES: readonly number[] = [];
+const EMPTY_LAYOUT = placeMasonry([], {
+  mode: "masonry",
+  columnCount: 1,
+  columnWidth: ASSUMED_WIDTH,
+  gap: MASONRY_GAP,
+});
+
+function now() {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
+}
 
 export function FrameCanvas({
   children,
@@ -87,20 +157,7 @@ export function FrameCanvas({
   );
 }
 
-type MasonryItem = {
-  fragment: Fragment;
-  height: number;
-};
-
-const PAPER_MASONRY_HEIGHTS = [
-  [285, 195, 240],
-  [200, 299, 222],
-  [232, 221, 267],
-  [232, 278, 209],
-  [236, 214, 270],
-] as const;
-
-function toneFor(value: string) {
+export function toneFor(value: string) {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
@@ -109,39 +166,35 @@ function toneFor(value: string) {
 }
 
 function titleFor(fragment: Fragment) {
-  return fragment.title?.trim() || "Untitled Frame";
+  return fragment.title?.trim() || "Untitled Fragment";
 }
 
-const MASONRY_COLUMN_COUNTS: Record<BrowsingDensity, number> = {
-  compact: 6,
-  comfortable: 5,
-  large: 4,
-};
+const placementStyles = new WeakMap<MasonryPlacement, V7FrameCardStyle>();
 
-const MASONRY_HEIGHT_SCALE: Record<BrowsingDensity, number> = {
-  compact: 0.78,
-  comfortable: 1,
-  large: 1.24,
-};
-
-function masonryColumns(fragments: Fragment[], density: BrowsingDensity) {
-  const columns: MasonryItem[][] = Array.from(
-    { length: MASONRY_COLUMN_COUNTS[density] },
-    () => [],
-  );
-
-  fragments.forEach((fragment, index) => {
-    const columnIndex = index % columns.length;
-    const rowIndex = Math.floor(index / columns.length);
-    const pattern =
-      PAPER_MASONRY_HEIGHTS[columnIndex % PAPER_MASONRY_HEIGHTS.length];
-    const height = Math.round(
-      pattern[rowIndex % pattern.length] * MASONRY_HEIGHT_SCALE[density],
-    );
-    columns[columnIndex]!.push({ fragment, height });
-  });
-
-  return columns;
+/** Placement objects are reused across appends, so their styles can be too. */
+function placementStyle(
+  placement: MasonryPlacement,
+  mode: V7GalleryLayout,
+): V7FrameCardStyle {
+  let style = placementStyles.get(placement);
+  if (!style) {
+    style =
+      mode === "grid"
+        ? {
+            left: placement.left,
+            top: placement.top,
+            width: placement.width,
+            height: placement.height,
+          }
+        : {
+            left: placement.left,
+            top: placement.top,
+            width: placement.width,
+            aspectRatio: `${placement.ratio}`,
+          };
+    placementStyles.set(placement, style);
+  }
+  return style;
 }
 
 export function V7AssetImage({
@@ -155,19 +208,33 @@ export function V7AssetImage({
   const [sourceIndex, setSourceIndex] = useState(0);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(assetSources.length === 0);
+  const [loadState, setLoadState] = useState<AssetLoadState>("pending");
+  const imageRef = useRef<HTMLImageElement>(null);
   const attemptedFallbacks = useRef(new Set<string>());
   const assetKey = assetSources
     .map((source) => `${source.url}:${source.relativePath ?? ""}`)
     .join("\u0000");
-  const source = assetSources[sourceIndex];
-  const displayUrl = fallbackUrl ?? source?.url ?? "";
+  const resetKey = `${fragment.id}\u0001${assetKey}`;
+  const [appliedKey, setAppliedKey] = useState(resetKey);
 
-  useEffect(() => {
+  if (appliedKey !== resetKey) {
+    setAppliedKey(resetKey);
     setSourceIndex(0);
     setFallbackUrl(null);
     setFailed(assetSources.length === 0);
+    setLoadState("pending");
     attemptedFallbacks.current.clear();
-  }, [assetKey, assetSources.length, fragment.id]);
+  }
+
+  const source = assetSources[sourceIndex];
+  const displayUrl = fallbackUrl ?? source?.url ?? "";
+
+  useLayoutEffect(() => {
+    const image = imageRef.current;
+    if (image && image.complete && image.naturalWidth > 0) {
+      setLoadState("instant");
+    }
+  }, [displayUrl]);
 
   async function handleError() {
     const relativePath = source?.relativePath;
@@ -213,40 +280,62 @@ export function V7AssetImage({
       alt={decorative ? "" : titleFor(fragment)}
       aria-hidden={decorative || undefined}
       className={className}
+      data-loaded={loadState}
       decoding="async"
       draggable={false}
       loading="lazy"
       onError={() => void handleError()}
+      onLoad={() =>
+        setLoadState((current) => (current === "instant" ? current : "loaded"))
+      }
+      ref={imageRef}
       src={displayUrl}
     />
   );
 }
 
-export function V7FrameCard({
+export const V7FrameCard = memo(function V7FrameCard({
   assetSources,
   className = "",
+  compact = false,
+  cropped = false,
+  enterDelay,
   folderName,
   fragment,
+  index,
   onAssetFallback,
   onContextMenu,
   onOpen,
   onSelect,
   selected,
+  setSize,
   style,
   variant = "gallery",
 }: V7FrameCardProps) {
   const title = titleFor(fragment);
+  const cardStyle: V7FrameCardStyle | undefined =
+    enterDelay === null || enterDelay === undefined
+      ? style
+      : { ...style, "--v7-enter-delay": `${enterDelay}ms` };
 
   return (
     <article
       aria-label={`${title} in ${folderName}`}
+      aria-posinset={index === undefined ? undefined : index + 1}
+      aria-setsize={index === undefined ? undefined : setSize}
       className={`fragment-card v7-frame-card ${className}`.trim()}
+      data-compact={compact || undefined}
+      data-cropped={cropped || undefined}
+      data-enter={
+        enterDelay === null || enterDelay === undefined ? undefined : "true"
+      }
       data-fragment-id={fragment.id}
       data-selected={selected}
       data-tone={toneFor(fragment.id)}
       data-variant={variant}
       onContextMenu={(event) => onContextMenu(fragment, event)}
-      style={style}
+      role={index === undefined ? undefined : "listitem"}
+      style={cardStyle}
     >
       <button
         aria-label={`${selected ? "Selected: " : ""}${title}. Click to preview; Shift-click to ${selected ? "deselect" : "select"}.`}
@@ -267,6 +356,11 @@ export function V7FrameCard({
             onOpen(fragment);
           }
         }}
+        title={
+          cropped
+            ? "Cropped to fit the grid. Open the Fragment to see it whole."
+            : undefined
+        }
         type="button"
       >
         <V7AssetImage
@@ -287,81 +381,233 @@ export function V7FrameCard({
       </button>
     </article>
   );
-}
+});
 
 export function FrameGallery({
   fragments,
   assetSourcesFor,
   density = "comfortable",
   folderNameFor,
-  layout,
+  layout: mode,
   resultCount,
   selectedIds,
+  frameName,
+  hasActiveFilters = false,
+  loading = false,
+  error = null,
   onAssetFallback,
+  onClearFilters,
   onContextMenu,
   onOpen,
+  onRetry,
   onSelect,
 }: FrameGalleryProps) {
-  const columns = useMemo(
-    () => masonryColumns(fragments, density),
-    [density, fragments],
+  const galleryRef = useRef<HTMLDivElement>(null);
+  const layoutRef = useRef<MasonryLayout>(EMPTY_LAYOUT);
+  const mountedRef = useRef<readonly number[]>(EMPTY_INDICES);
+  const previousLayoutRef = useRef<MasonryLayout | null>(null);
+  const hasItems = fragments.length > 0;
+  const { metrics, container } = useGalleryWindow(
+    galleryRef,
+    layoutRef,
+    mountedRef,
+    hasItems,
   );
+
+  const width = metrics.width > 0 ? metrics.width : ASSUMED_WIDTH;
+  const columnCount = columnCountFor(width, density);
+  const columnWidth = columnWidthFor(width, columnCount);
+  const rowHeight = gridRowHeightFor(density);
+
+  const masonry = useMemo(() => {
+    const next = placeMasonry(
+      fragments,
+      {
+        mode,
+        columnCount,
+        columnWidth,
+        gap: MASONRY_GAP,
+        rowHeight: mode === "grid" ? rowHeight : undefined,
+      },
+      previousLayoutRef.current,
+    );
+    previousLayoutRef.current = next;
+    return next;
+  }, [columnCount, columnWidth, fragments, mode, rowHeight]);
+
+  const mounted = useMemo(
+    () => windowedIndices(masonry.items, windowRange(toWindow(metrics))),
+    [masonry, metrics],
+  );
+
+  useLayoutEffect(() => {
+    layoutRef.current = masonry;
+  }, [masonry]);
+
+  useLayoutEffect(() => {
+    mountedRef.current = mounted;
+  }, [mounted]);
+
+  // Newly appended page items fade in with a short stagger; nothing else moves.
+  const [appendMarker, setAppendMarker] = useState<AppendMarker>({
+    from: Number.POSITIVE_INFINITY,
+    until: 0,
+    length: fragments.length,
+    firstId: fragments[0]?.id,
+  });
+  if (
+    appendMarker.length !== fragments.length ||
+    appendMarker.firstId !== fragments[0]?.id
+  ) {
+    const appended =
+      fragments.length > appendMarker.length &&
+      appendMarker.length > 0 &&
+      fragments[0]?.id === appendMarker.firstId;
+    setAppendMarker({
+      from: appended ? appendMarker.length : Number.POSITIVE_INFINITY,
+      until: appended ? now() + ENTER_WINDOW_MS : 0,
+      length: fragments.length,
+      firstId: fragments[0]?.id,
+    });
+  }
+
+  // Cards are memoized: callbacks and asset source arrays keep their identity.
+  const handlers = useRef({ onAssetFallback, onContextMenu, onOpen, onSelect });
+  useLayoutEffect(() => {
+    handlers.current = { onAssetFallback, onContextMenu, onOpen, onSelect };
+  });
+  const handleOpen = useCallback(
+    (fragment: Fragment) => handlers.current.onOpen(fragment),
+    [],
+  );
+  const handleSelect = useCallback(
+    (fragment: Fragment, event: MouseEvent<HTMLButtonElement>) =>
+      handlers.current.onSelect(fragment, event),
+    [],
+  );
+  const handleContextMenu = useCallback(
+    (fragment: Fragment, event: MouseEvent<HTMLElement>) =>
+      handlers.current.onContextMenu(fragment, event),
+    [],
+  );
+  const handleAssetFallback = useCallback(
+    (relativePath: string) =>
+      handlers.current.onAssetFallback?.(relativePath) ?? Promise.resolve(null),
+    [],
+  );
+
+  const sourcesCache = useRef(
+    new Map<string, { signature: string; sources: AssetSource[] }>(),
+  );
+  useEffect(() => {
+    const ids = new Set(fragments.map((fragment) => fragment.id));
+    for (const id of sourcesCache.current.keys()) {
+      if (!ids.has(id)) sourcesCache.current.delete(id);
+    }
+  }, [fragments]);
+  const stableSourcesFor = (fragment: Fragment): AssetSource[] => {
+    const sources = assetSourcesFor(fragment);
+    const signature = sources
+      .map((source) => `${source.url}\u0000${source.relativePath ?? ""}`)
+      .join("\u0001");
+    const cached = sourcesCache.current.get(fragment.id);
+    if (cached && cached.signature === signature) {
+      return cached.sources;
+    }
+    sourcesCache.current.set(fragment.id, { signature, sources });
+    return sources;
+  };
+
+  // The marquee reads geometry from here so unmounted cards stay selectable.
+  useEffect(() => {
+    const gallery = galleryRef.current;
+    if (!container || !gallery) return;
+    return registerSelectableRects(container, () => {
+      const rect = gallery.getBoundingClientRect();
+      return layoutRef.current.items.map((placement) => ({
+        id: placement.id,
+        left: rect.left + placement.left,
+        right: rect.left + placement.left + placement.width,
+        top: rect.top + placement.top,
+        bottom: rect.top + placement.top + placement.height,
+      }));
+    });
+  }, [container]);
+
+  // Keyboard navigation can select a card that is not mounted; bring it into view.
+  useEffect(() => {
+    const gallery = galleryRef.current;
+    if (!container || !gallery || selectedIds.size !== 1) return;
+    const id = selectedIds.values().next().value;
+    const placement = layoutRef.current.items.find((item) => item.id === id);
+    if (!placement || mountedRef.current.includes(placement.index)) return;
+    const top = scrollTopToReveal(placement, {
+      scrollTop: container.scrollTop,
+      viewportHeight: container.clientHeight,
+      galleryTop: measureGalleryTop(gallery, container),
+    });
+    if (top !== null) {
+      container.scrollTo({ top, behavior: "auto" });
+    }
+  }, [container, selectedIds]);
+
   const accessibleCount = resultCount ?? fragments.length;
 
-  if (fragments.length === 0) {
+  if (!hasItems) {
     return (
-      <div className="v7-gallery-empty" role="status">
-        <ImageOff aria-hidden="true" size={24} />
-        <strong>No Frames yet</strong>
-        <span>Import an image or save one from Capture Mode.</span>
-      </div>
+      <GalleryEmptyState
+        error={error}
+        frameName={frameName}
+        hasActiveFilters={hasActiveFilters}
+        loading={loading}
+        onClearFilters={onClearFilters}
+        onRetry={onRetry}
+      />
     );
   }
 
+  const enterActive = appendMarker.until > now();
+
   return (
     <div
-      aria-label={`${accessibleCount.toLocaleString()} Frames`}
+      aria-label={`${accessibleCount.toLocaleString()} Fragments`}
       className="v7-frame-gallery"
       data-density={density}
-      data-layout={layout}
+      data-layout={mode}
+      data-virtual="true"
+      ref={galleryRef}
       role="list"
+      style={{ height: masonry.height }}
     >
-      {layout === "masonry"
-        ? columns.map((column, columnIndex) => (
-            <div
-              className="v7-masonry-column"
-              key={`column-${columnIndex}`}
-              role="presentation"
-            >
-              {column.map(({ fragment, height }) => (
-                <V7FrameCard
-                  assetSources={assetSourcesFor(fragment)}
-                  folderName={folderNameFor(fragment)}
-                  fragment={fragment}
-                  key={fragment.id}
-                  onAssetFallback={onAssetFallback}
-                  onContextMenu={onContextMenu}
-                  onOpen={onOpen}
-                  onSelect={onSelect}
-                  selected={selectedIds.has(fragment.id)}
-                  style={{ "--v7-card-height": `${height}px` }}
-                />
-              ))}
-            </div>
-          ))
-        : fragments.map((fragment) => (
-            <V7FrameCard
-              assetSources={assetSourcesFor(fragment)}
-              folderName={folderNameFor(fragment)}
-              fragment={fragment}
-              key={fragment.id}
-              onAssetFallback={onAssetFallback}
-              onContextMenu={onContextMenu}
-              onOpen={onOpen}
-              onSelect={onSelect}
-              selected={selectedIds.has(fragment.id)}
-            />
-          ))}
+      {mounted.map((index) => {
+        const placement = masonry.items[index];
+        const fragment = fragments[index];
+        if (!placement || !fragment) return null;
+        const enterDelay =
+          enterActive && index >= appendMarker.from
+            ? Math.min(index - appendMarker.from, ENTER_STAGGER_CAP - 1) *
+              ENTER_STAGGER_MS
+            : undefined;
+        return (
+          <V7FrameCard
+            assetSources={stableSourcesFor(fragment)}
+            compact={placement.height < COMPACT_CARD_HEIGHT}
+            cropped={mode === "grid"}
+            enterDelay={enterDelay}
+            folderName={folderNameFor(fragment)}
+            fragment={fragment}
+            index={index}
+            key={fragment.id}
+            onAssetFallback={onAssetFallback ? handleAssetFallback : undefined}
+            onContextMenu={handleContextMenu}
+            onOpen={handleOpen}
+            onSelect={handleSelect}
+            selected={selectedIds.has(fragment.id)}
+            setSize={fragments.length}
+            style={placementStyle(placement, mode)}
+          />
+        );
+      })}
     </div>
   );
 }

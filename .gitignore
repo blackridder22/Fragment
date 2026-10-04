@@ -21,3 +21,6 @@ tmp/
 apps/landing/downloads/*.dmg
 apps/landing/downloads/*.zip
 apps/landing/qa/
+
+# Generated thumbnails for the gallery QA harness (scripts/qa/gallery-harness-thumbs.py)
+apps/desktop/qa/thumbs/

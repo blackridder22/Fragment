@@ -21,7 +21,7 @@ describe("PaginationFooter", () => {
       />,
     );
 
-    expect(markup).toContain("Showing 60 of 286 Frames");
+    expect(markup).toContain("Showing 60 of 286 Fragments");
     expect(markup).toContain("Load more");
     expect(markup).not.toContain("disabled");
   });
@@ -40,5 +40,24 @@ describe("PaginationFooter", () => {
     expect(markup).toContain('aria-busy="true"');
     expect(markup).toContain("Loading…");
     expect(markup).toContain("disabled");
+  });
+
+  it("offers a retry instead of auto-loading after a page failure", () => {
+    const markup = renderToStaticMarkup(
+      <PaginationFooter
+        error="The library is busy"
+        hasMore
+        loadedCount={120}
+        onLoadMore={vi.fn()}
+        onRetry={vi.fn()}
+        totalCount={1000}
+      />,
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("Couldn’t load more Fragments");
+    expect(markup).toContain("Showing 120 of 1,000 Fragments");
+    expect(markup).toContain(">Retry</span>");
+    expect(markup).not.toContain("v7-pagination-sentinel");
   });
 });
