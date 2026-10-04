@@ -220,6 +220,71 @@ mod tests {
         assert!(needs_preview(ImageFormat::Ico, 32, 32));
     }
 
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/media")
+            .join(name)
+    }
+
+    #[test]
+    fn imported_transparent_fixtures_keep_pixel_alpha_in_their_webp_thumbnails() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let core = crate::FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let decode = |name: &str| {
+            let fragment = core
+                .import_image(None, fixture(name).to_string_lossy().into_owned(), None)
+                .expect("import");
+            assert!(fragment.thumbnail_path.ends_with(".webp"), "{name}");
+            // 640 px and browser-displayable: the original stands in for the preview.
+            assert_eq!(
+                fragment.preview_path.as_deref(),
+                Some(fragment.original_path.as_str())
+            );
+            let bytes = std::fs::read(
+                core.paths()
+                    .resolve_relative_path(&fragment.thumbnail_path)
+                    .expect("resolve"),
+            )
+            .expect("read thumbnail");
+            assert_eq!(
+                image::guess_format(&bytes).expect("format"),
+                ImageFormat::WebP
+            );
+            image::load_from_memory(&bytes).expect("decode").to_rgba8()
+        };
+
+        // transparent-logo.png: 640x320, fully transparent corners, 50% alpha centre.
+        let logo = decode("transparent-logo.png");
+        assert_eq!(logo.dimensions(), (640, 320));
+        for (x, y) in [
+            (0, 0),
+            (639, 0),
+            (0, 319),
+            (639, 319),
+            (160, 160),
+            (480, 160),
+        ] {
+            assert_eq!(
+                logo.get_pixel(x, y)[3],
+                0,
+                "corner/side ({x},{y}) stays transparent"
+            );
+        }
+        let centre = logo.get_pixel(320, 160)[3];
+        assert!(
+            (127..=128).contains(&centre),
+            "centre alpha {centre} should stay ~50%"
+        );
+
+        // transparent.png: 320x320, every pixel alpha 0; upscaled to the 640 px thumbnail.
+        let blank = decode("transparent.png");
+        assert_eq!(blank.dimensions(), (640, 640));
+        assert!(
+            blank.pixels().all(|p| p[3] == 0),
+            "fully transparent source stays transparent"
+        );
+    }
+
     #[test]
     fn transparency_detection_ignores_opaque_alpha_channels() {
         assert!(!has_transparency(&checkerboard(8, 8, u8::MAX)));
