@@ -6,7 +6,9 @@ import {
   marqueeRectFromPoints,
   selectionAfterEmptyCanvasClick,
   type MarqueeRect,
+  type SelectableRect,
 } from "./marquee-geometry";
+import { selectableRectsFor } from "./selection-geometry";
 
 export type { MarqueeRect } from "./marquee-geometry";
 
@@ -35,6 +37,24 @@ type MarqueePress = {
 const MARQUEE_THRESHOLD = 5;
 const EDGE_ZONE = 48;
 const MAX_SCROLL_STEP = 18;
+
+/** Mounted cards in visual order; the fallback when no gallery registers its layout. */
+function mountedCardRects(container: HTMLElement): SelectableRect[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(".fragment-card[data-fragment-id]"),
+  )
+    .map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        id: element.dataset.fragmentId ?? "",
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+        bottom: bounds.bottom,
+      };
+    })
+    .sort((left, right) => left.top - right.top || left.left - right.left);
+}
 
 export function useMarqueeSelection({
   matchingIds,
@@ -102,23 +122,11 @@ export function useMarqueeSelection({
     setRect(nextRect);
 
     const matching = new Set(matchingIds);
-    const cards = Array.from(
-      press.container.querySelectorAll<HTMLElement>(
-        ".fragment-card[data-fragment-id]",
-      ),
-    )
-      .map((element) => {
-        const bounds = element.getBoundingClientRect();
-        return {
-          id: element.dataset.fragmentId ?? "",
-          left: bounds.left,
-          right: bounds.right,
-          top: bounds.top,
-          bottom: bounds.bottom,
-        };
-      })
-      .filter((card) => card.id && matching.has(card.id))
-      .sort((left, right) => left.top - right.top || left.left - right.left);
+    // A virtualized gallery registers rects for every card, mounted or not;
+    // otherwise only the cards in the DOM can be hit.
+    const cards = (
+      selectableRectsFor(press.container) ?? mountedCardRects(press.container)
+    ).filter((card) => card.id && matching.has(card.id));
     const cardVisualOrder = cards.map((card) => card.id);
     const selectionOrder = Array.from(
       new Set([

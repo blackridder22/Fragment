@@ -1,27 +1,33 @@
-import { ChevronDown, LoaderCircle } from "lucide-react";
+import { ChevronDown, LoaderCircle, RefreshCw } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export type PaginationFooterProps = {
+  /** Message shown when the next page failed to load. */
+  error?: string | null;
   hasMore?: boolean;
   loadedCount: number;
   loading?: boolean;
   noun?: string;
   onLoadMore?: () => void;
+  onRetry?: () => void;
   totalCount?: number;
 };
 
 export function PaginationFooter({
+  error = null,
   hasMore = false,
   loadedCount,
   loading = false,
-  noun = "Frames",
+  noun = "Fragments",
   onLoadMore,
+  onRetry,
   totalCount,
 }: PaginationFooterProps) {
   const sentinelRef = useRef<HTMLSpanElement>(null);
-  const canLoadMore = hasMore && Boolean(onLoadMore);
+  const canLoadMore = hasMore && Boolean(onLoadMore) && !error;
   const normalizedTotal = Math.max(loadedCount, totalCount ?? loadedCount);
-  const shouldRender = Boolean(onLoadMore) && (hasMore || loading);
+  const shouldRender =
+    Boolean(onLoadMore) && (hasMore || loading || Boolean(error));
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -48,6 +54,31 @@ export function PaginationFooter({
   if (!shouldRender) return null;
 
   const progressLabel = `Showing ${loadedCount.toLocaleString()} of ${normalizedTotal.toLocaleString()} ${noun}`;
+
+  if (error && !loading) {
+    const retry = onRetry ?? onLoadMore;
+    return (
+      <div
+        className="v7-pagination-footer"
+        data-canvas-control
+        data-state="error"
+        role="alert"
+      >
+        <span className="v7-pagination-progress">
+          Couldn’t load more {noun}. {progressLabel}.
+        </span>
+        <button
+          aria-label={`Retry loading more ${noun}`}
+          className="v7-pagination-button"
+          onClick={retry}
+          type="button"
+        >
+          <RefreshCw aria-hidden="true" size={14} strokeWidth={1.8} />
+          <span>Retry</span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
