@@ -1,26 +1,12 @@
 .v7-trash-page,
 .v7-settings-page {
-  --v7-canvas: var(--color-canvas, #080a0a);
-  --v7-canvas-soft: var(--color-canvas-soft, #111413);
-  --v7-surface: var(--color-surface, rgb(26 29 27 / 74%));
-  --v7-surface-strong: var(--color-surface-strong, rgb(32 36 33 / 94%));
-  --v7-surface-hover: var(--color-surface-hover, rgb(44 50 46 / 90%));
-  --v7-border: var(--color-border, rgb(255 255 255 / 10.5%));
-  --v7-border-strong: var(--color-border-strong, rgb(255 255 255 / 18%));
-  --v7-text: var(--color-text, #f4f7f2);
-  --v7-text-muted: var(--color-text-muted, #b3bab0);
-  --v7-text-faint: var(--color-text-faint, #7f887f);
-  --v7-focus: var(--color-focus, #89f7ff);
-  --v7-primary: var(--color-primary, #79e1a2);
-  --v7-on-primary: var(--color-on-primary, #061b11);
-  --v7-danger: var(--color-danger, #f27b72);
   background: var(--v7-canvas);
   color: var(--v7-text);
   container-type: inline-size;
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 20px;
   min-height: 0;
@@ -90,7 +76,7 @@
 .v7-settings-title-stack h1,
 .v7-settings-heading h2 {
   color: var(--v7-text);
-  font-family: var(--font-display, "SF Pro Display", system-ui, sans-serif);
+  font-family: var(--font-display);
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -144,7 +130,9 @@
 .v7-trash-sort summary:hover,
 .v7-trash-sort[open] summary,
 .v7-trash-page-actions .fragment-color-control > .v7-filter-pill:hover,
-.v7-trash-page-actions .fragment-color-control > .v7-filter-pill[data-expanded="true"] {
+.v7-trash-page-actions
+  .fragment-color-control
+  > .v7-filter-pill[data-expanded="true"] {
   background: var(--v7-surface);
   border-color: var(--v7-border-strong);
 }
@@ -355,7 +343,7 @@
 .v7-trash-item-row {
   border-bottom: 1px solid var(--v7-border);
   height: 82px;
-  transition: background-color 120ms ease;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .v7-trash-item-row:last-child {
@@ -470,18 +458,18 @@
   padding-inline: 10px;
   text-align: center;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 80ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   width: 72px;
 }
 
 .v7-trash-restore:hover:not(:disabled) {
   background: var(--v7-surface-hover);
   border-color: rgb(121 225 162 / 42%);
-  color: var(--color-primary-strong, #b3ffc9);
+  color: var(--color-primary-strong);
 }
 
 .v7-trash-restore:active:not(:disabled) {
@@ -521,7 +509,7 @@
 }
 
 .v7-trash-spinner {
-  animation: v7-spin 800ms linear infinite;
+  animation: v7-spin var(--dur-spin) linear infinite;
   border: 2px solid var(--v7-border-strong);
   border-radius: 999px;
   border-top-color: var(--v7-primary);
@@ -533,119 +521,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-.v7-undo-toast {
-  align-items: center;
-  background: var(--color-surface-strong, rgb(32 36 33 / 98%));
-  border: 1px solid var(--color-border-strong, rgb(255 255 255 / 18%));
-  border-radius: 14px;
-  bottom: 24px;
-  box-shadow: 0 18px 48px rgb(0 0 0 / 46%);
-  color: var(--color-text, #f4f7f2);
-  display: flex;
-  gap: 8px;
-  min-height: 52px;
-  max-width: min(460px, calc(100vw - 48px));
-  padding: 8px;
-  position: fixed;
-  right: 24px;
-  z-index: 160;
-}
-
-.v7-undo-toast[data-pending="true"] {
-  border-color: rgb(121 225 162 / 34%);
-}
-
-.v7-undo-icon {
-  align-items: center;
-  background: rgb(242 123 114 / 10%);
-  border: 1px solid rgb(242 123 114 / 18%);
-  border-radius: 8px;
-  color: var(--color-danger, #f27b72);
-  display: inline-flex;
-  flex: 0 0 32px;
-  height: 32px;
-  justify-content: center;
-  width: 32px;
-}
-
-.v7-undo-toast > strong {
-  color: var(--color-text, #f4f7f2);
-  flex: 1 1 auto;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 20px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v7-undo-action,
-.v7-undo-dismiss {
-  align-items: center;
-  background: transparent;
-  border: 1px solid var(--color-border, rgb(255 255 255 / 10.5%));
-  border-radius: 8px;
-  box-shadow: none;
-  color: var(--color-text-muted, #b3bab0);
-  cursor: pointer;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 32px;
-  justify-content: center;
-  transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease,
-    transform 80ms ease;
-}
-
-.v7-undo-action {
-  gap: 6px;
-  padding-inline: 11px;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 20px;
-}
-
-.v7-undo-action svg {
-  color: var(--color-primary, #79e1a2);
-}
-
-.v7-undo-pending-icon {
-  animation: v7-spin 720ms linear infinite;
-}
-
-.v7-undo-dismiss {
-  padding: 0;
-  width: 32px;
-}
-
-.v7-undo-action:hover:not(:disabled),
-.v7-undo-dismiss:hover:not(:disabled) {
-  background: var(--color-surface-hover, rgb(44 50 46 / 90%));
-  border-color: var(--color-border-strong, rgb(255 255 255 / 18%));
-  color: var(--color-text, #f4f7f2);
-}
-
-.v7-undo-action:active:not(:disabled),
-.v7-undo-dismiss:active:not(:disabled) {
-  background: var(--color-surface, rgb(26 29 27 / 74%));
-  transform: translateY(1px);
-}
-
-.v7-undo-action:focus-visible,
-.v7-undo-dismiss:focus-visible {
-  outline: 2px solid var(--color-focus, #89f7ff);
-  outline-offset: 2px;
-}
-
-.v7-undo-action:disabled,
-.v7-undo-dismiss:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
 }
 
 .v7-settings-reset {
@@ -904,7 +779,7 @@
   height: 22px;
   justify-content: flex-start;
   padding: 2px;
-  transition: background-color 120ms ease;
+  transition: background-color var(--dur-fast) var(--ease-out);
   width: 38px;
 }
 
@@ -919,8 +794,8 @@
   display: block;
   height: 18px;
   transition:
-    background-color 120ms ease,
-    transform 120ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   width: 18px;
 }
 
@@ -1001,28 +876,13 @@ button.v7-settings-status:hover:not(:disabled) {
 }
 
 .v7-settings-status-spinner {
-  animation: v7-settings-status-spin 800ms linear infinite;
+  animation: v7-settings-status-spin var(--dur-spin) linear infinite;
 }
 
 @keyframes v7-settings-status-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-.v7-settings-shortcut {
-  background: var(--v7-surface-strong);
-  border: 1px solid var(--v7-border);
-  border-bottom-color: var(--v7-border-strong);
-  border-radius: 6px;
-  color: var(--v7-text-muted);
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  min-width: 42px;
-  padding: 4px 8px;
-  text-align: center;
 }
 
 .v7-settings-shortcut-editor {
@@ -1045,7 +905,7 @@ button.v7-settings-status:hover:not(:disabled) {
   cursor: default;
   display: inline-flex;
   flex: 0 0 auto;
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   height: 30px;
@@ -1054,11 +914,11 @@ button.v7-settings-status:hover:not(:disabled) {
   min-width: 104px;
   padding-inline: 10px;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 80ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   white-space: nowrap;
 }
 
@@ -1121,9 +981,9 @@ button.v7-settings-status:hover:not(:disabled) {
   justify-content: center;
   padding: 0;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
   width: 28px;
 }
 
@@ -1233,22 +1093,5 @@ button.v7-settings-status:hover:not(:disabled) {
   .v7-settings-shortcut-error {
     max-width: none;
     text-align: left;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .v7-trash-spinner {
-    animation: none;
-  }
-
-  .v7-trash-item-row,
-  .v7-trash-restore,
-  .v7-undo-action,
-  .v7-undo-dismiss,
-  .v7-settings-shortcut-control,
-  .v7-settings-shortcut-reset,
-  .v7-settings-switch,
-  .v7-settings-switch > span {
-    transition: none;
   }
 }

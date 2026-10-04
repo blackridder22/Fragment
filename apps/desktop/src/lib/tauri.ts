@@ -1,4 +1,8 @@
-import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
+import {
+  Channel,
+  convertFileSrc,
+  invoke as tauriInvoke,
+} from "@tauri-apps/api/core";
 import type {
   Fragment,
   Frame,
@@ -11,6 +15,10 @@ import type {
   FragmentFilter,
   SmartFrame,
 } from "../features/filters/filter-model";
+import { instrumentInvoke } from "./perf";
+
+/** Tauri `invoke`, counted and timed when the dev perf flag is on. */
+const invoke = instrumentInvoke(tauriInvoke);
 
 export type LibrarySnapshot = {
   defaultFrame: Frame;

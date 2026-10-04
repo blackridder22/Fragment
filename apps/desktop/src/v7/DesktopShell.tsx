@@ -25,10 +25,11 @@ import type { Frame } from "@fragment/shared";
 import type {
   BrowsingDensity,
   BrowsingLayout,
-} from "../features/library/BrowsingModeControl";
-import type { SortMode } from "../components/TopCommandBar";
+  LibraryView,
+  SortMode,
+} from "../store/library-types";
 
-export type V7View = "home" | "frames" | "trash" | "settings";
+export type V7View = LibraryView;
 
 type DesktopShellProps = {
   activeView: V7View;
@@ -36,7 +37,8 @@ type DesktopShellProps = {
   expandedIds: ReadonlySet<string>;
   frameCounts: ReadonlyMap<string, number>;
   frames: Frame[];
-  frameTotal: number;
+  /** Fragments in the whole Vault, shown next to "All Fragments". */
+  fragmentTotal: number;
   pageActions?: ReactNode;
   pageSubtitle: string;
   pageTitle: string;
@@ -44,15 +46,15 @@ type DesktopShellProps = {
   query: string;
   searchShortcutLabel?: string;
   selectedFrameId: string | null;
-  showFragmentTree: boolean;
+  showFrameTree: boolean;
   showMockWindowControls: boolean;
   dropTarget?: string | null;
   trashDropState?: "idle" | "armed" | "success";
   trashTotal: number;
   onBack: () => void;
-  onCreateFragment: (parentId: string | null) => void;
+  onCreateFrame: (parentId: string | null) => void;
   onForward?: () => void;
-  onImportFrames: () => void;
+  onImportFragments: () => void;
   onPointerDown?: (event: PointerEvent<HTMLElement>) => void;
   onQueryChange: (query: string) => void;
   onSelectFrame: (frameId: string | null) => void;
@@ -66,7 +68,7 @@ export function DesktopShell({
   expandedIds,
   frameCounts,
   frames,
-  frameTotal,
+  fragmentTotal,
   pageActions,
   pageSubtitle,
   pageTitle,
@@ -74,15 +76,15 @@ export function DesktopShell({
   query,
   searchShortcutLabel = "⌘ K",
   selectedFrameId,
-  showFragmentTree,
+  showFrameTree,
   showMockWindowControls,
   dropTarget = null,
   trashDropState = "idle",
   trashTotal,
   onBack,
-  onCreateFragment,
+  onCreateFrame,
   onForward,
-  onImportFrames,
+  onImportFragments,
   onPointerDown,
   onQueryChange,
   onSelectFrame,
@@ -157,7 +159,7 @@ export function DesktopShell({
                   <button
                     onClick={() => {
                       setAddOpen(false);
-                      onCreateFragment(selectedFrameId);
+                      onCreateFrame(selectedFrameId);
                     }}
                     role="menuitem"
                     type="button"
@@ -166,14 +168,14 @@ export function DesktopShell({
                       <FolderPlus size={16} />
                     </span>
                     <span>
-                      <strong>New Fragment</strong>
-                      <small>Create a folder for Frames</small>
+                      <strong>New Frame</strong>
+                      <small>A collection for your Fragments</small>
                     </span>
                   </button>
                   <button
                     onClick={() => {
                       setAddOpen(false);
-                      onImportFrames();
+                      onImportFragments();
                     }}
                     role="menuitem"
                     type="button"
@@ -182,7 +184,7 @@ export function DesktopShell({
                       <Images size={16} />
                     </span>
                     <span>
-                      <strong>Import Frames</strong>
+                      <strong>Import Fragments</strong>
                       <small>Add images from this Mac</small>
                     </span>
                   </button>
@@ -206,9 +208,9 @@ export function DesktopShell({
             />
             <SidebarNavRow
               active={activeView === "frames"}
-              count={frameTotal}
+              count={fragmentTotal}
               icon={<Images aria-hidden="true" size={16} strokeWidth={1.7} />}
-              label="Frames"
+              label="All Fragments"
               onClick={() => onViewChange("frames")}
             />
             <SidebarNavRow
@@ -228,13 +230,13 @@ export function DesktopShell({
             />
           </nav>
 
-          {showFragmentTree ? (
-            <section className="v7-fragment-nav" aria-label="Fragments">
+          {showFrameTree ? (
+            <section className="v7-fragment-nav" aria-label="Frames">
               <header>
-                <span>Fragments</span>
+                <span>Frames</span>
                 <button
-                  aria-label="New Fragment"
-                  onClick={() => onCreateFragment(null)}
+                  aria-label="New Frame"
+                  onClick={() => onCreateFrame(null)}
                   type="button"
                 >
                   <Plus aria-hidden="true" size={13} strokeWidth={1.5} />
@@ -413,7 +415,11 @@ export function LibraryToolbar({
           value={densityIndex}
         />
       </label>
-      <div className="v7-layout-switch" aria-label="Frame layout" role="group">
+      <div
+        className="v7-layout-switch"
+        aria-label="Fragment layout"
+        role="group"
+      >
         <button
           aria-label="Masonry view"
           aria-pressed={layout !== "grid"}

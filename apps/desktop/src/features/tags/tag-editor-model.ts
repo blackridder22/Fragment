@@ -55,7 +55,7 @@ export function tagValidationError(
     return null;
   }
   if (normalized.length >= MAX_TAGS_PER_FRAGMENT) {
-    return `A Frame can have up to ${MAX_TAGS_PER_FRAGMENT} tags.`;
+    return `A Fragment can have up to ${MAX_TAGS_PER_FRAGMENT} tags.`;
   }
 
   return null;

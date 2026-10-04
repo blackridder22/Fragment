@@ -72,7 +72,7 @@ describe("tagValidationError", () => {
         Array.from({ length: 32 }, (_, index) => `Tag ${index}`),
         "One more",
       ),
-    ).toBe("A Frame can have up to 32 tags.");
+    ).toBe("A Fragment can have up to 32 tags.");
   });
 
   it("counts Unicode code points and accepts an existing tag", () => {

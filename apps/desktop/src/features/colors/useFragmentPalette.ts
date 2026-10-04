@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { FragmentPalette, PaletteIndexStatus } from "@fragment/shared";
+import type { FragmentPalette } from "@fragment/shared";
 import {
   getFragmentPalette,
-  getPaletteIndexStatus,
   isTauriRuntime,
   retryFragmentPalette,
-  startPaletteIndexing,
 } from "../../lib/tauri";
 
 export function useFragmentPalette(id: string | null) {
@@ -55,31 +53,4 @@ export function useFragmentPalette(id: string | null) {
     error,
     retryPalette,
   };
-}
-
-export function usePaletteIndex(enabled: boolean) {
-  const [status, setStatus] = useState<PaletteIndexStatus | null>(null);
-  useEffect(() => {
-    if (!enabled || !isTauriRuntime()) return;
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const next = await getPaletteIndexStatus();
-        if (!disposed) setStatus(next);
-      } catch {
-        /* Focus or the next completion reconciles a transient read failure. */
-      }
-    };
-    const subscription = listen("palette-changed", () => void refresh());
-    void startPaletteIndexing()
-      .then(refresh)
-      .catch(() => undefined);
-    window.addEventListener("focus", refresh);
-    return () => {
-      disposed = true;
-      window.removeEventListener("focus", refresh);
-      void subscription.then((unlisten) => unlisten()).catch(() => undefined);
-    };
-  }, [enabled]);
-  return status;
 }

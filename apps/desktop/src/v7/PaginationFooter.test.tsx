@@ -21,7 +21,7 @@ describe("PaginationFooter", () => {
       />,
     );
 
-    expect(markup).toContain("Showing 60 of 286 Frames");
+    expect(markup).toContain("Showing 60 of 286 Fragments");
     expect(markup).toContain("Load more");
     expect(markup).not.toContain("disabled");
   });

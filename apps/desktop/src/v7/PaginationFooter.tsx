@@ -14,7 +14,7 @@ export function PaginationFooter({
   hasMore = false,
   loadedCount,
   loading = false,
-  noun = "Frames",
+  noun = "Fragments",
   onLoadMore,
   totalCount,
 }: PaginationFooterProps) {

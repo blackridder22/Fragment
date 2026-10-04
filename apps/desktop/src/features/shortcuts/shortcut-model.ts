@@ -154,7 +154,7 @@ export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] =
     },
     {
       id: "importFrames",
-      label: "Import Frames",
+      label: "Import Fragments",
       description: "Open the image import picker.",
       scope: "global",
       defaultBinding: makeBinding("KeyI", { mod: true }),
@@ -162,7 +162,7 @@ export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] =
     {
       id: "quickPreview",
       label: "Quick Preview",
-      description: "Hold to preview the focused Frame.",
+      description: "Hold to preview the focused Fragment.",
       scope: "library",
       defaultBinding: makeBinding("Space"),
     },
