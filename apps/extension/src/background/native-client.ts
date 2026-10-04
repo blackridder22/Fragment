@@ -26,6 +26,7 @@ const nativeResponseSchema = z.discriminatedUnion("type", [
     protocolVersion: z.number().int().positive().optional(),
     minimumProtocolVersion: z.number().int().positive().optional(),
     compatible: z.boolean().optional(),
+    capabilities: z.array(z.string()).optional(),
   }),
   z.object({
     type: z.literal("frames.list.result"),
@@ -91,6 +92,7 @@ export type NativeConnectionState = {
   attempt: number;
   protocolVersion?: number;
   hostVersion?: string;
+  capabilities?: string[];
   error?: NativeConnectionIssue;
 };
 
@@ -121,6 +123,8 @@ export type NativePortManagerOptions = {
   connectNative?: (hostName: string) => NativePortLike;
   getLastErrorMessage?: () => string | undefined;
   requestTimeoutMs?: number;
+  captureTimeoutMs?: number;
+  queueTimeoutMs?: number;
   reconnectBaseDelayMs?: number;
   reconnectMaxDelayMs?: number;
   maxReconnectAttempts?: number;
@@ -132,6 +136,8 @@ export class NativePortManager {
   private readonly connectNative: (hostName: string) => NativePortLike;
   private readonly getLastErrorMessage: () => string | undefined;
   private readonly requestTimeoutMs: number;
+  private readonly captureTimeoutMs: number;
+  private readonly queueTimeoutMs: number;
   private readonly reconnectBaseDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
   private readonly maxReconnectAttempts: number;
@@ -159,10 +165,11 @@ export class NativePortManager {
       ((hostName) =>
         chrome.runtime.connectNative(hostName) as unknown as NativePortLike);
     this.getLastErrorMessage =
-      options.getLastErrorMessage ??
-      (() => chrome.runtime.lastError?.message);
+      options.getLastErrorMessage ?? (() => chrome.runtime.lastError?.message);
     this.requestTimeoutMs =
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.captureTimeoutMs = options.captureTimeoutMs ?? 45_000;
+    this.queueTimeoutMs = options.queueTimeoutMs ?? 60_000;
     this.reconnectBaseDelayMs =
       options.reconnectBaseDelayMs ?? DEFAULT_RECONNECT_BASE_DELAY_MS;
     this.reconnectMaxDelayMs =
@@ -193,11 +200,18 @@ export class NativePortManager {
         ),
       );
     }
+    if ([...this.pending.values()].filter((item) => !item.sent).length >= 32)
+      return Promise.reject(
+        new NativeClientError(
+          "native_queue_full",
+          "The save queue is full. Wait for the current captures to finish.",
+        ),
+      );
 
     return new Promise((resolve, reject) => {
       const timer = this.setTimer(() => {
         this.handleRequestTimeout(request.requestId);
-      }, this.requestTimeoutMs);
+      }, this.queueTimeoutMs);
       this.pending.set(request.requestId, {
         request,
         resolve,
@@ -207,7 +221,7 @@ export class NativePortManager {
       });
 
       if (this.state.status === "connected" && this.port) {
-        this.postPendingRequest(this.pending.get(request.requestId));
+        this.dispatchNext();
       } else {
         if (this.state.status === "unavailable") {
           this.reconnectAttempts = 0;
@@ -221,9 +235,7 @@ export class NativePortManager {
     return { ...this.state };
   }
 
-  subscribe(
-    listener: (state: NativeConnectionState) => void,
-  ): () => void {
+  subscribe(listener: (state: NativeConnectionState) => void): () => void {
     this.stateListeners.add(listener);
     listener(this.connectionState());
     return () => this.stateListeners.delete(listener);
@@ -340,7 +352,7 @@ export class NativePortManager {
     }
 
     const pending = this.pending.get(response.requestId);
-    if (!pending) {
+    if (!pending || !pending.sent) {
       this.failConnection(
         new NativeClientError(
           "native_response_request_id_mismatch",
@@ -362,6 +374,7 @@ export class NativePortManager {
     this.clearTimer(pending.timer);
     this.pending.delete(response.requestId);
     pending.resolve(response as NativeResponse);
+    this.dispatchNext();
   }
 
   private completeHandshake(response: ParsedNativeResponse): void {
@@ -400,16 +413,50 @@ export class NativePortManager {
       attempt: 0,
       protocolVersion: hostProtocolVersion,
       hostVersion: response.version,
+      ...(response.capabilities ? { capabilities: response.capabilities } : {}),
     });
-    for (const pending of this.pending.values()) {
-      this.postPendingRequest(pending);
-    }
+    this.dispatchNext();
+  }
+
+  private dispatchNext(): void {
+    if (
+      !this.port ||
+      this.state.status !== "connected" ||
+      [...this.pending.values()].some((item) => item.sent)
+    )
+      return;
+    this.postPendingRequest(
+      [...this.pending.values()].find((item) => !item.sent),
+    );
   }
 
   private postPendingRequest(pending: PendingRequest | undefined): void {
     if (!pending || pending.sent || !this.port) {
       return;
     }
+    if (
+      pending.request.type === "capture.fragment" &&
+      !this.state.capabilities?.includes("svg") &&
+      knownSvgRequest(pending.request)
+    ) {
+      this.clearTimer(pending.timer);
+      this.pending.delete(pending.request.requestId);
+      pending.reject(
+        new NativeClientError(
+          "svg_host_upgrade_required",
+          "Update the Fragment desktop app and native host to save SVG files.",
+        ),
+      );
+      this.dispatchNext();
+      return;
+    }
+    this.clearTimer(pending.timer);
+    pending.timer = this.setTimer(
+      () => this.handleRequestTimeout(pending.request.requestId),
+      pending.request.type === "capture.fragment"
+        ? this.captureTimeoutMs
+        : this.requestTimeoutMs,
+    );
     pending.sent = true;
     try {
       this.port.postMessage(pending.request);
@@ -445,8 +492,10 @@ export class NativePortManager {
     this.pending.delete(requestId);
     pending.reject(
       new NativeClientError(
-        "native_host_timeout",
-        "Fragment native host did not respond in time",
+        pending.sent ? "native_host_timeout" : "native_queue_timeout",
+        pending.sent
+          ? "Fragment native host did not respond in time. Check the Vault before retrying this save."
+          : "This request expired while waiting in the save queue.",
       ),
     );
     if (pending.sent) {
@@ -535,6 +584,29 @@ export class NativePortManager {
 }
 
 export const nativePortManager = new NativePortManager();
+
+function knownSvgRequest(
+  request: Extract<NativeRequest, { type: "capture.fragment" }>,
+): boolean {
+  const candidate = request.candidate;
+  return [
+    candidate.src,
+    candidate.currentSrc,
+    candidate.sourceUrl,
+    ...(candidate.imageUrls?.map((item) => item.url) ?? []),
+  ].some((value) => {
+    if (!value) return false;
+    try {
+      const url = new URL(value);
+      return (
+        /^https?:$/.test(url.protocol) &&
+        url.pathname.toLowerCase().endsWith(".svg")
+      );
+    } catch {
+      return false;
+    }
+  });
+}
 
 export function sendNativeMessage(
   request: NativeRequest,

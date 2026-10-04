@@ -46,6 +46,7 @@ pub struct Fragment {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FragmentFilter {
+    pub color: Option<ColorFilter>,
     pub query: Option<String>,
     pub tags: Vec<String>,
     pub mime_types: Vec<String>,
@@ -65,6 +66,41 @@ pub struct FragmentFilter {
     pub title_contains: Option<String>,
     pub site_contains: Option<String>,
     pub creator_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorFilter {
+    pub hex: String,
+    pub tolerance: u16,
+}
+
+impl ColorFilter {
+    pub fn lab(&self) -> crate::CoreResult<[f64; 3]> {
+        if self.hex.len() != 7
+            || !self.hex.starts_with('#')
+            || !self.hex.as_bytes()[1..]
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(b))
+            || self.tolerance > 200
+        {
+            return Err(crate::CoreError::InvalidInput(
+                "Color requires uppercase #RRGGBB and an integer tolerance from 0 to 200".into(),
+            ));
+        }
+        let byte = |start| {
+            u8::from_str_radix(&self.hex[start..start + 2], 16)
+                .map_err(|_| crate::CoreError::InvalidInput("Invalid HEX color".into()))
+        };
+        Ok(crate::palette::rgb_lab(byte(1)?, byte(3)?, byte(5)?))
+    }
+}
+
+pub struct FragmentPageSnapshot {
+    pub items: Vec<Fragment>,
+    pub total: u64,
+    pub revision: String,
+    pub palette_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

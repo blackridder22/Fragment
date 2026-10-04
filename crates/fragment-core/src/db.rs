@@ -14,7 +14,8 @@ const INIT_MIGRATION: &str = include_str!("../migrations/0001_init.sql");
 const DATA_SAFETY_MIGRATION: &str = include_str!("../migrations/0002_data_safety.sql");
 const LIBRARY_REVISION_MIGRATION: &str = include_str!("../migrations/0003_library_revision.sql");
 const SMART_FRAMES_MIGRATION: &str = include_str!("../migrations/0004_smart_frames.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const ASSET_COLORS_MIGRATION: &str = include_str!("../migrations/0005_asset_colors_and_svg.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 #[derive(Clone)]
 pub struct FragmentCore {
@@ -123,7 +124,15 @@ fn run_migrations(connection: &mut Connection) -> CoreResult<()> {
     if version < 4 {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(SMART_FRAMES_MIGRATION)?;
-        tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
+        tx.pragma_update(None, "user_version", 4_i64)?;
+        tx.commit()?;
+        version = 4;
+    }
+
+    if version < 5 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(ASSET_COLORS_MIGRATION)?;
+        tx.pragma_update(None, "user_version", 5_i64)?;
         tx.commit()?;
     }
 

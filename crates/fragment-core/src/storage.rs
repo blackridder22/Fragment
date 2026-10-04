@@ -1,9 +1,8 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use image::ImageFormat;
-use uuid::Uuid;
 
 use crate::errors::{CoreError, CoreResult};
 
@@ -12,21 +11,13 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> CoreResult<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let temp_name = format!(
-        ".{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("fragment")
-    );
-    let temp_path = path.with_file_name(format!("{temp_name}-{}", Uuid::new_v4()));
-
-    {
-        let mut file = File::create(&temp_path)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&temp_path, path)?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::Builder::new()
+        .prefix(".fragment-")
+        .tempfile_in(parent)?;
+    temp.write_all(bytes)?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 

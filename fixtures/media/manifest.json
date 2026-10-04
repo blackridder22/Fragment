@@ -1,0 +1,150 @@
+{
+  "provenance": "Procedural artwork: repository MIT license. NASA photograph: NASA Johnson Space Center, AS17-148-22727; see README.md. No user assets.",
+  "fixtures": [
+    {
+      "name": "solid-red.png",
+      "sha256": "d8dde4c30d5927eba796c28f6feaf30f3fa00a19b0299398f71c6160affa1d48",
+      "bytes": 1565,
+      "expected": "one #FF0000 swatch, coverage 1"
+    },
+    {
+      "name": "two-color.png",
+      "sha256": "fa1df912102e0364603cbf1da02ec6ec8cfb7a7a041c2fc7556fbade6bd75df0",
+      "bytes": 2125,
+      "expected": "green 25%, blue 75%, within 2 percentage points"
+    },
+    {
+      "name": "transparent.png",
+      "sha256": "4529adf14866fbe1908c2b9310135fab39dc1c4f82ce1b27f88b0e1601d82e8d",
+      "bytes": 1201,
+      "expected": "empty palette"
+    },
+    {
+      "name": "transparent-logo.png",
+      "sha256": "581ffde80cf691614be159cc2dda35d51a64fa6e253a848beb69a1dd66830249",
+      "bytes": 2640,
+      "expected": "orange only; transparent magenta excluded"
+    },
+    {
+      "name": "grayscale.png",
+      "sha256": "7280726734fd2cc6d6edaa146f06b1afd66429e1602945a521ce18a56f529537",
+      "bytes": 5989,
+      "expected": "all swatches neutral"
+    },
+    {
+      "name": "gradient.png",
+      "sha256": "7a282e66f5d509904005f5b6301a97f089901c4c69d2a3608436297935636ec1",
+      "bytes": 105868,
+      "expected": "deterministic varied palette"
+    },
+    {
+      "name": "two-color.svg",
+      "sha256": "0254fd36767c093774cf3be592e3d3a0c2b63d4427a9cf2226fe26ff87d95d7a",
+      "bytes": 159,
+      "expected": "green 25%, blue 75%; 2:1 transparent PNGs"
+    },
+    {
+      "name": "transparent-logo.svg",
+      "sha256": "35c3234077f8d33b5df35cba0737bede36caa826da3921301cbaf2309eb882fb",
+      "bytes": 139,
+      "expected": "straight alpha orange; no black halo"
+    },
+    {
+      "name": "gradient-mask.svg",
+      "sha256": "83a045f6d5a2df2f84fc4a455683cdbacacc4feef0a61dac1f2714c41e0408eb",
+      "bytes": 314,
+      "expected": "gradient in circular mask"
+    },
+    {
+      "name": "filter-clip.svg",
+      "sha256": "85a4b5b5b17584ab28a2f86f6f46568ccf6bfa801203fd10b8865f2c3d8c2989",
+      "bytes": 310,
+      "expected": "blur and clipping"
+    },
+    {
+      "name": "text.svg",
+      "sha256": "7153972d64a3f5f5af8774d9446d4e5f0a28137fee1166f3cf5a8ffc29f505fe",
+      "bytes": 142,
+      "expected": "installed font text"
+    },
+    {
+      "name": "missing-font.svg",
+      "sha256": "2093e6d1bbc77830f9fcb04d66a6997539dac1dd098408e8076e860a2788aeaf",
+      "bytes": 163,
+      "expected": "font_substitution warning"
+    },
+    {
+      "name": "embedded.svg",
+      "sha256": "60ebf141f2551e4702fb823501991a10a9c1ed63fedb6f03b45b6e70d91b6ce8",
+      "bytes": 2222,
+      "expected": "red embedded PNG"
+    },
+    {
+      "name": "huge-viewport.svg",
+      "sha256": "da457ec2ff87c560831b015aeabdf5a2d86b96307e9c1cca421f2be483e8a051",
+      "bytes": 130,
+      "expected": "bounded 640/1600 square derivatives"
+    },
+    {
+      "name": "external.svg",
+      "sha256": "81a4f1bff1f29674e7dbe4765993a8db994c899a2ca802d8fdff8f90577bf2fb",
+      "bytes": 150,
+      "expected": "unsupported_svg; no file read"
+    },
+    {
+      "name": "network.svg",
+      "sha256": "95830c03da3c55ded36cde78c312829893afceb375f576bd61b20b26433453a7",
+      "bytes": 147,
+      "expected": "unsupported_svg; no request"
+    },
+    {
+      "name": "script.svg",
+      "sha256": "905d9a7ad4468a639c1b143aa9220d91f4adc6379bd6e8e0a155afca0fa56c4d",
+      "bytes": 96,
+      "expected": "unsupported_svg"
+    },
+    {
+      "name": "animated.svg",
+      "sha256": "f6d6269b99ce87797303eb2260b3f90a2bced3e29c8edbc139d6f0efb0e53f5a",
+      "bytes": 159,
+      "expected": "unsupported_svg"
+    },
+    {
+      "name": "foreign-object.svg",
+      "sha256": "b7a392a36993079d0c1eee7f7443388d90d9c87aad666432ea9d94174f1dabec",
+      "bytes": 142,
+      "expected": "unsupported_svg"
+    },
+    {
+      "name": "entities.svg",
+      "sha256": "2daf0bc6ed6d3fba4334a7673d48e5b9eb05ae33ec8ea5baafc64a7e64913d89",
+      "bytes": 100,
+      "expected": "unsupported_svg"
+    },
+    {
+      "name": "malformed.svg",
+      "sha256": "6315f73c319adce56d331e7fe74f2ddf7c5a3cdf0023567bd0ca912f014fba38",
+      "bytes": 14,
+      "expected": "invalid_svg"
+    },
+    {
+      "name": "html.svg",
+      "sha256": "b8ad8092facccefe7da5a29756d7e05a56f54527a911fc674f4ab11c69a99f47",
+      "bytes": 38,
+      "expected": "invalid_svg"
+    },
+    {
+      "name": "nested-limit.svg",
+      "sha256": "b7ab164170d4d601c3ef74ab413125c0c274244cbce1f203f50414b02ff70435",
+      "bytes": 981,
+      "expected": "unsupported_svg"
+    },
+    {
+      "name": "nasa-blue-marble.jpg",
+      "sha256": "aaf785221924b1a2da1baa59e4f0a2713dfa8515cf0162e86768064d4f8ca75c",
+      "bytes": 192213,
+      "expected": "photographic coverage; deterministic palette of at most six colors",
+      "source": "https://www.nasa.gov/image-article/blue-marble-view-from-apollo-17/"
+    }
+  ]
+}

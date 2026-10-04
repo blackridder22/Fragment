@@ -9,6 +9,11 @@ use fragment_core::FragmentCore;
 use tracing::error;
 
 fn main() -> anyhow::Result<()> {
+    // This private mode must run before tracing hooks and, especially, Vault initialization.
+    if std::env::args().nth(1).as_deref() == Some("--render-svg") {
+        return fragment_core::svg_worker::run_private_worker()
+            .map_err(|error| anyhow::anyhow!("{error}"));
+    }
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_target(false)

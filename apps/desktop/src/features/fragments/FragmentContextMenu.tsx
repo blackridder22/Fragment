@@ -1,5 +1,7 @@
 import {
   Clipboard,
+  Command,
+  Delete,
   ExternalLink,
   Eye,
   FolderPlus,
@@ -159,7 +161,7 @@ export function FragmentContextMenu({
       }}
     >
       <header>
-        <ImageIcon aria-hidden="true" size={15} />
+        <ImageIcon aria-hidden="true" size={16} />
         <div>
           <strong>
             {fragmentIds.length > 1
@@ -171,7 +173,7 @@ export function FragmentContextMenu({
       </header>
       {fragmentIds.length === 1 ? (
         <button onClick={() => run(onOpen)} role="menuitem" type="button">
-          <Eye aria-hidden="true" size={15} /> Open Preview <kbd>Enter</kbd>
+          <Eye aria-hidden="true" size={16} /> Open Preview <kbd>Enter</kbd>
         </button>
       ) : null}
       {fragmentIds.length === 1 ? (
@@ -181,12 +183,16 @@ export function FragmentContextMenu({
           role="menuitem"
           type="button"
         >
-          <Clipboard aria-hidden="true" size={15} /> Copy Image <kbd>⌘C</kbd>
+          <Clipboard aria-hidden="true" size={16} /> Copy Image
+          <kbd aria-label="Command C">
+            <Command aria-hidden="true" size={12} />
+            <span>C</span>
+          </kbd>
         </button>
       ) : null}
       {fragmentIds.length === 1 && onOpenSource ? (
         <button onClick={() => run(onOpenSource)} role="menuitem" type="button">
-          <ExternalLink aria-hidden="true" size={15} /> Open Source
+          <ExternalLink aria-hidden="true" size={16} /> Open Source
         </button>
       ) : null}
       {fragmentIds.length === 1 ? (
@@ -196,7 +202,7 @@ export function FragmentContextMenu({
           role="menuitem"
           type="button"
         >
-          <Eye aria-hidden="true" size={15} /> Reveal Original
+          <Eye aria-hidden="true" size={16} /> Reveal Original
         </button>
       ) : null}
       <div className="fragment-context-divider" />
@@ -226,7 +232,10 @@ export function FragmentContextMenu({
             role="menuitem"
             type="button"
           >
-            <Trash2 aria-hidden="true" size={15} /> Move to Trash <kbd>⌫</kbd>
+            <Trash2 aria-hidden="true" size={16} /> Move to Trash
+            <kbd aria-label="Delete">
+              <Delete aria-hidden="true" size={16} />
+            </kbd>
           </button>
         </>
       ) : null}

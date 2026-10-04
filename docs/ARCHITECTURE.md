@@ -1,7 +1,7 @@
 # Architecture
 
-Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.7 is
-developed on branch `vbeta0.0.7`.
+Fragment is a macOS-first, local-first visual reference Vault. Version 0.0.8 is
+developed on branch `vbeta0.0.8`.
 
 ## Runtime components
 
@@ -142,3 +142,40 @@ pnpm benchmark:vault:fixtures:verify
 pnpm benchmark:vault:fixtures
 pnpm benchmark:vault:metadata
 ```
+
+## v0.0.8 media pipeline
+
+`media.rs` detects raster signatures or bounded UTF-8 SVG input. Desktop imports
+and host captures call the same preparation path. A SHA-256 hit reuses the
+existing asset before decoding. New files receive transparent 640/1600 PNGs;
+original SVG bytes and nominal dimensions are retained unchanged.
+
+`fragment-host --render-svg` is a private child process, entered before Vault
+initialization. `svg_worker.rs` owns a five-second deadline, cancellation,
+kill/reap and staging cleanup. One child plus eight queued requests are allowed
+per process. Two foreground preparation permits cover imports and previews.
+`svg.rs` applies the static resource policy before resvg 0.48.1 rendering.
+
+Migration 0005 adds asset-owned palettes, palette job leases, optional preview
+cache metadata, SVG diagnostics and a separate palette revision. Migration
+performs no image decoding. Palette extraction uses an alpha-weighted 256-edge
+sample of the canonical thumbnail, deterministic Oklab clustering and at most
+six colors. Missing old palettes are processed after first display, with
+25-item batches, current item/Frame priority and at most three automatic
+attempts. Image work occurs outside SQLite transactions.
+
+Color filters use a bound SQLite EXISTS predicate before pagination. Page,
+count and Select All share it. A swatch must cover at least 1% of visible area;
+HEX is canonical `#RRGGBB`, and tolerance 0–200 means Oklab distance ×1000.
+Color pages carry a separate palette revision. New completions offer Refresh
+instead of resetting gallery position or mixing pages from different results.
+
+Focused SVG previews use PNG file URLs. Fit/100/200/400% requests are debounced
+and coalesced; obsolete consumers cancel work. Optional 3200/4096 previews have
+a 512 MiB LRU budget and two tiers per asset. Keys include source hash, renderer
+policy and font fingerprint. Base files and originals are never evicted.
+Last-reference deletion queues optional files before cascading cache rows.
+
+`FRAGMENT_APP_DATA_DIR` supports isolated QA Vaults. Asset-protocol access is
+scoped to the configured root; QA launches do not rewrite Chrome's installed
+native-host manifest. See `V0.0.8_QA.md` for measured verification boundaries.

@@ -73,6 +73,9 @@ impl FragmentCore {
         name: String,
         filter: FragmentFilter,
     ) -> CoreResult<SmartFrame> {
+        if let Some(color) = &filter.color {
+            color.lab()?;
+        }
         let name = validate_name(name)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -105,6 +108,9 @@ impl FragmentCore {
         name: String,
         filter: FragmentFilter,
     ) -> CoreResult<SmartFrame> {
+        if let Some(color) = &filter.color {
+            color.lab()?;
+        }
         let name = validate_name(name)?;
         let now = Utc::now().to_rfc3339();
         let filter_json = serde_json::to_string(&filter)

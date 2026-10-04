@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  NativePortManager,
-  type NativePortLike,
-} from "./native-client";
+import { NativePortManager, type NativePortLike } from "./native-client";
 
 class FakeEvent<TListener extends (...args: never[]) => void> {
   private readonly listeners = new Set<TListener>();
@@ -62,6 +59,114 @@ class FakePort implements NativePortLike {
 }
 
 describe("persistent native port manager", () => {
+  it("serializes dispatch and starts the short timeout only after a queued capture finishes", async () => {
+    const port = new FakePort();
+    const manager = new NativePortManager({
+      connectNative: () => port,
+      maxReconnectAttempts: 0,
+    });
+    const capture = manager.request({
+      type: "capture.fragment",
+      requestId: "slow-capture",
+      frameId: "inbox",
+      candidate: {
+        id: "slow",
+        src: "https://example.com/slow.png",
+        pageUrl: "https://example.com",
+        width: 640,
+        height: 480,
+        rect: { x: 0, y: 0, width: 640, height: 480 },
+        source: "generic",
+      },
+      requestedAt: "2026-09-05T00:00:00Z",
+      extensionVersion: "0.0.8",
+    });
+    port.completeHandshake(2);
+    const frames = manager.request({
+      type: "frames.list",
+      requestId: "queued-frames",
+    });
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(port.posted).toHaveLength(2);
+    port.onMessage.emit({
+      type: "capture.fragment.result",
+      requestId: "slow-capture",
+      ok: true,
+      fragmentId: "saved",
+    });
+    await expect(capture).resolves.toMatchObject({ ok: true });
+    expect(port.posted).toHaveLength(3);
+    port.onMessage.emit({
+      type: "frames.list.result",
+      requestId: "queued-frames",
+      ok: true,
+      frames: [],
+    });
+    await expect(frames).resolves.toMatchObject({ frames: [] });
+    manager.dispose();
+  });
+
+  it("explains SVG support when the negotiated host lacks the capability", async () => {
+    const port = new FakePort();
+    const manager = new NativePortManager({
+      connectNative: () => port,
+      maxReconnectAttempts: 0,
+    });
+    const request = manager.request({
+      type: "capture.fragment",
+      requestId: "svg-old-host",
+      frameId: "inbox",
+      candidate: {
+        id: "svg",
+        src: "https://example.com/logo.svg",
+        pageUrl: "https://example.com",
+        width: 640,
+        height: 480,
+        rect: { x: 0, y: 0, width: 640, height: 480 },
+        source: "generic",
+      },
+      requestedAt: "2026-09-05T00:00:00Z",
+      extensionVersion: "0.0.8",
+    });
+    port.completeHandshake(2);
+    await expect(request).rejects.toMatchObject({
+      code: "svg_host_upgrade_required",
+    });
+    expect(port.posted).toHaveLength(1);
+    manager.dispose();
+  });
+
+  it("bounds the unsent queue and expires queued work separately", async () => {
+    const port = new FakePort();
+    const manager = new NativePortManager({
+      connectNative: () => port,
+      queueTimeoutMs: 50,
+      requestTimeoutMs: 1000,
+      maxReconnectAttempts: 0,
+    });
+    const first = manager.request({ type: "frames.list", requestId: "active" });
+    port.completeHandshake(2);
+    const queued = Array.from({ length: 32 }, (_, index) =>
+      manager
+        .request({ type: "frames.list", requestId: `queued-${index}` })
+        .catch((error) => error.code),
+    );
+    await expect(
+      manager.request({ type: "frames.list", requestId: "overflow" }),
+    ).rejects.toMatchObject({ code: "native_queue_full" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await Promise.all(queued)).toEqual(
+      Array(32).fill("native_queue_timeout"),
+    );
+    port.onMessage.emit({
+      type: "frames.list.result",
+      requestId: "active",
+      ok: true,
+      frames: [],
+    });
+    await first;
+    manager.dispose();
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -178,8 +283,7 @@ describe("persistent native port manager", () => {
     expect(
       secondPort.posted.filter(
         (message) =>
-          (message as { requestId?: string }).requestId ===
-          "frames-reconnect",
+          (message as { requestId?: string }).requestId === "frames-reconnect",
       ),
     ).toHaveLength(1);
     expect(manager.connectionState()).toMatchObject({

@@ -1,4 +1,5 @@
-import type { Fragment, Frame } from "@fragment/shared";
+import type { ColorFilter, Fragment, Frame, PaletteIndexStatus } from "@fragment/shared";
+import { ColorFilterControl } from "../features/colors/ColorFilterControl";
 import { Check, ChevronDown, Folder, ImageOff, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../components/Modal";
@@ -43,6 +44,11 @@ type TrashedFragment = {
 type TrashEntry = TrashedFrame | TrashedFragment;
 
 export type TrashPageProps = {
+  color?: ColorFilter | null;
+  paletteIndex?: PaletteIndexStatus | null;
+  colorResultsChanged?: boolean;
+  onColorChange?: (color: ColorFilter | null) => void;
+  onRefreshColors?: () => void;
   fragments: Fragment[];
   frames: Frame[];
   assetSourcesFor: (fragment: Fragment) => AssetSource[];
@@ -62,6 +68,11 @@ export type TrashPageProps = {
 };
 
 export function TrashPage({
+  color,
+  paletteIndex,
+  colorResultsChanged,
+  onColorChange,
+  onRefreshColors,
   fragments,
   frames,
   assetSourcesFor,
@@ -178,6 +189,9 @@ export function TrashPage({
           <p>{subtitle}</p>
         </div>
         <div className="v7-trash-page-actions">
+          {onColorChange ? (
+            <ColorFilterControl value={color} onChange={onColorChange} />
+          ) : null}
           <details className="v7-trash-sort" ref={sortMenu}>
             <summary>
               <span>Deleted date</span>
@@ -248,6 +262,20 @@ export function TrashPage({
               : `${visibleEntries.length.toLocaleString()} ${visibleEntries.length === 1 ? "item" : "items"}`}
           </span>
         </div>
+
+        {onColorChange && color && (paletteIndex?.pending || colorResultsChanged) ? (
+          <div className="fragment-index-status">
+            {paletteIndex?.pending ? (
+              <span>Colors are still being extracted · {paletteIndex.pending} remaining</span>
+            ) : null}
+            {colorResultsChanged ? (
+              <>
+                <span>More color results available</span>
+                <button type="button" onClick={onRefreshColors}>Refresh</button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="v7-trash-list-shell">
           <div className="v7-trash-list-scroll">

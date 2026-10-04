@@ -4,7 +4,7 @@ import { googleImagesSourceUrl } from "./adapters/google-images";
 import { pinterestTitle } from "./adapters/pinterest";
 
 const MIN_SIZE = 120;
-const IMAGE_EXTENSIONS = /\.(avif|bmp|gif|jpe?g|png|webp)(\?.*)?$/i;
+const IMAGE_EXTENSIONS = /\.(avif|bmp|gif|jpe?g|png|webp|svg)([?#].*)?$/i;
 const elementCandidateIds = new WeakMap<Element, string>();
 const candidateElements = new Map<string, Element>();
 const elementBackedCandidateIds = new Set<string>();

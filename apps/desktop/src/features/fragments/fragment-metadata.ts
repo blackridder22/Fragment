@@ -37,6 +37,7 @@ export function formatLabel(
   originalPath?: string | null,
 ): string {
   const subtype = mimeType?.split("/")[1]?.split(";")[0]?.trim();
+  if (subtype === "svg+xml") return "SVG";
   if (subtype) return subtype.replace("jpeg", "jpg").toUpperCase();
   const extension = originalPath?.split(".").pop();
   return extension && extension !== originalPath

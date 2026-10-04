@@ -78,6 +78,17 @@ Originals preserve the detected source format. Derived thumbnails and previews
 are PNG files in the MVP so macOS WebKit can render them reliably in the Tauri
 webview.
 
+Version 0.0.8 adds local color palettes, HEX copy, color filtering and background
+indexing of existing assets. Static SVG imports retain their original vector
+bytes while a bounded Rust worker generates cached PNG previews for browsing,
+zoom and clipboard copy. Supported HTTP(S) SVG image candidates can also pass
+through the extension's native capture path.
+
+SVG scripts, animation, external resources, HTML/foreignObject and SVGZ are not
+supported. See [release notes](docs/V0.0.8_RELEASE_NOTES.md) for compatibility
+details and [QA status](docs/V0.0.8_QA.md) for completed checks and remaining
+native/Chrome release gates.
+
 For tests or development isolation, set:
 
 ```bash

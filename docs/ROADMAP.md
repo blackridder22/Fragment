@@ -84,6 +84,18 @@ reproducible desktop-plus-extension release.
   navigation.
 - Restored Fragment rail/tree styling and canvas-bounded preview overlays.
 
+## v0.0.8 - Color palettes and SVG
+
+Implemented locally; release verification remains open in `V0.0.8_QA.md`.
+
+- Asset-owned color palettes, HEX copy, color search, and background indexing.
+- Color filters across complete paginated queries, selection, and Smart Frames.
+- Static SVG import/capture with byte-identical originals and cached PNG previews.
+- Rust renderer processes with cancellation, time/resource limits, and recovery.
+- SVG zoom, pan, preview backgrounds, and PNG clipboard copy.
+- Sequential native request scheduling and optional SVG capability negotiation.
+- Local ARM64 app, DMG, extension ZIP, and packaged-host checks.
+
 ## Explicitly later
 
 - Video storage and playback.

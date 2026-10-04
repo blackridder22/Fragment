@@ -1,5 +1,12 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Fragment, Frame } from "@fragment/shared";
+import type {
+  Fragment,
+  Frame,
+  FragmentPalette,
+  PaletteIndexStatus,
+  FragmentMediaInfo,
+  SvgPreviewResult,
+} from "@fragment/shared";
 import type {
   FragmentFilter,
   SmartFrame,
@@ -23,7 +30,37 @@ export type FragmentPage = {
   total: number;
   hasMore: boolean;
   revision: string;
+  paletteRevision?: string | null;
 };
+
+export const startPaletteIndexing = () =>
+  invoke<void>("start_palette_indexing");
+export const setPalettePriority = (
+  fragmentId: string | null,
+  frameId: string | null,
+) => invoke<void>("set_palette_priority", { fragmentId, frameId });
+export const getFragmentPalette = (id: string) =>
+  invoke<FragmentPalette>("get_fragment_palette", { id });
+export const getPaletteIndexStatus = () =>
+  invoke<PaletteIndexStatus>("get_palette_index_status");
+export const retryFragmentPalette = (id: string) =>
+  invoke<void>("retry_fragment_palette", { id });
+export const getFragmentMediaInfo = (id: string) =>
+  invoke<FragmentMediaInfo>("get_fragment_media_info", { id });
+export const ensureSvgPreview = (
+  id: string,
+  maxEdge: number,
+  requestId: string,
+  repair = false,
+) =>
+  invoke<SvgPreviewResult>("ensure_svg_preview", {
+    id,
+    maxEdge,
+    requestId,
+    repair,
+  });
+export const cancelSvgPreview = (requestId: string) =>
+  invoke<void>("cancel_svg_preview", { requestId });
 
 export type FragmentPageSortMode =
   | "newest"
@@ -129,6 +166,7 @@ export async function listFragmentPage(options: {
 }
 
 export async function listFragmentIds(options: {
+  expectedPaletteRevision?: string | null;
   frameId?: string | null;
   includeDescendants?: boolean;
   trashed?: boolean;
@@ -138,6 +176,7 @@ export async function listFragmentIds(options: {
   sortMode?: "newest" | "oldest" | "name" | "largest";
 }): Promise<string[]> {
   return invoke("list_fragment_ids", {
+    expectedPaletteRevision: options.expectedPaletteRevision ?? null,
     frameId: options.frameId ?? null,
     includeDescendants: options.includeDescendants ?? false,
     trashed: options.trashed ?? false,

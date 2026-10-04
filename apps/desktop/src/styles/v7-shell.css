@@ -93,8 +93,8 @@
 }
 
 .v7-native-lights-space {
-  width: 49px;
-  height: 11px;
+  width: 60px;
+  height: 14px;
   flex: 0 0 auto;
 }
 
@@ -179,6 +179,10 @@
   line-height: 20px;
 }
 
+.v7-focused-title-editor input:focus,
+.v7-focused-title-editor input:focus-visible,
+.v7-focused-tag-editor input:focus,
+.v7-focused-tag-editor input:focus-visible,
 .v7-global-search input:focus,
 .v7-global-search input:focus-visible {
   outline: 0;

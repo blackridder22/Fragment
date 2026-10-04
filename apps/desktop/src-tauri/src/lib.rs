@@ -1,8 +1,11 @@
 mod commands;
+mod media_commands;
 mod native_host;
 mod state;
-
 #[cfg(target_os = "macos")]
+mod window_chrome;
+
+use media_commands::*;
 use tauri::Manager;
 
 use commands::{
@@ -28,8 +31,38 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .on_page_load(|webview, payload| {
             #[cfg(target_os = "macos")]
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                window_chrome::refresh(webview);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (webview, payload);
+        })
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(
+                event,
+                tauri::WindowEvent::Focused(true)
+                    | tauri::WindowEvent::Resized(_)
+                    | tauri::WindowEvent::ThemeChanged(_)
+            ) {
+                if let Some(webview) = window.get_webview_window(window.label()) {
+                    window_chrome::refresh(webview.as_ref());
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
+        })
+        .setup(|app| {
+            // Scope only the configured Vault, including isolated QA roots.
+            app.asset_protocol_scope().allow_directory(app.state::<FragmentState>().core.paths().root(),true)?;
+            if let Ok(resources)=app.path().resource_dir(){
+                let worker=resources.join("fragment-host");
+                if worker.is_file(){let _=fragment_core::svg_worker::configure_worker(worker);}
+            }
+            #[cfg(target_os = "macos")]
+            if std::env::var_os("FRAGMENT_APP_DATA_DIR").is_none() {
             match app.path().resource_dir() {
                 Ok(resource_dir) => {
                     if let Err(error) = native_host::install_bundled_native_host(&resource_dir) {
@@ -46,10 +79,19 @@ pub fn run() {
                     );
                 }
             }
+            }
             Ok(())
         })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            start_palette_indexing,
+            set_palette_priority,
+            get_fragment_palette,
+            get_palette_index_status,
+            retry_fragment_palette,
+            get_fragment_media_info,
+            ensure_svg_preview,
+            cancel_svg_preview,
             ensure_default_frame,
             create_frame,
             list_frames,
@@ -98,6 +140,12 @@ pub fn run() {
             asset_root,
             native_host_status
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Fragment");
+        .build(tauri::generate_context!())
+        .expect("error while building Fragment")
+        .run(|app,event|{
+            if matches!(event,tauri::RunEvent::ExitRequested{..}) {
+                app.state::<FragmentState>().palette_stopped.store(true,std::sync::atomic::Ordering::Release);
+                fragment_core::svg_worker::shutdown_worker();
+            }
+        });
 }

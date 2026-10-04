@@ -6,6 +6,8 @@ pub type CoreResult<T> = Result<T, CoreError>;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
+    #[error(transparent)]
+    Svg(#[from] crate::svg::SvgError),
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("file system error: {0}")]

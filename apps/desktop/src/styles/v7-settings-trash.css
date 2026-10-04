@@ -121,7 +121,8 @@
   position: relative;
 }
 
-.v7-trash-sort summary {
+.v7-trash-sort summary,
+.v7-trash-page-actions .fragment-color-control > .v7-filter-pill {
   align-items: center;
   border: 1px solid var(--v7-border);
   border-radius: 8px;
@@ -141,13 +142,27 @@
 }
 
 .v7-trash-sort summary:hover,
-.v7-trash-sort[open] summary {
+.v7-trash-sort[open] summary,
+.v7-trash-page-actions .fragment-color-control > .v7-filter-pill:hover,
+.v7-trash-page-actions .fragment-color-control > .v7-filter-pill[data-expanded="true"] {
   background: var(--v7-surface);
   border-color: var(--v7-border-strong);
 }
 
 .v7-trash-sort[open] summary svg {
   transform: rotate(180deg);
+}
+
+.v7-trash-page-actions .fragment-color-control > .v7-filter-pill > svg {
+  height: 14px;
+  stroke-width: 1.7;
+  width: 14px;
+}
+
+.v7-trash-page-actions .fragment-color-popover {
+  left: auto;
+  right: 0;
+  top: 38px;
 }
 
 .v7-trash-sort-menu {
@@ -237,6 +252,13 @@
   height: 32px;
   justify-content: space-between;
   width: 100%;
+}
+
+.v7-trash-content > .fragment-index-status {
+  color: var(--v7-text-faint);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  margin: 0;
 }
 
 .v7-trash-filterbar > span {

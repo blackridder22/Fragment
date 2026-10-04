@@ -10,6 +10,7 @@ import {
   Sun,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import type { PaletteIndexStatus } from "@fragment/shared";
 import {
   DEFAULT_SHORTCUT_BINDINGS,
   SHORTCUT_DEFINITIONS,
@@ -53,6 +54,7 @@ const DEFAULT_NATIVE_HOST_STATUS: NativeHostStatus = Object.freeze({
 });
 
 export type SettingsPageProps = {
+  paletteIndex?: PaletteIndexStatus | null;
   theme: ThemePreference;
   deletePolicy: DeletePolicy;
   settings?: V7SettingsState;
@@ -98,6 +100,7 @@ const DELETE_POLICY_OPTIONS: Array<{
 ];
 
 export function SettingsPage({
+  paletteIndex,
   theme,
   deletePolicy,
   settings,
@@ -326,6 +329,7 @@ export function SettingsPage({
                 title="Storage"
               />
               <PreferenceGroup label="Local vault">
+                {paletteIndex ? <PreferenceRow label="Color palettes" description="Colors are extracted locally while Fragment is open." control={<span>{paletteIndex.ready + paletteIndex.empty} processed · {paletteIndex.pending} pending · {paletteIndex.failed} failed</span>} /> : null}
                 <PreferenceRow
                   control={
                     <button

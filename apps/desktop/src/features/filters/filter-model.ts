@@ -1,4 +1,7 @@
+import type { ColorFilter } from "@fragment/shared";
+
 export type FragmentFilter = {
+  color?: ColorFilter | null;
   query?: string | null;
   tags?: string[];
   mimeTypes?: string[];
@@ -55,6 +58,7 @@ export function normalizeFragmentFilter(
     ...new Set((filter.mimeTypes ?? []).map(cleanText).filter(Boolean)),
   ] as string[];
   return {
+    color: filter.color ?? undefined,
     query: cleanText(filter.query),
     tags,
     mimeTypes,

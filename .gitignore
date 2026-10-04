@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 dist/
 target/
 
@@ -15,3 +16,8 @@ output/
 *.log
 tmp/
 .playwright-mcp/
+
+# Landing-page beta binaries and audit reports live on the codex/landing-page branch
+apps/landing/downloads/*.dmg
+apps/landing/downloads/*.zip
+apps/landing/qa/

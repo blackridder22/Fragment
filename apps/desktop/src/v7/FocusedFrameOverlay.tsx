@@ -1,4 +1,6 @@
-import type { Fragment, Frame } from "@fragment/shared";
+import type { ColorFilter, Fragment, Frame } from "@fragment/shared";
+import { PaletteSection } from "../features/colors/PaletteSection";
+import { SvgPreview } from "../features/fragments/SvgPreview";
 import {
   ChevronDown,
   ChevronLeft,
@@ -26,6 +28,9 @@ import "../styles/v7-preview.css";
 type MaybeAsyncAction = () => void | Promise<void>;
 
 export type FocusedFrameOverlayProps = {
+  assetRoot?: string;
+  showPalette?: boolean;
+  onFindColor?: (color: ColorFilter) => void;
   fragment: Fragment;
   frames: Frame[];
   tags: string[];
@@ -50,6 +55,9 @@ export type FocusedFrameOverlayProps = {
 };
 
 export function FocusedFrameOverlay({
+  assetRoot = "",
+  showPalette = false,
+  onFindColor,
   fragment,
   frames,
   tags,
@@ -348,7 +356,7 @@ export function FocusedFrameOverlay({
       >
         <section className="v7-focused-preview-pane" aria-label="Frame image">
           <div className="v7-focused-image-stage">
-            {imageUnavailable ? (
+            {fragment.mimeType === "image/svg+xml" && assetRoot ? <SvgPreview key={fragment.id} fragment={fragment} assetRoot={assetRoot} initialUrl={imageUrl} /> : imageUnavailable ? (
               <div className="v7-focused-image-fallback">
                 <ImageOff aria-hidden="true" size={30} strokeWidth={1.6} />
                 <strong>Preview unavailable</strong>
@@ -457,8 +465,8 @@ export function FocusedFrameOverlay({
                       >
                         <Pencil
                           aria-hidden="true"
-                          size={13}
-                          strokeWidth={1.8}
+                          size={16}
+                          strokeWidth={2}
                         />
                       </button>
                     ) : null}
@@ -480,7 +488,7 @@ export function FocusedFrameOverlay({
                     onPointerDown={(event) => event.stopPropagation()}
                     type="button"
                   >
-                    <MoreHorizontal size={18} strokeWidth={1.7} />
+                    <MoreHorizontal aria-hidden="true" size={16} strokeWidth={2} />
                   </button>
                 </>
               )}
@@ -491,6 +499,7 @@ export function FocusedFrameOverlay({
           </header>
 
           <div className="v7-focused-details-body">
+            {showPalette ? <PaletteSection key={fragment.id} id={fragment.id} onFindColor={onFindColor} /> : null}
             <section className="v7-focused-detail-section">
               <label className="v7-focused-label" htmlFor="v7-frame-fragment">
                 Fragment
@@ -661,6 +670,7 @@ function formatMetadata(fragment: Fragment) {
 }
 
 function fileType(fragment: Fragment) {
+  if (fragment.mimeType === "image/svg+xml") return "SVG";
   const mimeSubtype = fragment.mimeType?.split("/").pop();
   const extension = fragment.originalPath.split(".").pop();
   const value = mimeSubtype || extension || "Image";

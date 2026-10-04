@@ -101,6 +101,7 @@ export type NativeRequest =
 export type NativeResponse =
   | {
       type: "pong";
+      capabilities?: string[];
       requestId: string;
       ok: true;
       app: "Fragment";

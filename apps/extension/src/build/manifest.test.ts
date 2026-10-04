@@ -11,7 +11,7 @@ function readJson(relativePath: string): unknown {
 }
 
 describe("extension manifest packaging", () => {
-  it("emits the canonical v0.0.7 Fragment manifest", () => {
+  it("emits the canonical Fragment manifest at the workspace version", () => {
     const canonical = readJson("manifest.json") as Record<string, unknown>;
     const packageMetadata = readJson("package.json") as {
       version: string;
@@ -23,7 +23,8 @@ describe("extension manifest packaging", () => {
 
     expect(packaged).toEqual(canonical);
     expect(packaged.name).toBe("Fragment");
-    expect(packaged.version).toBe("0.0.7");
+    const workspace = readJson("../../package.json") as { version: string };
+    expect(packaged.version).toBe(workspace.version);
   });
 
   it("rejects version drift before packaging", () => {

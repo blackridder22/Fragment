@@ -66,6 +66,7 @@ import {
 } from "./features/selection/selection-model";
 import { useMarqueeSelection } from "./features/selection/useMarqueeSelection";
 import type { AssetSource } from "./lib/assets";
+import { usePaletteIndex } from "./features/colors/useFragmentPalette";
 import {
   addExistingFragmentToFrame,
   assetUrl,
@@ -79,11 +80,13 @@ import {
   deleteFrame,
   deleteSmartFrame,
   emptyTrash as emptyNativeTrash,
+  ensureSvgPreview,
   fragmentMembershipCount,
   getFragmentTags,
   getLibraryRevision,
   importImageBatch,
   isTauriRuntime,
+  setPalettePriority,
   listFragmentIds,
   listFragmentPage,
   listSmartFrames,
@@ -324,6 +327,10 @@ function isEditableTarget(target: EventTarget | null) {
 export default function App() {
   const [activeView, setActiveView] = useState<V7View>("home");
   const [assetRoot, setAssetRoot] = useState("");
+  const paletteIndex = usePaletteIndex(Boolean(assetRoot));
+  const activePaletteRevision = useRef<string | null>(null);
+  const trashPaletteRevision = useRef<string | null>(null);
+  const [colorResultsChanged, setColorResultsChanged] = useState(false);
   const [defaultFrameId, setDefaultFrameId] = useState<string | null>(null);
   const [frames, setFrames] = useState<Frame[]>([]);
   const [fragments, setFragments] = useState<Fragment[]>([]);
@@ -363,6 +370,7 @@ export default function App() {
   const assetFallbackRequests = useRef<
     Partial<Record<string, Promise<string | null>>>
   >({});
+  const svgRepairs = useRef(new Map<string, Promise<void>>());
   const revisionRef = useRef("");
   const activeTotalRef = useRef(0);
   const activeNextOffsetRef = useRef(0);
@@ -424,6 +432,13 @@ export default function App() {
       }
     : null;
   const focusedFragmentId = focusedFragment?.id ?? null;
+  useEffect(() => {
+    if (isTauriRuntime() && assetRoot) {
+      void setPalettePriority(focusedFragmentId, selectedFrameId).catch(
+        () => undefined,
+      );
+    }
+  }, [assetRoot, focusedFragmentId, selectedFrameId]);
   const focusedFragmentIsDemo = focusedFragment
     ? isDemoFragment(focusedFragment)
     : false;
@@ -560,6 +575,16 @@ export default function App() {
         const nextFragments = reset
           ? mergeUniqueFragments([], page.items)
           : mergeUniqueFragments(fragmentsRef.current, page.items);
+        if (
+          fragmentFilterRef.current.color &&
+          !reset &&
+          activePaletteRevision.current !== page.paletteRevision
+        ) {
+          setColorResultsChanged(true);
+          return;
+        }
+        activePaletteRevision.current = page.paletteRevision ?? null;
+        if (reset) setColorResultsChanged(false);
         fragmentsRef.current = nextFragments;
         setFragments(nextFragments);
         activePageFrameIdRef.current = frameId;
@@ -619,6 +644,16 @@ export default function App() {
         if (requestId !== trashPageRequestRef.current) {
           return;
         }
+        if (
+          fragmentFilterRef.current.color &&
+          !reset &&
+          trashPaletteRevision.current !== page.paletteRevision
+        ) {
+          setColorResultsChanged(true);
+          return;
+        }
+        trashPaletteRevision.current = page.paletteRevision ?? null;
+        if (reset) setColorResultsChanged(false);
         const nextFragments = reset
           ? mergeUniqueFragments([], page.items)
           : mergeUniqueFragments(trashedFragmentsRef.current, page.items);
@@ -832,6 +867,20 @@ export default function App() {
     sourceFilterRef.current = sourceFilter;
     sortModeRef.current = sortMode;
   }, [fragmentFilter, query, sortMode, sourceFilter]);
+
+  useEffect(() => {
+    const revision =
+      activeView === "trash"
+        ? trashPaletteRevision.current
+        : activePaletteRevision.current;
+    if (
+      fragmentFilter.color &&
+      revision &&
+      paletteIndex?.revision &&
+      revision !== paletteIndex.revision
+    )
+      setColorResultsChanged(true);
+  }, [activeView, fragmentFilter.color, paletteIndex?.revision]);
 
   useEffect(() => {
     trashSortRef.current = trashSort;
@@ -1783,6 +1832,7 @@ export default function App() {
   }
 
   function applyFragmentFilter(filter: FragmentFilter) {
+    setColorResultsChanged(false);
     const normalized = normalizeFragmentFilter(filter);
     fragmentFilterRef.current = normalized;
     setFragmentFilter(normalized);
@@ -1862,11 +1912,20 @@ export default function App() {
       mode === "detail"
         ? [fragment.previewPath, fragment.thumbnailPath, fragment.originalPath]
         : [fragment.thumbnailPath, fragment.previewPath, fragment.originalPath];
-    return uniqueValues(paths);
+    return uniqueValues(
+      fragment.mimeType === "image/svg+xml"
+        ? paths.filter((path) => path !== fragment.originalPath)
+        : paths,
+    );
   }
 
   const resolveAssetFallback = useCallback(
     async (relativePath: string) => {
+      if (
+        relativePath.toLowerCase().endsWith(".svg") ||
+        relativePath.includes("svg-cache/")
+      )
+        return null;
       if (assetDataUrls[relativePath]) {
         return assetDataUrls[relativePath];
       }
@@ -1874,13 +1933,56 @@ export default function App() {
         return assetFallbackRequests.current[relativePath];
       }
 
-      const request = loadAssetDataUrl(relativePath)
+      const svg = [
+        ...fragmentsRef.current,
+        ...trashedFragmentsRef.current,
+        ...framePreviewFragments,
+      ].find(
+        (fragment) =>
+          fragment.mimeType === "image/svg+xml" &&
+          (fragment.thumbnailPath === relativePath ||
+            fragment.previewPath === relativePath),
+      );
+      const fallback = async () => {
+        if (!svg) return loadAssetDataUrl(relativePath);
+        const key = svg.assetId ?? svg.id;
+        let repair = svgRepairs.current.get(key);
+        if (!repair) {
+          repair = ensureSvgPreview(
+            svg.id,
+            1600,
+            crypto.randomUUID(),
+            true,
+          ).then(() => undefined);
+          if (svgRepairs.current.size >= 32) {
+            const oldest = svgRepairs.current.keys().next().value;
+            if (oldest) svgRepairs.current.delete(oldest);
+          }
+          svgRepairs.current.set(key, repair);
+        }
+        await repair;
+        return `${assetUrl(assetRoot, relativePath)}?repair=1`;
+      };
+      const request = fallback()
         .then((dataUrl) => {
-          setAssetDataUrls((current) =>
-            current[relativePath]
-              ? current
-              : { ...current, [relativePath]: dataUrl },
-          );
+          setAssetDataUrls((current) => {
+            if (current[relativePath]) return current;
+            // Base-image emergency fallback only; retain at most 32 entries / 24 MiB.
+            const entries = Object.entries(current);
+            let bytes =
+              dataUrl.length +
+              entries.reduce((sum, [, value]) => sum + value.length, 0);
+            while (
+              entries.length &&
+              (entries.length >= 32 || bytes > 24 * 1024 * 1024)
+            ) {
+              const removed = entries.shift();
+              if (removed) bytes -= removed[1].length;
+            }
+            return dataUrl.length > 24 * 1024 * 1024
+              ? Object.fromEntries(entries)
+              : { ...Object.fromEntries(entries), [relativePath]: dataUrl };
+          });
           delete assetFallbackRequests.current[relativePath];
           return dataUrl;
         })
@@ -1891,7 +1993,7 @@ export default function App() {
       assetFallbackRequests.current[relativePath] = request;
       return request;
     },
-    [assetDataUrls],
+    [assetDataUrls, assetRoot, framePreviewFragments],
   );
 
   function assetSourcesFor(
@@ -1965,6 +2067,11 @@ export default function App() {
     setStatus("Selecting matching Frames");
     try {
       const matchingIds = await listFragmentIds({
+        expectedPaletteRevision: fragmentFilter.color
+          ? activeView === "trash"
+            ? trashPaletteRevision.current
+            : activePaletteRevision.current
+          : null,
         frameId: activeView === "home" ? selectedFrameId : null,
         includeDescendants:
           activeView === "home" && Boolean(selectedFrameId)
@@ -2050,7 +2157,10 @@ export default function App() {
     }));
 
     const activeFrameId = selectedFrameIdRef.current;
-    if (activeFrameId === null || activeFrameId === fragment.frameId) {
+    if (
+      !fragmentFilterRef.current.color &&
+      (activeFrameId === null || activeFrameId === fragment.frameId)
+    ) {
       const nextFragments = mergeUniqueFragments(
         fragmentsRef.current,
         [fragment],
@@ -2235,7 +2345,16 @@ export default function App() {
       filters: [
         {
           name: "Images",
-          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff"],
+          extensions: [
+            "png",
+            "jpg",
+            "jpeg",
+            "webp",
+            "gif",
+            "bmp",
+            "tiff",
+            "svg",
+          ],
         },
       ],
     });
@@ -3016,7 +3135,8 @@ export default function App() {
   const v7TrashFragments = previewMode
     ? previewTrashedDemoFragments
     : visibleTrashedFragments;
-  const v7TrashFrames = previewMode ? [] : visibleTrashedFrames;
+  const v7TrashFrames =
+    previewMode || fragmentFilter.color ? [] : visibleTrashedFrames;
   const defaultFocusedCollection =
     activeView === "trash" ? v7TrashFragments : galleryFragments;
   const selectedFocusedCollection = selectedFragmentIds
@@ -3370,7 +3490,10 @@ export default function App() {
       onToggleExpanded={toggleFrameExpanded}
       onViewChange={changeView}
     >
-      {activeView === "home" && !selectedFrameId && !selectedSmartFrameId ? (
+      {activeView === "home" &&
+      !selectedFrameId &&
+      !selectedSmartFrameId &&
+      !fragmentFilter.color ? (
         <VaultPage
           assetSourcesFor={(fragment) => assetSourcesFor(fragment, "gallery")}
           folderNameFor={(fragment) =>
@@ -3398,6 +3521,12 @@ export default function App() {
         />
       ) : activeView === "home" || activeView === "frames" ? (
         <FramesPage
+          paletteIndex={paletteIndex}
+          colorResultsChanged={colorResultsChanged}
+          onRefreshColors={() => {
+            dispatchSelection({ type: "clear", scopeKey: "" });
+            void loadActivePage(selectedFrameIdRef.current, true);
+          }}
           assetSourcesFor={(fragment) => assetSourcesFor(fragment, "gallery")}
           density={browsingMode.density}
           filter={fragmentFilter}
@@ -3436,6 +3565,16 @@ export default function App() {
         />
       ) : activeView === "trash" ? (
         <V7TrashPage
+          color={fragmentFilter.color}
+          paletteIndex={paletteIndex}
+          colorResultsChanged={colorResultsChanged}
+          onColorChange={(color) =>
+            applyFragmentFilter({ ...fragmentFilter, color })
+          }
+          onRefreshColors={() => {
+            dispatchSelection({ type: "clear", scopeKey: "" });
+            void loadTrashPage(true);
+          }}
           assetSourcesFor={(fragment) => assetSourcesFor(fragment, "gallery")}
           frameNameFor={(frameId) =>
             (frameById.get(frameId) ?? demoFrameById.get(frameId))?.name ??
@@ -3482,11 +3621,12 @@ export default function App() {
           total={
             previewMode
               ? v7TrashFragments.length + v7TrashFrames.length
-              : trashTotal + trashedFrames.length
+              : trashTotal + v7TrashFrames.length
           }
         />
       ) : (
         <V7SettingsPage
+          paletteIndex={paletteIndex}
           deletePolicy={deletePolicy}
           nativeHostStatus={nativeHostStatus}
           settings={v7Settings}
@@ -3522,13 +3662,44 @@ export default function App() {
             </div>
           ) : null}
           {pendingImports.length > 0 ? (
-            <div className="v7-notice">
+            <div className="v7-notice fragment-import-notice">
               <span>
                 {activeImportCount > 0
                   ? `Importing ${activeImportCount} ${activeImportCount === 1 ? "Frame" : "Frames"}`
                   : "Import complete"}
                 {failedImportCount > 0 ? ` · ${failedImportCount} failed` : ""}
               </span>
+              {failedImportCount > 0 ? (
+                <details className="fragment-import-failures">
+                  <summary>Show failed imports</summary>
+                  <ul>
+                    {pendingImports
+                      .filter((item) => item.status === "failed")
+                      .map((item) => (
+                        <li key={item.id}>
+                          <strong>{item.name}</strong>
+                          <span>
+                            {item.error || "This file could not be imported."}
+                          </span>
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => retryImport(item)}
+                            >
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => skipImport(item)}
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                  </ul>
+                </details>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -3686,6 +3857,13 @@ export default function App() {
 
       {focusedFragment ? (
         <FocusedFrameOverlay
+          assetRoot={assetRoot}
+          showPalette={isTauriRuntime() && !isDemoFragment(focusedFragment)}
+          onFindColor={(color) => {
+            applyFragmentFilter({ ...fragmentFilter, color });
+            setSelectedFragment(null);
+            setQuickPreviewFragment(null);
+          }}
           actionsOpen={
             fragmentContextMenu?.layer === "overlay" &&
             fragmentContextMenu.fragment.id === focusedFragment.id

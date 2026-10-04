@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, Duration, Utc};
-use image::ImageFormat;
 use rusqlite::{
     params, params_from_iter, types::Value, Connection, OptionalExtension, Row, TransactionBehavior,
 };
@@ -13,9 +12,11 @@ use crate::db::FragmentCore;
 use crate::errors::{CoreError, CoreResult};
 use crate::frames::hard_delete_trashed_frames_in_conn;
 use crate::hashing::sha256_hex;
+use crate::media::{read_asset, AssetFormat};
 use crate::models::{FileCleanupReport, Fragment, FragmentFilter, PurgeReport};
-use crate::storage::{extension_for_format, mime_for_format, safe_existing_file, write_atomic};
-use crate::thumbnails::{decode_image, dimensions, generate_preview, generate_thumbnail};
+use crate::palette::PaletteColor;
+use crate::storage::{safe_existing_file, write_atomic};
+use crate::thumbnails::{decode_image, dimensions, generate_preview};
 
 const MAX_FRAGMENT_TITLE_CHARS: usize = 120;
 
@@ -38,7 +39,7 @@ fn normalize_fragment_title(title: Option<&str>) -> Option<String> {
 
 pub(crate) struct NewFragmentAsset {
     pub(crate) bytes: Vec<u8>,
-    pub(crate) format: ImageFormat,
+    pub(crate) format: AssetFormat,
     pub(crate) title: Option<String>,
     pub(crate) note: Option<String>,
     pub(crate) source_url: Option<String>,
@@ -76,6 +77,8 @@ struct StoredAsset {
     file_size: Option<i64>,
     sha256: Option<String>,
     perceptual_hash: Option<String>,
+    palette: Option<Vec<PaletteColor>>,
+    render_warnings: Option<String>,
 }
 
 fn fragment_select_sql(where_clause: &str) -> String {
@@ -177,6 +180,23 @@ fn build_filtered_scope(
     }
     let mut conditions = Vec::with_capacity(24);
     let mut values = Vec::with_capacity(24);
+    if let Some(color) = &filter.color {
+        let [l, a, b] = color.lab()?;
+        conditions.push("EXISTS(SELECT 1 FROM asset_palette_colors c JOIN asset_palettes p ON p.asset_id=c.asset_id WHERE c.asset_id=assets.id AND p.status='ready' AND p.algorithm_version=? AND p.source_sha256=COALESCE(assets.sha256,'') AND c.coverage>=0.01 AND ((c.l-?)*(c.l-?)+(c.a-?)*(c.a-?)+(c.lab_b-?)*(c.lab_b-?))<=?)".into());
+        values.push(Value::Integer(crate::palette::ALGORITHM_VERSION));
+        values.extend(
+            [
+                l,
+                l,
+                a,
+                a,
+                b,
+                b,
+                (f64::from(color.tolerance) / 1000.0).powi(2),
+            ]
+            .map(Value::Real),
+        );
+    }
     if let Some(frame_id) = frame_id {
         conditions.push(
             if include_descendants {
@@ -525,6 +545,7 @@ impl FragmentCore {
         )
     }
 
+    #[allow(clippy::too_many_arguments)] // Preserve the existing public paginated query API.
     pub fn list_fragment_page_filtered(
         &self,
         frame_id: Option<String>,
@@ -535,12 +556,46 @@ impl FragmentCore {
         offset: usize,
         limit: usize,
     ) -> CoreResult<(Vec<Fragment>, u64)> {
+        let page = self.list_fragment_page_snapshot(
+            frame_id,
+            include_descendants,
+            trashed,
+            filter,
+            sort_mode,
+            offset,
+            limit,
+        )?;
+        Ok((page.items, page.total))
+    }
+
+    #[allow(clippy::too_many_arguments)] // Same query controls, with atomic result revisions.
+    pub fn list_fragment_page_snapshot(
+        &self,
+        frame_id: Option<String>,
+        include_descendants: bool,
+        trashed: bool,
+        filter: FragmentFilter,
+        sort_mode: Option<String>,
+        offset: usize,
+        limit: usize,
+    ) -> CoreResult<crate::models::FragmentPageSnapshot> {
         if let Some(frame_id) = frame_id.as_deref() {
             self.require_frame(frame_id)?;
         }
         let (predicate, values) =
             build_filtered_scope(frame_id, include_descendants, trashed, &filter)?;
-        let conn = self.conn()?;
+        let mut guard = self.conn()?;
+        let conn = guard.transaction()?;
+        let (revision, palette_revision) = conn.query_row(
+            "SELECT revision,palette_revision FROM vault_metadata WHERE id=1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?.to_string(),
+                    row.get::<_, i64>(1)?.to_string(),
+                ))
+            },
+        )?;
         let count_sql = format!(
             "SELECT count(*) FROM fragments
              LEFT JOIN assets ON assets.id = fragments.asset_id
@@ -570,7 +625,14 @@ impl FragmentCore {
         let total = u64::try_from(total).map_err(|_| {
             CoreError::InvalidInput("Fragment count cannot be negative".to_string())
         })?;
-        Ok((items, total))
+        drop(stmt);
+        conn.commit()?;
+        Ok(crate::models::FragmentPageSnapshot {
+            items,
+            total,
+            revision,
+            palette_revision,
+        })
     }
 
     pub fn list_fragment_ids(
@@ -691,6 +753,25 @@ impl FragmentCore {
         filter: FragmentFilter,
         sort_mode: Option<String>,
     ) -> CoreResult<Vec<String>> {
+        self.list_fragment_ids_at_revision(
+            frame_id,
+            include_descendants,
+            trashed,
+            filter,
+            sort_mode,
+            None,
+        )
+    }
+
+    pub fn list_fragment_ids_at_revision(
+        &self,
+        frame_id: Option<String>,
+        include_descendants: bool,
+        trashed: bool,
+        filter: FragmentFilter,
+        sort_mode: Option<String>,
+        expected_palette_revision: Option<String>,
+    ) -> CoreResult<Vec<String>> {
         if let Some(frame_id) = frame_id.as_deref() {
             self.require_frame(frame_id)?;
         }
@@ -705,11 +786,30 @@ impl FragmentCore {
              WHERE {predicate}
              ORDER BY {order}"
         );
-        let conn = self.conn()?;
+        let mut guard = self.conn()?;
+        let conn = guard.transaction()?;
+        if filter.color.is_some() {
+            if let Some(expected) = expected_palette_revision {
+                let revision = conn
+                    .query_row(
+                        "SELECT palette_revision FROM vault_metadata WHERE id=1",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )?
+                    .to_string();
+                if revision != expected {
+                    return Err(CoreError::InvalidInput(
+                        "Color results changed. Refresh before selecting all.".into(),
+                    ));
+                }
+            }
+        }
         let mut stmt = conn.prepare(&sql)?;
         let ids = stmt
             .query_map(params_from_iter(values.iter()), |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
+        drop(stmt);
+        conn.commit()?;
         Ok(ids)
     }
 
@@ -1128,8 +1228,7 @@ impl FragmentCore {
         let frame_id = self.resolve_frame_id(frame_id)?;
 
         let safe_path = safe_existing_file(Path::new(&file_path))?;
-        let bytes = fs::read(&safe_path)?;
-        let format = image::guess_format(&bytes)?;
+        let (bytes, format) = read_asset(&safe_path)?;
         let fallback_title = file_title(&safe_path);
         let title = title_override
             .as_ref()
@@ -1164,8 +1263,7 @@ impl FragmentCore {
     ) -> CoreResult<ImportOutcome> {
         let frame_id = self.resolve_frame_id(frame_id)?;
         let safe_path = safe_existing_file(Path::new(&file_path))?;
-        let bytes = fs::read(&safe_path)?;
-        let format = image::guess_format(&bytes)?;
+        let (bytes, format) = read_asset(&safe_path)?;
         let fallback_title = file_title(&safe_path);
         let title = title_override
             .as_ref()
@@ -1250,14 +1348,13 @@ impl FragmentCore {
         }
 
         let sha256 = sha256_hex(&asset.bytes);
-        let image = decode_image(&asset.bytes)?;
-        let (width, height) = dimensions(&image);
         let existing_asset = {
             let conn = self.conn()?;
             asset_by_sha_in_conn(&conn, &sha256)?
         };
         let staged_asset = if existing_asset.is_none() {
-            Some(self.prepare_asset_files(&asset, &sha256, &image, width, height)?)
+            let _permit = crate::processing::acquire();
+            Some(self.prepare_asset_files(&asset, &sha256)?)
         } else {
             None
         };
@@ -1464,13 +1561,10 @@ impl FragmentCore {
         &self,
         asset: &NewFragmentAsset,
         sha256: &str,
-        image: &image::DynamicImage,
-        width: i64,
-        height: i64,
     ) -> CoreResult<StoredAsset> {
         let now = Utc::now();
         let asset_id = Uuid::new_v4().to_string();
-        let extension = extension_for_format(asset.format);
+        let extension = asset.format.extension();
         let original_abs = original_path(
             self.paths().root(),
             &asset_id,
@@ -1484,22 +1578,63 @@ impl FragmentCore {
             .join(format!("{asset_id}.png"));
         let preview_abs = self.paths().previews_dir().join(format!("{asset_id}.png"));
 
-        write_atomic(&original_abs, &asset.bytes)?;
-        generate_thumbnail(image, &thumbnail_abs)?;
-        generate_preview(image, &preview_abs)?;
-
-        Ok(StoredAsset {
+        let mut stored = StoredAsset {
             id: asset_id,
             original_path: self.paths().to_relative_string(&original_abs)?,
             thumbnail_path: self.paths().to_relative_string(&thumbnail_abs)?,
             preview_path: Some(self.paths().to_relative_string(&preview_abs)?),
-            mime_type: Some(mime_for_format(asset.format).to_string()),
-            width: Some(width),
-            height: Some(height),
+            mime_type: Some(asset.format.mime().to_string()),
+            width: None,
+            height: None,
             file_size: Some(i64::try_from(asset.bytes.len()).unwrap_or(i64::MAX)),
             sha256: Some(sha256.to_string()),
             perceptual_hash: None,
-        })
+            palette: None,
+            render_warnings: None,
+        };
+        let prepare = (|| -> CoreResult<()> {
+            let thumbnail = match asset.format {
+                AssetFormat::Raster(_) => {
+                    let image = decode_image(&asset.bytes)?;
+                    let (width, height) = dimensions(&image);
+                    stored.width = Some(width);
+                    stored.height = Some(height);
+                    let thumb = image.thumbnail(640, 640);
+                    let mut png = std::io::Cursor::new(Vec::new());
+                    thumb.write_to(&mut png, image::ImageFormat::Png)?;
+                    write_atomic(&thumbnail_abs, &png.into_inner())?;
+                    generate_preview(&image, &preview_abs)?;
+                    thumb
+                }
+                AssetFormat::Svg => {
+                    let render = crate::svg_worker::render_svg(
+                        &asset.bytes,
+                        &[640, 1600],
+                        &self.paths().temp_dir(),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )?;
+                    stored.width = Some(render.metadata.width);
+                    stored.height = Some(render.metadata.height);
+                    stored.render_warnings = Some(
+                        serde_json::to_string(&render.metadata.warnings)
+                            .map_err(|error| CoreError::InvalidInput(error.to_string()))?,
+                    );
+                    let thumb = render.png(640)?;
+                    write_atomic(&thumbnail_abs, &thumb)?;
+                    write_atomic(&preview_abs, &render.png(1600)?)?;
+                    decode_image(&thumb)?
+                }
+            };
+            // Palette failure cannot invalidate otherwise valid saved image bytes.
+            stored.palette = std::panic::catch_unwind(|| crate::palette::extract(&thumbnail)).ok();
+            write_atomic(&original_abs, &asset.bytes)?;
+            Ok(())
+        })();
+        if let Err(error) = prepare {
+            self.remove_uncommitted_asset_files(&stored);
+            return Err(error);
+        }
+        Ok(stored)
     }
 
     fn remove_uncommitted_asset_files(&self, asset: &StoredAsset) {
@@ -1574,6 +1709,22 @@ fn insert_asset_record(connection: &Connection, asset: &StoredAsset) -> CoreResu
             now
         ],
     )?;
+    if let Some(colors) = &asset.palette {
+        crate::palette_jobs::publish(
+            connection,
+            &asset.id,
+            asset.sha256.as_deref().unwrap_or_default(),
+            colors,
+        )?;
+    } else {
+        connection.execute("INSERT INTO asset_palettes(asset_id,algorithm_version,source_sha256,status,error_code,updated_at) VALUES(?1,?2,?3,'failed','extraction_failed',?4)",params![asset.id,crate::palette::ALGORITHM_VERSION,asset.sha256,now])?;
+    }
+    if let Some(warnings) = &asset.render_warnings {
+        connection.execute(
+            "UPDATE assets SET render_warnings_json=?1 WHERE id=?2",
+            params![warnings, asset.id],
+        )?;
+    }
     Ok(())
 }
 
@@ -1875,6 +2026,12 @@ pub(crate) fn enqueue_orphan_asset_cleanup(
 fn enqueue_asset_cleanup_and_delete(connection: &Connection, asset_id: &str) -> CoreResult<()> {
     if let Some(asset) = asset_by_id_in_conn(connection, asset_id)? {
         enqueue_cleanup_paths(connection, asset_paths(&asset))?;
+        let mut query = connection
+            .prepare("SELECT relative_path FROM asset_preview_cache WHERE asset_id=?1")?;
+        let paths = query
+            .query_map(params![asset_id], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        enqueue_cleanup_paths(connection, paths.iter().map(String::as_str))?;
         connection.execute("DELETE FROM assets WHERE id = ?1", params![asset_id])?;
     }
     Ok(())
@@ -1894,7 +2051,7 @@ pub(crate) fn enqueue_fragment_cleanup(
     )
 }
 
-fn enqueue_cleanup_paths<'a, I>(connection: &Connection, paths: I) -> CoreResult<()>
+pub(crate) fn enqueue_cleanup_paths<'a, I>(connection: &Connection, paths: I) -> CoreResult<()>
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -1938,6 +2095,8 @@ fn map_stored_asset(row: &Row<'_>) -> rusqlite::Result<StoredAsset> {
         file_size: row.get("file_size")?,
         sha256: row.get("sha256")?,
         perceptual_hash: row.get("perceptual_hash")?,
+        palette: None,
+        render_warnings: None,
     })
 }
 
@@ -2015,7 +2174,10 @@ mod tests {
                 None,
             )
             .expect("update title");
-        assert_eq!(updated.title.as_deref(), Some("concise Pinterest reference"));
+        assert_eq!(
+            updated.title.as_deref(),
+            Some("concise Pinterest reference")
+        );
     }
 
     fn sample_png_bytes() -> Vec<u8> {
@@ -3215,7 +3377,7 @@ mod tests {
             &[frame.id.clone(), "missing-frame".to_string()],
             super::NewFragmentAsset {
                 bytes: sample_png_bytes(),
-                format: ImageFormat::Png,
+                format: ImageFormat::Png.into(),
                 title: Some("Atomic".to_string()),
                 note: None,
                 source_url: None,

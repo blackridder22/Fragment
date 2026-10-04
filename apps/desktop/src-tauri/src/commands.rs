@@ -48,6 +48,7 @@ pub struct FragmentPage {
     total: u64,
     has_more: bool,
     revision: String,
+    palette_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,6 +172,7 @@ fn fragment_page(
         total,
         has_more: u64::try_from(offset.saturating_add(limit)).unwrap_or(u64::MAX) < total,
         revision,
+        palette_revision: None,
     }
 }
 
@@ -216,6 +218,7 @@ pub async fn load_library_snapshot(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Keep named IPC query parameters compatible with existing clients.
 pub async fn list_fragment_page(
     state: State<'_, FragmentState>,
     frame_id: Option<String>,
@@ -230,8 +233,8 @@ pub async fn list_fragment_page(
     let offset = offset.unwrap_or_default() as usize;
     let limit = page_size(limit);
     tauri::async_runtime::spawn_blocking(move || {
-        let (items, total) = core
-            .list_fragment_page_filtered(
+        let page = core
+            .list_fragment_page_snapshot(
                 frame_id,
                 include_descendants.unwrap_or(false),
                 trashed.unwrap_or(false),
@@ -241,14 +244,16 @@ pub async fn list_fragment_page(
                 limit,
             )
             .map_err(safe_error)?;
-        let revision = core.library_revision().map_err(safe_error)?.to_string();
-        Ok(fragment_page(items, offset, limit, total, revision))
+        let mut result = fragment_page(page.items, offset, limit, page.total, page.revision);
+        result.palette_revision = Some(page.palette_revision);
+        Ok(result)
     })
     .await
     .map_err(safe_error)?
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Same IPC controls plus an optional snapshot revision.
 pub async fn list_fragment_ids(
     state: State<'_, FragmentState>,
     frame_id: Option<String>,
@@ -258,6 +263,7 @@ pub async fn list_fragment_ids(
     source_filter: Option<String>,
     filter: Option<FragmentFilter>,
     sort_mode: Option<String>,
+    expected_palette_revision: Option<String>,
 ) -> CommandResult<Vec<String>> {
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -266,12 +272,13 @@ pub async fn list_fragment_ids(
             source_kind: source_filter,
             ..FragmentFilter::default()
         });
-        core.list_fragment_ids_filtered(
+        core.list_fragment_ids_at_revision(
             frame_id,
             include_descendants.unwrap_or(false),
             trashed.unwrap_or(false),
             filter,
             sort_mode,
+            expected_palette_revision,
         )
         .map_err(safe_error)
     })
@@ -913,20 +920,40 @@ pub fn open_fragment_source(state: State<'_, FragmentState>, id: String) -> Comm
 }
 
 #[tauri::command]
-pub fn copy_fragment_image(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
-    let fragment = state
-        .core
-        .get_fragment_including_deleted(id)
-        .map_err(safe_error)?;
-    let path = state
-        .core
-        .paths()
-        .resolve_relative_path(&fragment.original_path)
-        .map_err(safe_error)?;
-    let bytes = fs::read(path).map_err(safe_error)?;
-    let image = decode_clipboard_image(&bytes)?;
-    let mut clipboard = Clipboard::new().map_err(safe_error)?;
-    clipboard.set_image(image).map_err(safe_error)
+pub async fn copy_fragment_image(state: State<'_, FragmentState>, id: String) -> CommandResult<()> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let fragment = core
+            .get_fragment_including_deleted(id.clone())
+            .map_err(safe_error)?;
+        let relative = if fragment.mime_type.as_deref() == Some("image/svg+xml") {
+            core.ensure_svg_preview(
+                &id,
+                1600,
+                &format!(
+                    "clipboard-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                ),
+            )
+            .map_err(safe_error)?
+            .relative_path
+        } else {
+            fragment.original_path
+        };
+        let path = core
+            .paths()
+            .resolve_relative_path(&relative)
+            .map_err(safe_error)?;
+        let bytes = fs::read(path).map_err(safe_error)?;
+        let image = decode_clipboard_image(&bytes)?;
+        let mut clipboard = Clipboard::new().map_err(safe_error)?;
+        clipboard.set_image(image).map_err(safe_error)
+    })
+    .await
+    .map_err(safe_error)?
 }
 
 fn decode_clipboard_image(bytes: &[u8]) -> CommandResult<ImageData<'static>> {
@@ -980,6 +1007,10 @@ pub async fn asset_data_url(
     state: State<'_, FragmentState>,
     relative_path: String,
 ) -> CommandResult<String> {
+    if relative_path.to_ascii_lowercase().ends_with(".svg") || relative_path.contains("svg-cache/")
+    {
+        return Err("SVG previews must use cached PNG file URLs".into());
+    }
     tracing::warn!(
         relative_path = %relative_path,
         "falling back to inline asset data; the configured asset protocol should handle normal previews"

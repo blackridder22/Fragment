@@ -47,6 +47,7 @@ type NativeResponse =
       protocolVersion: number;
       minimumProtocolVersion: number;
       compatible: boolean;
+      capabilities?: string[]; // v0.0.8: ["svg", "color_palette"]
     }
   | { type: "frames.list.result"; requestId: string; ok: true; frames: Frame[] }
   | CaptureFragmentResponse
@@ -65,7 +66,7 @@ action.
 ## Version compatibility
 
 - The root, npm workspaces, Cargo packages, Tauri app, and extension manifests
-  use the current synchronized application version (`0.0.7` for this release).
+  use the current synchronized application version (`0.0.8` for this release).
 - `extensionVersion` reports the sender build.
 - `pong.version` reports the native host build.
 - Neither application-version field is the native protocol version.
@@ -137,3 +138,23 @@ If Chrome cannot connect, verify:
 - `allowed_origins` contains the exact loaded extension ID.
 - The host writes no diagnostics to stdout.
 - The host and extension report compatible application versions.
+
+## Private SVG worker and local verification
+
+The same bundled binary supports `--render-svg` before normal host initialization.
+It reads one private JSON request over stdin and emits one private JSON result;
+these messages are not Chrome length-prefixed messages and are never exposed as
+an extension operation. The parent chooses staging paths and permitted tiers.
+The worker opens no Vault database. Desktop resolves it from app resources;
+a native host starts its own executable in worker mode.
+
+`pnpm release:local` verifies both normal version/protocol/capability negotiation
+and the packaged private worker's PNG dimensions, original-byte preservation
+and absence of database initialization.
+
+`node scripts/media-host-smoke.mjs [host-path] [report-path]` uses a temporary
+Vault, a loopback test server and the real executable. It requires SQLite CLI;
+on macOS it also probes/reaps its own test child using pgrep/ps. It verifies
+SVG/PNG persistence, >8-second response, queued ping IDs, renderer crash recovery
+and a restarted host. This automated check is separate from real Chrome toolbar,
+Frame-picker, permission, connection and desktop-focus verification.

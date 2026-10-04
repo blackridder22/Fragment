@@ -29,9 +29,16 @@ pub fn handle_message(core: &FragmentCore, message: Value) -> Value {
                         error_response(request_id, "encode_failed", error.to_string())
                     }),
                     Err(error) => {
+                        let code = match &error {
+                            fragment_core::CoreError::Svg(svg) => serde_json::to_value(&svg.code)
+                                .ok()
+                                .and_then(|v| v.as_str().map(str::to_string))
+                                .unwrap_or_else(|| "invalid_svg".into()),
+                            _ => "capture_failed".into(),
+                        };
                         let response = FragmentCore::capture_error_response(
                             request_id.unwrap_or_default(),
-                            "capture_failed",
+                            code,
                             error.to_string(),
                         );
                         serde_json::to_value(response).unwrap_or_else(|error| {
@@ -74,6 +81,7 @@ fn ping_response(request_id: Option<String>, message: &Value) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "protocolVersion": NATIVE_PROTOCOL_VERSION,
         "minimumProtocolVersion": MINIMUM_NATIVE_PROTOCOL_VERSION,
+        "capabilities": ["svg", "color_palette"],
         "compatible": compatible
     })
 }

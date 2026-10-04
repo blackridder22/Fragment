@@ -5,9 +5,16 @@ pub mod errors;
 pub mod fragments;
 pub mod frames;
 pub mod hashing;
+pub mod media;
 pub mod models;
+pub mod palette;
+pub mod palette_jobs;
+pub mod previews;
+mod processing;
 pub mod smart_frames;
 pub mod storage;
+pub mod svg;
+pub mod svg_worker;
 pub mod thumbnails;
 
 pub use db::FragmentCore;

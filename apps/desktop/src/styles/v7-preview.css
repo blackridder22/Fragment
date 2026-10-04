@@ -585,12 +585,6 @@
   color: var(--v7-text-faint, #7f887f);
 }
 
-.v7-focused-title-editor input:focus-visible {
-  border-color: var(--v7-focus, #89f7ff);
-  box-shadow: 0 0 0 2px
-    color-mix(in srgb, var(--v7-focus, #89f7ff) 14%, transparent);
-}
-
 .v7-focused-title-editor input[aria-invalid="true"] {
   border-color: var(--v7-danger, #f27b72);
   box-shadow: 0 0 0 2px
@@ -871,11 +865,6 @@
 
 .v7-focused-tag-editor input::placeholder {
   color: var(--v7-text-faint, #7f887f);
-}
-
-.v7-focused-tag-editor input:focus-visible {
-  border-color: var(--v7-focus, #89f7ff);
-  box-shadow: 0 0 0 2px rgb(137 247 255 / 14%);
 }
 
 .v7-focused-tag-editor button {

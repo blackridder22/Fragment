@@ -10,10 +10,15 @@ import {
   type FrameCanvasProps,
 } from "./FrameGallery";
 import { PaginationFooter } from "./PaginationFooter";
+import { ColorFilterControl } from "../features/colors/ColorFilterControl";
+import type { PaletteIndexStatus } from "@fragment/shared";
 
 type V7FrameFilter = "all" | "fragment" | "source" | "tags";
 
 export type FramesPageProps = FrameGalleryProps & {
+  paletteIndex?: PaletteIndexStatus | null;
+  colorResultsChanged?: boolean;
+  onRefreshColors?: () => void;
   density?: BrowsingDensity;
   filter?: FragmentFilter;
   knownTags?: readonly string[];
@@ -43,6 +48,7 @@ const FORMAT_OPTIONS = [
   { label: "JPEG", value: "image/jpeg" },
   { label: "WebP", value: "image/webp" },
   { label: "GIF", value: "image/gif" },
+  { label: "SVG", value: "image/svg+xml" },
 ] as const;
 
 const ORIENTATION_OPTIONS = [
@@ -101,6 +107,9 @@ function FilterMenuItem({
 }
 
 export function FramesPage({
+  paletteIndex,
+  colorResultsChanged = false,
+  onRefreshColors,
   density = "comfortable",
   filter = {},
   hasMore = false,
@@ -130,7 +139,7 @@ export function FramesPage({
       filter.sourceDomain || filter.siteContains || filter.creatorContains,
     );
   const hasTagFilter = activeTags.length > 0;
-  const hasAnyFilter = hasFragmentFilter || hasSourceFilter || hasTagFilter;
+  const hasAnyFilter = hasFragmentFilter || hasSourceFilter || hasTagFilter || Boolean(filter.color);
 
   useEffect(() => {
     if (!openFilter) return;
@@ -165,6 +174,7 @@ export function FramesPage({
     onFilterChange?.({
       tags: [],
       mimeTypes: [],
+      color: null,
       sourceKind: "all",
       orientation: "all",
     });
@@ -349,6 +359,7 @@ export function FramesPage({
               </div>
             );
           })}
+          <ColorFilterControl value={filter.color} onChange={(color) => { setOpenFilter(null); patchFilter({ color }); }} />
         </div>
 
         <span className="v7-frame-result-count">
@@ -356,6 +367,10 @@ export function FramesPage({
         </span>
       </div>
 
+      {filter.color && (Boolean(paletteIndex?.pending) || colorResultsChanged) ? <div className="fragment-index-status" role="status">
+        {paletteIndex?.pending ? <span>Colors are still being extracted · {paletteIndex.ready + paletteIndex.empty} processed, {paletteIndex.pending} remaining</span> : null}
+        {colorResultsChanged ? <><span>More color results available</span><button type="button" onClick={onRefreshColors}>Refresh</button></> : null}
+      </div> : null}
       <FrameGallery
         density={density}
         resultCount={resultCount}

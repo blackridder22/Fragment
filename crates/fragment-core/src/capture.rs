@@ -1,5 +1,7 @@
 use std::io::Read;
+use std::time::{Duration, Instant};
 
+use crate::media::AssetFormat;
 use image::ImageFormat;
 use url::Url;
 
@@ -109,6 +111,7 @@ impl FragmentCore {
         request: &CaptureFragmentRequest,
     ) -> CoreResult<DownloadedCaptureImage> {
         let urls = ranked_capture_urls(request)?;
+        let deadline = Instant::now() + Duration::from_secs(20);
         let mut last_error = None;
         for image_url in urls {
             let url = match Url::parse(&image_url) {
@@ -123,14 +126,21 @@ impl FragmentCore {
                 }
             };
 
-            match self.download_image_bytes(url.as_str()).and_then(|bytes| {
-                let format = image::guess_format(&bytes)?;
-                Ok(DownloadedCaptureImage {
-                    image_url: image_url.clone(),
-                    bytes,
-                    format,
-                })
-            }) {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Err(CoreError::InvalidInput(
+                    "Capture download exceeded the 20 second budget".into(),
+                ));
+            };
+            match self
+                .download_image_bytes(url.as_str(), remaining)
+                .and_then(|bytes| {
+                    let format = AssetFormat::detect(&bytes)?;
+                    Ok(DownloadedCaptureImage {
+                        image_url: image_url.clone(),
+                        bytes,
+                        format,
+                    })
+                }) {
                 Ok(downloaded) => return Ok(downloaded),
                 Err(error) => last_error = Some(error),
             }
@@ -160,17 +170,41 @@ impl FragmentCore {
         }
     }
 
-    fn download_image_bytes(&self, url: &str) -> CoreResult<Vec<u8>> {
-        let mut response = self.http_client().get(url).send()?.error_for_status()?;
+    fn download_image_bytes(&self, url: &str, timeout: Duration) -> CoreResult<Vec<u8>> {
+        let mut response = self
+            .http_client()
+            .get(url)
+            .timeout(timeout)
+            .send()?
+            .error_for_status()?;
         if response.content_length().unwrap_or(0) > MAX_DOWNLOAD_BYTES {
             return Err(CoreError::DownloadTooLarge);
         }
 
-        let mut limited = response.by_ref().take(MAX_DOWNLOAD_BYTES + 1);
-        let mut bytes = Vec::new();
+        let mut prefix = Vec::new();
+        response.by_ref().take(32).read_to_end(&mut prefix)?;
+        let raster = image::guess_format(&prefix).is_ok();
+        let limit = if raster {
+            MAX_DOWNLOAD_BYTES
+        } else {
+            crate::svg::MAX_SVG_BYTES as u64
+        };
+        if response.content_length().unwrap_or(0) > limit {
+            return Err(if raster {
+                CoreError::DownloadTooLarge
+            } else {
+                crate::svg::SvgError::too_large().into()
+            });
+        }
+        let mut limited = response.by_ref().take(limit + 1 - prefix.len() as u64);
+        let mut bytes = prefix;
         limited.read_to_end(&mut bytes)?;
-        if bytes.len() > usize::try_from(MAX_DOWNLOAD_BYTES).unwrap_or(usize::MAX) {
-            return Err(CoreError::DownloadTooLarge);
+        if bytes.len() > limit as usize {
+            return Err(if raster {
+                CoreError::DownloadTooLarge
+            } else {
+                crate::svg::SvgError::too_large().into()
+            });
         }
         Ok(bytes)
     }
@@ -179,7 +213,7 @@ impl FragmentCore {
 struct DownloadedCaptureImage {
     image_url: String,
     bytes: Vec<u8>,
-    format: ImageFormat,
+    format: AssetFormat,
 }
 
 fn ranked_capture_urls(request: &CaptureFragmentRequest) -> CoreResult<Vec<String>> {
@@ -274,6 +308,11 @@ impl ScoredCaptureUrl {
 }
 
 fn capture_url_score(url: &Url, source: &str, width: Option<i64>, density: Option<f64>) -> i64 {
+    if matches!(source, "sourceUrl" | "linkedImage")
+        && url.path().to_ascii_lowercase().ends_with(".svg")
+    {
+        return i64::MAX / 2;
+    }
     let mut score = match source {
         "srcset" => 1_500,
         "currentSrc" => 1_200,
@@ -317,7 +356,7 @@ fn direct_image_url(url: &Url) -> bool {
             let name = name.to_ascii_lowercase();
             matches!(
                 name.rsplit('.').next(),
-                Some("avif" | "bmp" | "gif" | "jpg" | "jpeg" | "png" | "webp")
+                Some("avif" | "bmp" | "gif" | "jpg" | "jpeg" | "png" | "webp" | "svg")
             )
         })
         .unwrap_or(false)
