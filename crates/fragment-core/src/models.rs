@@ -103,6 +103,14 @@ pub struct FragmentPageSnapshot {
     pub palette_revision: String,
 }
 
+/// The latest active Fragments inside one top-level Frame, including its nested Frames.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FramePreview {
+    pub frame_id: String,
+    pub fragments: Vec<Fragment>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SmartFrame {

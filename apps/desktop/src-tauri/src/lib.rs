@@ -15,11 +15,11 @@ use commands::{
     ensure_default_frame, fragment_membership_count, get_fragment, get_fragment_any,
     get_fragment_tags, get_library_revision, hard_delete_frame, import_image, import_image_batch,
     list_all_fragments, list_child_frames, list_fragment_ids, list_fragment_page, list_fragments,
-    list_frames, list_smart_frames, list_tags, list_trashed_fragments, list_trashed_frames,
-    load_library_snapshot, move_fragment_to_frame, move_frame, native_host_status,
-    open_fragment_source, purge_expired_trash, rename_frame, restore_fragment, restore_fragments,
-    restore_frame, reveal_fragment_in_finder, reveal_vault_in_finder, set_fragment_tags,
-    update_fragment, update_smart_frame,
+    list_frame_previews, list_frames, list_smart_frames, list_tags, list_trashed_fragments,
+    list_trashed_frames, load_library_snapshot, move_fragment_to_frame, move_frame,
+    native_host_status, open_fragment_source, purge_expired_trash, rename_frame, restore_fragment,
+    restore_fragments, restore_frame, reveal_fragment_in_finder, reveal_vault_in_finder,
+    set_fragment_tags, update_fragment, update_smart_frame,
 };
 use state::FragmentState;
 
@@ -108,6 +108,7 @@ pub fn run() {
             load_library_snapshot,
             list_fragment_page,
             list_fragment_ids,
+            list_frame_previews,
             list_smart_frames,
             create_smart_frame,
             update_smart_frame,

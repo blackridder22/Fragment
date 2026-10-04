@@ -110,6 +110,19 @@ User capture action -> content overlay -> service worker -> native host
   -> fragment-core -> one asset + one or more memberships -> overlay result
 ```
 
+Vault home (desktop):
+
+```txt
+load_library_snapshot (shared) -> frames, counts, newest page
+list_frame_previews            -> three latest active Fragments per top-level Frame,
+                                  nested Frames included, one call per library revision
+```
+
+The home page reads only those two results: folder collages come from
+`list_frame_previews` so a Frame whose Fragments fall outside the first page still
+shows real tiles, and "Recently added" is a bounded slice of the snapshot page.
+Nothing on the home page paginates.
+
 Production capture uses Native Messaging. On macOS, the desktop app makes a
 best-effort startup attempt to create or repair Chrome's native-host manifest
 so it points to the bundled `fragment-host` and permits the packaged extension
