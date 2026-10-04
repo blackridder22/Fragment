@@ -16,7 +16,10 @@ use crate::media::{read_asset, AssetFormat};
 use crate::models::{FileCleanupReport, Fragment, FragmentFilter, PurgeReport};
 use crate::palette::PaletteColor;
 use crate::storage::{safe_existing_file, write_atomic};
-use crate::thumbnails::{decode_image, dimensions, generate_preview};
+use crate::thumbnails::{
+    decode_image, dimensions, encode_preview, encode_thumbnail, needs_preview, preview_image,
+    thumbnail_image, CURRENT_DERIVATIVES_VERSION, DERIVATIVE_EXTENSION,
+};
 
 const MAX_FRAGMENT_TITLE_CHARS: usize = 120;
 
@@ -1572,11 +1575,19 @@ impl FragmentCore {
             now.year(),
             now.month(),
         );
+        // SVG tiers stay PNG for exactness; raster derivatives are WebP.
+        let derivative_extension = match asset.format {
+            AssetFormat::Raster(_) => DERIVATIVE_EXTENSION,
+            AssetFormat::Svg => "png",
+        };
         let thumbnail_abs = self
             .paths()
             .thumbnails_dir()
-            .join(format!("{asset_id}.png"));
-        let preview_abs = self.paths().previews_dir().join(format!("{asset_id}.png"));
+            .join(format!("{asset_id}.{derivative_extension}"));
+        let preview_abs = self
+            .paths()
+            .previews_dir()
+            .join(format!("{asset_id}.{derivative_extension}"));
 
         let mut stored = StoredAsset {
             id: asset_id,
@@ -1594,16 +1605,19 @@ impl FragmentCore {
         };
         let prepare = (|| -> CoreResult<()> {
             let thumbnail = match asset.format {
-                AssetFormat::Raster(_) => {
+                AssetFormat::Raster(format) => {
                     let image = decode_image(&asset.bytes)?;
                     let (width, height) = dimensions(&image);
                     stored.width = Some(width);
                     stored.height = Some(height);
-                    let thumb = image.thumbnail(640, 640);
-                    let mut png = std::io::Cursor::new(Vec::new());
-                    thumb.write_to(&mut png, image::ImageFormat::Png)?;
-                    write_atomic(&thumbnail_abs, &png.into_inner())?;
-                    generate_preview(&image, &preview_abs)?;
+                    let thumb = thumbnail_image(&image);
+                    write_atomic(&thumbnail_abs, &encode_thumbnail(&thumb)?)?;
+                    if needs_preview(format, image.width(), image.height()) {
+                        write_atomic(&preview_abs, &encode_preview(&preview_image(&image))?)?;
+                    } else {
+                        // Small displayable originals are their own preview; no file is written.
+                        stored.preview_path = Some(stored.original_path.clone());
+                    }
                     thumb
                 }
                 AssetFormat::Svg => {
@@ -1693,8 +1707,8 @@ fn insert_asset_record(connection: &Connection, asset: &StoredAsset) -> CoreResu
     connection.execute(
         "INSERT INTO assets (
           id, original_path, thumbnail_path, preview_path, mime_type, width, height,
-          file_size, sha256, perceptual_hash, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+          file_size, sha256, perceptual_hash, created_at, updated_at, derivatives_version
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
         params![
             &asset.id,
             &asset.original_path,
@@ -1706,7 +1720,8 @@ fn insert_asset_record(connection: &Connection, asset: &StoredAsset) -> CoreResu
             &asset.file_size,
             &asset.sha256,
             &asset.perceptual_hash,
-            now
+            now,
+            CURRENT_DERIVATIVES_VERSION
         ],
     )?;
     if let Some(colors) = &asset.palette {
@@ -2070,10 +2085,15 @@ where
 }
 
 fn asset_paths(asset: &StoredAsset) -> impl Iterator<Item = &str> {
+    // A small original doubles as its own preview; never list the same file twice.
+    let preview = asset
+        .preview_path
+        .as_deref()
+        .filter(|path| *path != asset.original_path);
     [
         Some(asset.original_path.as_str()),
         Some(asset.thumbnail_path.as_str()),
-        asset.preview_path.as_deref(),
+        preview,
     ]
     .into_iter()
     .flatten()
@@ -2284,11 +2304,36 @@ mod tests {
         assert!(fragment.asset_id.is_some());
         assert!(fragment.original_path.starts_with("originals/"));
         assert!(fragment.thumbnail_path.starts_with("thumbnails/"));
-        assert!(fragment.thumbnail_path.ends_with(".png"));
-        assert!(fragment
-            .preview_path
-            .as_deref()
-            .is_some_and(|path| path.starts_with("previews/") && path.ends_with(".png")));
+        assert!(fragment.thumbnail_path.ends_with(".webp"));
+        // A 24x16 PNG is browser-displayable and fits 1600 px: the original is the preview.
+        assert_eq!(
+            fragment.preview_path.as_deref(),
+            Some(fragment.original_path.as_str())
+        );
+        assert!(std::fs::read_dir(core.paths().previews_dir())
+            .expect("previews dir")
+            .next()
+            .is_none());
+        let thumbnail = std::fs::read(
+            core.paths()
+                .resolve_relative_path(&fragment.thumbnail_path)
+                .expect("resolve"),
+        )
+        .expect("thumbnail bytes");
+        assert_eq!(
+            image::guess_format(&thumbnail).expect("format"),
+            ImageFormat::WebP
+        );
+        let version: i64 = core
+            .conn()
+            .expect("conn")
+            .query_row(
+                "SELECT derivatives_version FROM assets WHERE id = ?1",
+                params![fragment.asset_id],
+                |row| row.get(0),
+            )
+            .expect("version");
+        assert_eq!(version, crate::thumbnails::CURRENT_DERIVATIVES_VERSION);
 
         for relative_path in [
             Some(fragment.original_path.as_str()),

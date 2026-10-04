@@ -29,3 +29,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+webp = { version = "0.3", default-features = false }
+
+# Smaller, faster release binaries. `panic` stays at the default so unwinding
+# still protects palette extraction and other catch_unwind boundaries.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

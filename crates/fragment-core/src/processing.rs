@@ -16,7 +16,9 @@ pub(crate) fn acquire() -> Permit {
     *count += 1;
     Permit
 }
-pub(crate) fn foreground_busy() -> bool {
+/// True while an import or preview render holds a foreground permit.
+/// Background workers (palette, derivative regeneration) pause on it.
+pub fn foreground_busy() -> bool {
     *active() > 0
 }
 impl Drop for Permit {

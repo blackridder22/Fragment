@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -15,13 +15,17 @@ const DATA_SAFETY_MIGRATION: &str = include_str!("../migrations/0002_data_safety
 const LIBRARY_REVISION_MIGRATION: &str = include_str!("../migrations/0003_library_revision.sql");
 const SMART_FRAMES_MIGRATION: &str = include_str!("../migrations/0004_smart_frames.sql");
 const ASSET_COLORS_MIGRATION: &str = include_str!("../migrations/0005_asset_colors_and_svg.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const DERIVATIVES_VERSION_MIGRATION: &str =
+    include_str!("../migrations/0006_derivatives_version.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 #[derive(Clone)]
 pub struct FragmentCore {
     paths: AppPaths,
     connection: Arc<Mutex<Connection>>,
-    http_client: Client,
+    // Built on first download. The desktop app never downloads, so it must not
+    // pay for a reqwest runtime thread at startup.
+    http_client: Arc<OnceLock<Client>>,
 }
 
 impl FragmentCore {
@@ -47,7 +51,7 @@ impl FragmentCore {
         let core = Self {
             paths,
             connection: Arc::new(Mutex::new(connection)),
-            http_client: Client::builder().timeout(Duration::from_secs(20)).build()?,
+            http_client: Arc::new(OnceLock::new()),
         };
         core.ensure_default_frame()?;
         if let Err(error) = core.purge_expired_trash() {
@@ -82,8 +86,16 @@ impl FragmentCore {
             .map_err(|_| CoreError::InvalidInput("database lock was poisoned".to_string()))
     }
 
-    pub(crate) fn http_client(&self) -> &Client {
-        &self.http_client
+    pub(crate) fn http_client(&self) -> CoreResult<&Client> {
+        if let Some(client) = self.http_client.get() {
+            return Ok(client);
+        }
+        let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+        // A concurrent initializer may have won; either client is equivalent.
+        let _ = self.http_client.set(client);
+        self.http_client
+            .get()
+            .ok_or_else(|| CoreError::InvalidInput("HTTP client was not initialized".to_string()))
     }
 }
 
@@ -133,6 +145,14 @@ fn run_migrations(connection: &mut Connection) -> CoreResult<()> {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(ASSET_COLORS_MIGRATION)?;
         tx.pragma_update(None, "user_version", 5_i64)?;
+        tx.commit()?;
+        version = 5;
+    }
+
+    if version < 6 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(DERIVATIVES_VERSION_MIGRATION)?;
+        tx.pragma_update(None, "user_version", 6_i64)?;
         tx.commit()?;
     }
 
@@ -428,7 +448,7 @@ mod tests {
         let conn = core.conn().expect("conn");
         let count: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('frames', 'assets', 'fragments', 'tags', 'fragment_tags', 'pending_file_deletions', 'vault_metadata', 'smart_frames')",
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('frames', 'assets', 'fragments', 'tags', 'fragment_tags', 'pending_file_deletions', 'vault_metadata', 'smart_frames', 'asset_derivative_jobs')",
                 [],
                 |row| row.get(0),
             )
@@ -436,8 +456,30 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("schema version");
-        assert_eq!(count, 8);
+        assert_eq!(count, 9);
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_marks_legacy_assets_for_derivative_regeneration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("fragment.db");
+        Connection::open(&db_path)
+            .expect("open fixture")
+            .execute_batch(V0_0_2_FIXTURE)
+            .expect("load fixture");
+
+        let core = FragmentCore::new_at(temp.path().to_path_buf()).expect("upgrade fixture");
+        let conn = core.conn().expect("conn");
+        let legacy_version: i64 = conn
+            .query_row(
+                "SELECT derivatives_version FROM assets WHERE id = 'asset-v002'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("legacy version");
+        assert_eq!(legacy_version, 1);
+        assert!(legacy_version < crate::thumbnails::CURRENT_DERIVATIVES_VERSION);
     }
 
     #[test]

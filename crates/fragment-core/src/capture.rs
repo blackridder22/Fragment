@@ -172,7 +172,7 @@ impl FragmentCore {
 
     fn download_image_bytes(&self, url: &str, timeout: Duration) -> CoreResult<Vec<u8>> {
         let mut response = self
-            .http_client()
+            .http_client()?
             .get(url)
             .timeout(timeout)
             .send()?
