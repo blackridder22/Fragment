@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fragment QA harness</title>
+    <script>
+      // QA harness for the Frames gallery: fakes the Tauri IPC bridge with a 1,000-item Vault
+      // so the gallery can be measured in a browser. Never shipped.
+      (() => {
+        document.documentElement.dataset.theme = "dark";
+        document.documentElement.style.colorScheme = "dark";
+        const params = new URLSearchParams(location.search);
+        const TOTAL = Number(params.get("count") || 1000);
+        const frame = {
+          id: "qa-frame",
+          parentId: null,
+          name: "Media QA 1000",
+          description: null,
+          icon: null,
+          sortOrder: 0,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+        };
+        const inbox = { ...frame, id: "qa-inbox", name: "Inbox", sortOrder: 1 };
+        let manifest = [];
+        const req = new XMLHttpRequest();
+        req.open("GET", "/qa/thumbs/manifest.json", false);
+        req.send();
+        manifest = JSON.parse(req.responseText);
+        const mimes = ["image/png", "image/png", "image/jpeg", "image/webp"];
+        const fragments = Array.from({ length: TOTAL }, (_, index) => {
+          const shape = manifest[index % manifest.length];
+          const stamp = new Date(Date.UTC(2026, 8, 1, 0, 0, TOTAL - index)).toISOString();
+          return {
+            id: `qa-${String(index).padStart(4, "0")}`,
+            assetId: `asset-${index}`,
+            frameId: index % 7 === 3 ? inbox.id : frame.id,
+            title: `Media ${String(index).padStart(4, "0")}`,
+            description: null,
+            note: index % 11 === 0 ? "note" : null,
+            sourceUrl: index % 3 === 0 ? `https://example.com/${index}` : null,
+            pageUrl: null,
+            siteName: index % 3 === 0 ? "example.com" : null,
+            creatorName: null,
+            originalPath: `originals/2026/09/${index}.png`,
+            thumbnailPath: `thumbnails/${shape.file}?v=${index}`,
+            previewPath: null,
+            mimeType: mimes[index % mimes.length],
+            width: shape.width,
+            height: shape.height,
+            fileSize: 120000 + index,
+            sha256: null,
+            perceptualHash: null,
+            capturedFrom: null,
+            capturedAt: stamp,
+            createdAt: stamp,
+            updatedAt: stamp,
+            deletedAt: null,
+            deleteAfter: null,
+          };
+        });
+        const tagsFor = (f) => (Number(f.id.slice(3)) % 5 === 0 ? ["editorial"] : []);
+        function applyFilter(items, filter) {
+          if (!filter) return items;
+          return items.filter((f) => {
+            if (filter.mimeTypes && filter.mimeTypes.length && !filter.mimeTypes.includes(f.mimeType)) return false;
+            if (filter.orientation === "landscape" && !(f.width > f.height)) return false;
+            if (filter.orientation === "portrait" && !(f.height > f.width)) return false;
+            if (filter.orientation === "square" && f.width !== f.height) return false;
+            if (filter.sourceKind === "source" && !f.sourceUrl) return false;
+            if (filter.sourceKind === "local" && f.sourceUrl) return false;
+            if (filter.tags && filter.tags.length && !filter.tags.every((t) => tagsFor(f).includes(t))) return false;
+            if (filter.query && !f.title.toLowerCase().includes(filter.query.toLowerCase())) return false;
+            if (filter.hasNotes === true && !f.note) return false;
+            return true;
+          });
+        }
+        const latency = Number(params.get("latency") || 20);
+        const delay = (value) => new Promise((resolve) => setTimeout(() => resolve(value), latency));
+        window.__qaInvokes = [];
+        window.__TAURI_INTERNALS__ = {
+          metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
+          transformCallback: (cb) => { const id = Math.floor(Math.random() * 1e9); window[`_${id}`] = cb; return id; },
+          unregisterCallback: () => {},
+          unregisterListener: () => {},
+          convertFileSrc: (path) => `/qa/thumbs/${path.replace(/^qa\/thumbnails\//, "")}`,
+          async invoke(cmd, args = {}) {
+            window.__qaInvokes.push(cmd);
+            switch (cmd) {
+              case "load_library_snapshot": {
+                const limit = args.limit ?? 60;
+                return delay({
+                  defaultFrame: inbox,
+                  frames: [frame, inbox],
+                  fragments: fragments.slice(0, limit),
+                  fragmentTotal: fragments.length,
+                  trashTotal: 0,
+                  frameCounts: { [frame.id]: fragments.filter((f) => f.frameId === frame.id).length, [inbox.id]: fragments.filter((f) => f.frameId === inbox.id).length },
+                  revision: "qa-1",
+                  assetRoot: "qa",
+                });
+              }
+              case "list_fragment_page": {
+                if (args.trashed) return delay({ items: [], offset: 0, limit: args.limit, total: 0, hasMore: false, revision: "qa-1", paletteRevision: null });
+                if (params.get("fail") === "page" && (args.offset ?? 0) > 0) return delay(Promise.reject(new Error("QA: simulated page failure")));
+                let scope = args.frameId ? fragments.filter((f) => f.frameId === args.frameId) : fragments;
+                scope = applyFilter(scope, args.filter);
+                const offset = args.offset ?? 0, limit = args.limit ?? 60;
+                const items = scope.slice(offset, offset + limit);
+                return delay({ items, offset, limit, total: scope.length, hasMore: offset + items.length < scope.length, revision: "qa-1", paletteRevision: null });
+              }
+              case "list_fragment_ids": {
+                let scope = args.frameId ? fragments.filter((f) => f.frameId === args.frameId) : fragments;
+                scope = applyFilter(scope, args.filter);
+                return delay(scope.map((f) => f.id));
+              }
+              case "list_smart_frames": return delay([]);
+              case "list_tags": return delay(["editorial"]);
+              case "list_frames": return delay([frame, inbox]);
+              case "list_trashed_frames": return delay([]);
+              case "get_library_revision": return delay("qa-1");
+              case "asset_root": return delay("qa");
+              case "native_host_status": return delay({ ready: false, label: "QA harness", description: "No native host in the harness." });
+              case "get_palette_index_status": return delay({ ready: fragments.length, empty: 0, pending: 0 });
+              case "get_fragment_tags": return delay(tagsFor(fragments.find((f) => f.id === args.id) ?? { id: "qa-0001" }));
+              case "fragment_membership_count": return delay(1);
+              case "get_fragment_palette": return delay(Promise.reject(new Error("no palette in harness")));
+              case "get_fragment_media_info": return delay({ kind: "raster" });
+              case "ensure_default_frame": return delay(inbox);
+              // The real command returns a data URL string or throws; never undefined.
+              case "asset_data_url": return delay(Promise.reject(new Error("QA harness has no data URLs")));
+              case "plugin:event|listen": return delay(Math.floor(Math.random() * 1e9));
+              case "plugin:event|unlisten": return delay(undefined);
+              default: return delay(undefined);
+            }
+          },
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
