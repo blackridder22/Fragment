@@ -3537,6 +3537,12 @@ export default function App() {
             )?.name ?? "Vault"
           }
           fragments={galleryFragments}
+          frameName={
+            selectedDisplayFrame?.name ??
+            smartFrames.find((item) => item.id === selectedSmartFrameId)
+              ?.name ??
+            null
+          }
           hasMore={!previewMode && activeHasMore}
           knownTags={knownTags}
           layout={v7Layout}
