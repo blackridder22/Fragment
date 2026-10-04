@@ -66,6 +66,14 @@ open http://127.0.0.1:5180/qa/gallery-harness.html  # ?count=1000&latency=20&fai
 ```
 
 Open the Frames page, then in DevTools count `document.querySelectorAll(".fragment-card").length`
-while scrolling, or drive a 30 s programmatic scroll (see the PR for wt-20) and
-sample `requestAnimationFrame` intervals. Numbers from this harness are
-Chromium numbers; the native WebKit recording above remains the release gate.
+while scrolling. For before/after numbers run the headless driver against each
+build (it loads all pages, then scrolls continuously for 30 s per run and
+samples `requestAnimationFrame` intervals, mounted cards, layout shift and long
+tasks in Chromium via the repo's Playwright devDependency):
+
+```sh
+node scripts/qa/gallery-scroll-benchmark.mjs http://127.0.0.1:5180/qa/gallery-harness.html 3 30 after
+```
+
+Numbers from this harness are Chromium numbers; the native WebKit recording
+above remains the release gate.
