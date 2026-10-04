@@ -89,6 +89,7 @@ import {
   setPalettePriority,
   listFragmentIds,
   listFragmentPage,
+  listFramePreviews,
   listSmartFrames,
   listTags,
   listTrashedFrames,
@@ -106,6 +107,7 @@ import {
   setFragmentTags,
   updateFragment,
   updateSmartFrame,
+  type FramePreview,
   type ImportBatchEvent,
 } from "./lib/tauri";
 import { demoFrames, demoFragments, isDemoFragment } from "./lib/demo-vault";
@@ -120,6 +122,7 @@ import {
 import { DesktopShell, LibraryToolbar, type V7View } from "./v7/DesktopShell";
 import { FramesPage } from "./v7/FramesPage";
 import { VaultPage } from "./v7/VaultPage";
+import { FOLDER_PREVIEW_LIMIT } from "./v7/vault-home";
 import {
   runRecoverableTrashAction,
   TrashPage as V7TrashPage,
@@ -341,6 +344,7 @@ export default function App() {
     Record<string, number>
   >({});
   const [libraryRevision, setLibraryRevision] = useState("");
+  const [framePreviews, setFramePreviews] = useState<FramePreview[]>([]);
   const [activeTotal, setActiveTotal] = useState(0);
   const [activeHasMore, setActiveHasMore] = useState(false);
   const [activePageLoading, setActivePageLoading] = useState(false);
@@ -845,6 +849,38 @@ export default function App() {
     revisionRef.current = libraryRevision;
   }, [libraryRevision]);
 
+  const showVaultHome =
+    activeView === "home" &&
+    !selectedFrameId &&
+    !selectedSmartFrameId &&
+    !fragmentFilter.color;
+
+  useEffect(() => {
+    // One read-only call per library revision while the home page is visible.
+    if (!showVaultHome || !libraryRevision || !isTauriRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    void listFramePreviews(FOLDER_PREVIEW_LIMIT)
+      .then((previews) => {
+        if (!cancelled) setFramePreviews(previews);
+      })
+      .catch(() => {
+        // Folder collages fall back to the loaded page when previews are unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryRevision, showVaultHome]);
+
+  const framePreviewMap = useMemo(
+    () =>
+      new Map(
+        framePreviews.map((preview) => [preview.frameId, preview.fragments]),
+      ),
+    [framePreviews],
+  );
+
   useEffect(() => {
     selectedFrameIdRef.current = selectedFrameId;
     if (selectedFrameId) {
@@ -1223,6 +1259,9 @@ export default function App() {
     ],
   );
   const galleryTotal = showDemoGallery ? galleryFragments.length : activeTotal;
+  // "Recently added" always reads the newest-first snapshot page, whatever the gallery sort is.
+  const vaultRecentFragments =
+    query.trim() || previewMode ? galleryFragments : framePreviewFragments;
 
   const selectedDisplayFrame = selectedFrameId
     ? (frameById.get(selectedFrameId) ??
@@ -3490,12 +3529,11 @@ export default function App() {
       onToggleExpanded={toggleFrameExpanded}
       onViewChange={changeView}
     >
-      {activeView === "home" &&
-      !selectedFrameId &&
-      !selectedSmartFrameId &&
-      !fragmentFilter.color ? (
+      {showVaultHome ? (
         <VaultPage
           assetSourcesFor={(fragment) => assetSourcesFor(fragment, "gallery")}
+          density={browsingMode.density}
+          dropTarget={frameDropTarget}
           folderNameFor={(fragment) =>
             (
               frameById.get(fragment.frameId) ??
@@ -3503,19 +3541,20 @@ export default function App() {
             )?.name ?? "Vault"
           }
           frameCounts={v7DisplayCounts}
+          framePreviews={framePreviewMap}
           frames={visibleFrames.filter((frame) => frame.parentId === null)}
-          fragments={galleryFragments}
-          density={browsingMode.density}
-          hasMore={!previewMode && activeHasMore}
-          loading={activePageLoading}
+          fragments={vaultRecentFragments}
+          ready={previewMode || libraryRevision !== ""}
+          searchQuery={query}
           selectedIds={selectedFragmentIdSet}
-          total={displayFrameTotal}
+          systemFrameId={defaultFrameId}
           onAssetFallback={resolveAssetFallback}
           onBrowseAll={() => changeView("frames")}
           onContextMenu={handleFragmentContextMenu}
-          onLoadMore={previewMode ? undefined : loadNextActivePage}
+          onImport={() => void chooseImages()}
           onOpen={openFragmentPreview}
           onOpenFolder={(frame) => selectFrame(frame.id)}
+          onOpenSettings={() => changeView("settings")}
           onPointerDown={handleGalleryPointerDown}
           onSelect={handleFragmentCardSelect}
         />
