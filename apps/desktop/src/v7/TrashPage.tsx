@@ -1307,8 +1307,8 @@ function TrashConfirmDialog({
     );
   const undoHint =
     retention.kind === "days"
-      ? " You can undo this from the confirmation for a few seconds."
-      : " Retention is off, so this cannot be undone from the toast.";
+      ? " You can undo this for a few seconds afterwards."
+      : " Retention is off, so this cannot be undone afterwards.";
 
   return (
     <ConfirmDialog
