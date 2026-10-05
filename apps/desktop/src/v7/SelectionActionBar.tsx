@@ -11,27 +11,36 @@ import "../styles/v7-preview.css";
 type SelectionPanel = "move" | "tag" | null;
 type MaybeAsyncAction = () => void | Promise<void>;
 
-export type SelectionActionBarProps = {
+type SelectionActionBarBaseProps = {
   count: number;
+  /** Replaces the default "{count} selected" label. */
+  countLabel?: string;
+  onClear: () => void;
+};
+
+export type LibrarySelectionActionBarProps = SelectionActionBarBaseProps & {
+  scope?: "library";
   frames: Frame[];
   knownTags: string[];
   onPreview: MaybeAsyncAction;
   onMove: (frameId: string) => void | Promise<void>;
   onTag: (tag: string) => void | Promise<void>;
   onTrash: MaybeAsyncAction;
-  onClear: () => void;
 };
 
-export function SelectionActionBar({
-  count,
-  frames,
-  knownTags,
-  onPreview,
-  onMove,
-  onTag,
-  onTrash,
-  onClear,
-}: SelectionActionBarProps) {
+/** In Trash the bar offers Restore and Delete now instead of library actions. */
+export type TrashSelectionActionBarProps = SelectionActionBarBaseProps & {
+  scope: "trash";
+  onRestore: MaybeAsyncAction;
+  onDeleteNow: MaybeAsyncAction;
+};
+
+export type SelectionActionBarProps =
+  | LibrarySelectionActionBarProps
+  | TrashSelectionActionBarProps;
+
+export function SelectionActionBar(props: SelectionActionBarProps) {
+  const { count, countLabel, onClear } = props;
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const tagInputRef = useRef<HTMLInputElement | null>(null);
@@ -97,6 +106,53 @@ export function SelectionActionBar({
     }
   }
 
+  if (props.scope === "trash") {
+    const { onRestore, onDeleteNow } = props;
+    return (
+      <div
+        aria-busy={pending}
+        aria-label="Trash selection actions"
+        className="v7-selection-action-bar"
+        data-scope="trash"
+        ref={toolbarRef}
+        role="toolbar"
+      >
+        <span className="v7-selection-count">
+          {countLabel ?? `${count} selected`}
+        </span>
+        <span aria-hidden="true" className="v7-selection-divider" />
+        <button
+          disabled={pending}
+          onClick={() => void runAction(onRestore)}
+          type="button"
+        >
+          Restore
+        </button>
+        <button
+          className="v7-selection-trash"
+          disabled={pending}
+          onClick={() => void runAction(onDeleteNow)}
+          type="button"
+        >
+          Delete now
+        </button>
+        <button
+          aria-label="Clear selection"
+          className="v7-selection-clear"
+          disabled={pending}
+          onClick={onClear}
+          title="Clear selection"
+          type="button"
+        >
+          Esc
+        </button>
+        {actionError ? <span role="alert">{actionError}</span> : null}
+      </div>
+    );
+  }
+
+  const { frames, knownTags, onPreview, onMove, onTag, onTrash } = props;
+
   function submitTag(value: string) {
     const validationError = tagValidationError([], value);
     if (validationError) {
@@ -116,7 +172,9 @@ export function SelectionActionBar({
         ref={toolbarRef}
         role="toolbar"
       >
-        <span className="v7-selection-count">{count} selected</span>
+        <span className="v7-selection-count">
+          {countLabel ?? `${count} selected`}
+        </span>
         <span aria-hidden="true" className="v7-selection-divider" />
         <button
           disabled={pending}
