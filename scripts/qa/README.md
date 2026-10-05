@@ -50,3 +50,16 @@ plateau after each cycle. Worker RSS alone does not satisfy it.
 See `docs/V0.0.8_QA.md` for evidence. The hooks and real 1,000-asset Vaults are
 prepared; native frame-time and retained-memory measurements remain unverified
 because the macOS automation session did not reliably capture/control windows.
+
+## Focused preview timing (wt-21)
+
+`preview-perf-harness.js` drives the focused preview from inside the WebView so
+no console or OS automation is needed. Import it from `main.tsx` in a QA source
+copy, then run with `VITE_FRAGMENT_QA=1 VITE_FRAGMENT_PERF=1 DEBUG=vite:time` and
+`FRAGMENT_APP_DATA_DIR` pointing at an empty QA Vault. Drop one command at a time
+into `apps/desktop/public/qa-commands.json` (`seed`, `measure-open`,
+`measure-nav`, `memory-cycle`; see the file header). Results arrive as
+`/favicon.svg?p=<json>` lines in the Vite debug output. Sample the
+`com.apple.WebKit.WebContent` process that appeared with the app using
+`footprint <pid>` during `memory-cycle` for the retained-memory gate. Remove the
+import and the command file afterwards; neither is shipped.
