@@ -69,3 +69,32 @@ export function removeTag(tags: readonly string[], value: string): string[] {
   const key = tagKey(tag);
   return normalized.filter((existing) => tagKey(existing) !== key);
 }
+
+/**
+ * Known tags worth offering while the user types: never one the Fragment
+ * already has, prefix matches before substring matches, capped at `limit`.
+ */
+export function suggestTags(
+  known: readonly string[],
+  existing: readonly string[],
+  draft: string,
+  limit = 6,
+): string[] {
+  if (limit <= 0) return [];
+  const taken = new Set(normalizeTags(existing).map(tagKey));
+  const query = tagKey(cleanTag(draft));
+  const candidates = normalizeTags(known).filter(
+    (tag) => !taken.has(tagKey(tag)),
+  );
+  if (!query) return candidates.slice(0, limit);
+
+  const prefix: string[] = [];
+  const partial: string[] = [];
+  for (const tag of candidates) {
+    const key = tagKey(tag);
+    if (key === query) continue;
+    if (key.startsWith(query)) prefix.push(tag);
+    else if (key.includes(query)) partial.push(tag);
+  }
+  return [...prefix, ...partial].slice(0, limit);
+}

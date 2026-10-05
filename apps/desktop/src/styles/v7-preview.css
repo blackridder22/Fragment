@@ -248,7 +248,14 @@
   border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
 }
 
+/* Focused preview overlay. Durations and easings come from the motion tokens
+   (worktree 00) with local fallbacks so the overlay behaves before they land. */
+
 .v7-focused-overlay {
+  --preview-dur-fast: var(--dur-fast, 120ms);
+  --preview-dur-base: var(--dur-base, 200ms);
+  --preview-ease-out: var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+  --preview-ease-in-out: var(--ease-in-out, cubic-bezier(0.65, 0, 0.35, 1));
   position: fixed;
   z-index: 200;
   inset: 0;
@@ -258,9 +265,8 @@
   justify-content: center;
   padding: 40px;
   overflow: hidden;
+  outline: none;
   background: rgb(0 0 0 / 76%);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
   color: var(--v7-text, #f4f7f2);
   font-family: var(
     --v7-font-sans,
@@ -271,11 +277,104 @@
   );
   font-size: 13px;
   line-height: 20px;
+  animation: v7-focused-scrim-in var(--preview-dur-base) var(--preview-ease-out)
+    both;
+}
+
+.v7-focused-overlay[data-state="closing"] {
+  pointer-events: none;
+  animation: v7-focused-scrim-out var(--preview-dur-fast)
+    var(--preview-ease-in-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v7-focused-overlay {
+    --preview-dur-fast: 0ms;
+    --preview-dur-base: 0ms;
+  }
+}
+
+html[data-reduce-motion="true"] .v7-focused-overlay {
+  --preview-dur-fast: 0ms;
+  --preview-dur-base: 0ms;
+}
+
+@keyframes v7-focused-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes v7-focused-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes v7-focused-stage-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes v7-focused-stage-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes v7-focused-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes v7-focused-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes v7-focused-panel-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(12px);
+  }
 }
 
 .v7-focused-overlay button,
 .v7-focused-overlay select,
-.v7-focused-overlay textarea {
+.v7-focused-overlay textarea,
+.v7-focused-overlay input,
+.v7-focused-overlay output {
   font: inherit;
 }
 
@@ -336,6 +435,10 @@
   background: transparent;
   color: var(--v7-text-muted, #b3bab0);
   cursor: pointer;
+  transition:
+    border-color var(--preview-dur-fast) var(--preview-ease-out),
+    background-color var(--preview-dur-fast) var(--preview-ease-out),
+    color var(--preview-dur-fast) var(--preview-ease-out);
 }
 
 .v7-focused-close {
@@ -361,6 +464,17 @@
   height: min(760px, calc(100vh - 200px));
   min-height: 480px;
   gap: 24px;
+  animation: v7-focused-stage-in var(--preview-dur-base) var(--preview-ease-out)
+    both;
+}
+
+.v7-focused-overlay[data-flip="true"] .v7-focused-stage {
+  animation-name: v7-focused-fade-in;
+}
+
+.v7-focused-overlay[data-state="closing"] .v7-focused-stage {
+  animation: v7-focused-stage-out var(--preview-dur-fast)
+    var(--preview-ease-in-out) both;
 }
 
 .v7-focused-preview-pane {
@@ -391,15 +505,117 @@
   border: 1px solid var(--v7-border-strong, rgb(255 255 255 / 18%));
   border-radius: var(--v7-radius-md, 14px);
   background: var(--v7-canvas-soft, #111413);
+  touch-action: none;
 }
 
-.v7-focused-image-stage > img {
+.v7-focused-image-box {
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.v7-focused-image-box[data-animate="true"] {
+  transition: transform var(--preview-dur-fast) var(--preview-ease-out);
+}
+
+.v7-focused-image-stage[data-zoomed="true"] .v7-focused-image-box {
+  cursor: grab;
+}
+
+.v7-focused-image-stage[data-dragging="true"] .v7-focused-image-box {
+  cursor: grabbing;
+}
+
+.v7-focused-image-box > img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
   object-position: center;
   user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+.v7-focused-image-full {
+  opacity: 0;
+  transition: opacity var(--preview-dur-fast) linear;
+}
+
+.v7-focused-image-full[data-ready="true"] {
+  opacity: 1;
+}
+
+.v7-focused-image-full[data-instant="true"] {
+  transition: none;
+}
+
+.v7-focused-zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
+  border-radius: 999px;
+  background: rgb(10 12 11 / 78%);
+  color: var(--v7-text-muted, #b3bab0);
+  font-size: 11px;
+  line-height: 16px;
+  opacity: 0;
+  transition: opacity var(--preview-dur-fast) linear;
+}
+
+.v7-focused-image-stage:hover .v7-focused-zoom,
+.v7-focused-image-stage:focus-within .v7-focused-zoom,
+.v7-focused-image-stage[data-zoomed="true"] .v7-focused-zoom {
+  opacity: 1;
+}
+
+.v7-focused-zoom > button {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.v7-focused-zoom > button:hover:not(:disabled),
+.v7-focused-zoom > button:focus-visible {
+  background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
+  color: var(--v7-text, #f4f7f2);
+  outline: none;
+}
+
+.v7-focused-zoom > button[aria-pressed="true"] {
+  background: var(--v7-surface-strong, rgb(32 36 33 / 94%));
+  color: var(--v7-text, #f4f7f2);
+}
+
+.v7-focused-zoom > button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.v7-focused-zoom > output {
+  min-width: 44px;
+  padding: 0 8px 0 6px;
+  color: var(--v7-text-faint, #7f887f);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .v7-focused-image-fallback {
@@ -454,6 +670,7 @@
   border-radius: 999px;
   background: var(--v7-surface, rgb(26 29 27 / 74%));
   color: var(--v7-text-faint, #7f887f);
+  font-variant-numeric: tabular-nums;
   font-weight: 500;
 }
 
@@ -474,22 +691,31 @@
   border-radius: var(--v7-radius-lg, 22px);
   background: var(--v7-floating-surface, rgb(32 36 33 / 96%));
   box-shadow: 0 28px 80px rgb(0 0 0 / 42%);
+  animation: v7-focused-panel-in var(--preview-dur-base) var(--preview-ease-out)
+    both;
+}
+
+.v7-focused-overlay[data-state="closing"] .v7-focused-details {
+  animation: v7-focused-panel-out var(--preview-dur-fast)
+    var(--preview-ease-in-out) both;
 }
 
 .v7-focused-details-header {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  padding: 20px;
-  gap: 12px;
+  padding: 20px 20px 14px;
+  gap: 4px;
   border-bottom: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
 }
 
 .v7-focused-title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  min-height: 30px;
+  margin-bottom: 6px;
+  gap: 12px;
 }
 
 .v7-focused-title-display {
@@ -521,9 +747,10 @@
   white-space: nowrap;
 }
 
-.v7-focused-title-edit {
+.v7-focused-title-edit,
+.v7-focused-more {
   display: flex;
-  flex: 0 0 28px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: 28px;
@@ -535,33 +762,44 @@
   background: transparent;
   color: var(--v7-text-faint, #7f887f);
   cursor: pointer;
+  transition:
+    border-color var(--preview-dur-fast) var(--preview-ease-out),
+    background-color var(--preview-dur-fast) var(--preview-ease-out),
+    color var(--preview-dur-fast) var(--preview-ease-out);
+}
+
+.v7-focused-more {
+  border-color: var(--v7-border, rgb(255 255 255 / 10.5%));
+  color: var(--v7-text-muted, #b3bab0);
 }
 
 .v7-focused-title-edit:hover,
-.v7-focused-title-edit:focus-visible {
-  border-color: var(--v7-border, rgb(255 255 255 / 10.5%));
+.v7-focused-more:hover,
+.v7-focused-title-edit:focus-visible,
+.v7-focused-more:focus-visible {
+  border-color: var(--v7-border-strong, rgb(255 255 255 / 18%));
   background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
   color: var(--v7-text, #f4f7f2);
 }
 
-.v7-focused-title-edit:focus-visible {
+.v7-focused-title-edit:focus-visible,
+.v7-focused-more:focus-visible {
   border-color: var(--v7-focus, #89f7ff);
   box-shadow: 0 0 0 2px
     color-mix(in srgb, var(--v7-focus, #89f7ff) 14%, transparent);
 }
 
+.v7-focused-more:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* The editor keeps the display row's 30px height so nothing below moves. */
 .v7-focused-title-editor {
   display: flex;
   flex: 1 1 100%;
   min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.v7-focused-title-editor-controls {
-  display: flex;
-  width: 100%;
-  min-width: 0;
+  height: 30px;
   align-items: center;
   gap: 6px;
 }
@@ -570,33 +808,30 @@
   flex: 1 1 0;
   width: 100%;
   min-width: 72px;
-  height: 32px;
+  height: 30px;
   padding: 0 9px;
-  border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
+  border: 1px solid var(--v7-focus, #89f7ff);
   border-radius: var(--v7-radius-sm, 8px);
   outline: none;
   background: var(--v7-surface, rgb(26 29 27 / 74%));
   color: var(--v7-text, #f4f7f2);
-  font: inherit;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .v7-focused-title-editor input::placeholder {
   color: var(--v7-text-faint, #7f887f);
 }
 
-.v7-focused-title-editor input[aria-invalid="true"] {
-  border-color: var(--v7-danger, #f27b72);
-  box-shadow: 0 0 0 2px
-    color-mix(in srgb, var(--v7-danger, #f27b72) 12%, transparent);
-}
-
-.v7-focused-title-editor button {
+.v7-focused-title-editor button,
+.v7-focused-tag-editor button {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  height: 32px;
+  min-width: 28px;
+  height: 100%;
   padding: 0 9px;
   border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
   border-radius: var(--v7-radius-sm, 8px);
@@ -604,80 +839,41 @@
   background: var(--v7-surface, rgb(26 29 27 / 74%));
   color: var(--v7-text-muted, #b3bab0);
   cursor: pointer;
-  font: inherit;
   font-size: 11px;
   font-weight: 600;
 }
 
-.v7-focused-title-editor button[type="submit"] {
+.v7-focused-title-editor button[type="submit"],
+.v7-focused-tag-editor button[type="submit"] {
   border-color: transparent;
   background: var(--v7-primary, #79e1a2);
   color: var(--v7-on-primary, #061b11);
 }
 
 .v7-focused-title-editor button:hover:not(:disabled),
-.v7-focused-title-editor button:focus-visible {
+.v7-focused-title-editor button:focus-visible,
+.v7-focused-tag-editor button:hover:not(:disabled),
+.v7-focused-tag-editor button:focus-visible {
   border-color: var(--v7-border-strong, rgb(255 255 255 / 18%));
   background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
   color: var(--v7-text, #f4f7f2);
 }
 
 .v7-focused-title-editor button[type="submit"]:hover:not(:disabled),
-.v7-focused-title-editor button[type="submit"]:focus-visible {
+.v7-focused-title-editor button[type="submit"]:focus-visible,
+.v7-focused-tag-editor button[type="submit"]:hover:not(:disabled),
+.v7-focused-tag-editor button[type="submit"]:focus-visible {
   border-color: transparent;
   background: var(--v7-primary-strong, #b3ffc9);
   color: var(--v7-on-primary, #061b11);
 }
 
 .v7-focused-title-editor button:disabled,
-.v7-focused-title-editor input:disabled {
+.v7-focused-title-editor input:disabled,
+.v7-focused-tag-editor button:disabled,
+.v7-focused-tag-editor input:disabled {
   cursor: default;
   opacity: 0.48;
-}
-
-.v7-focused-title-editor > [role="alert"] {
-  overflow: hidden;
-  color: var(--v7-danger, #f27b72);
-  font-size: 11px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v7-focused-more {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
-  border-radius: var(--v7-radius-sm, 8px);
-  outline: none;
-  background: transparent;
-  color: var(--v7-text-muted, #b3bab0);
-  cursor: pointer;
-  transition:
-    border-color 120ms ease,
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.v7-focused-more:hover {
-  border-color: var(--v7-border-strong, rgb(255 255 255 / 18%));
-  background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
-  color: var(--v7-text, #f4f7f2);
-}
-
-.v7-focused-more:focus-visible {
-  border-color: var(--v7-focus, #89f7ff);
-  box-shadow: 0 0 0 2px rgb(137 247 255 / 14%);
-}
-
-.v7-focused-more:disabled {
-  cursor: default;
-  opacity: 0.5;
 }
 
 .v7-focused-metadata {
@@ -689,12 +885,43 @@
   white-space: nowrap;
 }
 
+.v7-focused-metadata:empty::before {
+  content: "\00a0";
+}
+
+/* Fixed-height feedback slot: title, tags, notes, frame and copy report here. */
+.v7-focused-status {
+  height: 16px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--v7-text-faint, #7f887f);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--preview-dur-fast) linear;
+}
+
+.v7-focused-status[data-tone="success"] {
+  color: var(--v7-primary, #79e1a2);
+}
+
+.v7-focused-status[data-tone="error"] {
+  color: var(--v7-danger, #f27b72);
+}
+
+.v7-focused-status[data-tone="info"] {
+  color: var(--v7-text-muted, #b3bab0);
+}
+
 .v7-focused-details-body {
   display: flex;
   flex: 1 1 0;
   min-height: 0;
   flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .v7-focused-detail-section,
@@ -708,7 +935,7 @@
 }
 
 .v7-focused-source {
-  gap: 8px;
+  gap: 6px;
 }
 
 .v7-focused-label {
@@ -751,6 +978,10 @@
   cursor: default;
 }
 
+.v7-focused-select-wrap select[aria-busy="true"] {
+  opacity: 0.6;
+}
+
 .v7-focused-select-wrap > svg {
   position: absolute;
   right: 10px;
@@ -763,31 +994,60 @@
   font-weight: 500;
 }
 
-.v7-focused-source > button {
-  max-width: 100%;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
+.v7-focused-source-link {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  gap: 2px 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
+  border-radius: var(--v7-radius-sm, 8px);
   outline: none;
-  background: transparent;
-  color: var(--v7-focus, #89f7ff);
+  background: var(--v7-surface, rgb(26 29 27 / 74%));
+  color: var(--v7-text, #f4f7f2);
   cursor: pointer;
-  font-size: 11px;
-  line-height: 16px;
   text-align: left;
+  transition:
+    border-color var(--preview-dur-fast) var(--preview-ease-out),
+    background-color var(--preview-dur-fast) var(--preview-ease-out);
+}
+
+.v7-focused-source-link > strong {
+  overflow: hidden;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.v7-focused-source > button:hover,
-.v7-focused-source > button:focus-visible {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+.v7-focused-source-link > span {
+  overflow: hidden;
+  color: var(--v7-focus, #89f7ff);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.v7-focused-source > button:disabled {
+.v7-focused-source-link > svg {
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--v7-text-faint, #7f887f);
+}
+
+.v7-focused-source-link:hover:not(:disabled),
+.v7-focused-source-link:focus-visible {
+  border-color: var(--v7-border-strong, rgb(255 255 255 / 18%));
+  background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
+}
+
+.v7-focused-source-link:focus-visible {
+  border-color: var(--v7-focus, #89f7ff);
+}
+
+.v7-focused-source-link:disabled {
   cursor: default;
-  text-decoration: none;
+  opacity: 0.6;
 }
 
 .v7-focused-empty-detail {
@@ -805,7 +1065,7 @@
 .v7-focused-tag {
   display: flex;
   align-items: center;
-  height: 26px;
+  height: 28px;
   padding: 0 9px;
   gap: 5px;
   appearance: none;
@@ -814,9 +1074,12 @@
   background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
   color: var(--v7-text-muted, #b3bab0);
   cursor: pointer;
-  font: inherit;
   font-size: 11px;
   line-height: 16px;
+  transition:
+    border-color var(--preview-dur-fast) var(--preview-ease-out),
+    background-color var(--preview-dur-fast) var(--preview-ease-out),
+    color var(--preview-dur-fast) var(--preview-ease-out);
 }
 
 .v7-focused-tag > svg {
@@ -843,10 +1106,11 @@
   color: var(--v7-text-faint, #7f887f);
 }
 
+/* Same 28px as a chip so opening the editor does not move the row. */
 .v7-focused-tag-editor {
   display: flex;
   width: 100%;
-  height: 32px;
+  height: 28px;
   gap: 6px;
 }
 
@@ -854,12 +1118,11 @@
   flex: 1 1 0;
   min-width: 0;
   padding: 0 9px;
-  border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
+  border: 1px solid var(--v7-focus, #89f7ff);
   border-radius: var(--v7-radius-sm, 8px);
   outline: none;
   background: var(--v7-surface, rgb(26 29 27 / 74%));
   color: var(--v7-text, #f4f7f2);
-  font: inherit;
   font-size: 11px;
 }
 
@@ -867,59 +1130,64 @@
   color: var(--v7-text-faint, #7f887f);
 }
 
-.v7-focused-tag-editor button {
+.v7-focused-tag-suggestions {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 32px;
-  padding: 0 9px;
+  max-height: 68px;
+  flex-wrap: wrap;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.v7-focused-tag-suggestions > button {
+  height: 24px;
+  padding: 0 8px;
   border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
-  border-radius: var(--v7-radius-sm, 8px);
-  outline: none;
-  background: var(--v7-surface, rgb(26 29 27 / 74%));
+  border-radius: 999px;
+  background: transparent;
   color: var(--v7-text-muted, #b3bab0);
   cursor: pointer;
-  font: inherit;
   font-size: 11px;
+  line-height: 16px;
 }
 
-.v7-focused-tag-editor button[type="submit"] {
-  border-color: transparent;
-  background: var(--v7-primary, #79e1a2);
-  color: var(--v7-on-primary, #061b11);
-  font-weight: 600;
-}
-
-.v7-focused-tag-editor button:hover:not(:disabled),
-.v7-focused-tag-editor button:focus-visible {
+.v7-focused-tag-suggestions > button:hover:not(:disabled),
+.v7-focused-tag-suggestions > button:focus-visible {
   border-color: var(--v7-border-strong, rgb(255 255 255 / 18%));
   background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
   color: var(--v7-text, #f4f7f2);
+  outline: none;
 }
 
-.v7-focused-tag-editor button[type="submit"]:hover:not(:disabled),
-.v7-focused-tag-editor button[type="submit"]:focus-visible {
-  border-color: transparent;
-  background: var(--v7-primary-strong, #b3ffc9);
-  color: var(--v7-on-primary, #061b11);
-}
-
-.v7-focused-tag-editor button:disabled {
+.v7-focused-tag-suggestions > button:disabled {
   cursor: default;
   opacity: 0.48;
-}
-
-.v7-focused-tag-error {
-  color: var(--v7-danger, #ff8a8a);
-  font-size: 11px;
-  line-height: 16px;
 }
 
 .v7-focused-notes {
   flex: 1 1 0;
   min-height: 154px;
   border-bottom: 0;
+}
+
+.v7-focused-notes-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.v7-focused-hint {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--v7-text-faint, #7f887f);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v7-focused-hint[data-dirty="true"] {
+  color: var(--v7-text-muted, #b3bab0);
 }
 
 .v7-focused-notes textarea {
@@ -934,6 +1202,7 @@
   background: var(--v7-surface, rgb(26 29 27 / 74%));
   color: var(--v7-text-muted, #b3bab0);
   line-height: 24px;
+  transition: border-color var(--preview-dur-fast) var(--preview-ease-out);
 }
 
 .v7-focused-notes textarea:focus-visible {
@@ -966,6 +1235,10 @@
   color: var(--v7-text-muted, #b3bab0);
   font-weight: 600;
   cursor: pointer;
+  transition:
+    border-color var(--preview-dur-fast) var(--preview-ease-out),
+    background-color var(--preview-dur-fast) var(--preview-ease-out),
+    color var(--preview-dur-fast) var(--preview-ease-out);
 }
 
 .v7-focused-actions button:hover:not(:disabled),
@@ -992,6 +1265,102 @@
 .v7-focused-actions button:disabled {
   cursor: default;
   opacity: 0.42;
+}
+
+/* In-overlay destructive confirmation (Cmd+Backspace). */
+.v7-focused-confirm {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 40%);
+  animation: v7-focused-scrim-in var(--preview-dur-fast) linear both;
+}
+
+.v7-focused-confirm-card {
+  display: flex;
+  width: 360px;
+  max-width: 100%;
+  flex-direction: column;
+  padding: 20px;
+  gap: 8px;
+  border: 1px solid var(--v7-border-strong, rgb(255 255 255 / 18%));
+  border-radius: var(--v7-radius-md, 14px);
+  background: var(--v7-floating-surface, rgb(32 36 33 / 96%));
+  box-shadow: 0 24px 64px rgb(0 0 0 / 48%);
+  animation: v7-focused-stage-in var(--preview-dur-base) var(--preview-ease-out)
+    both;
+}
+
+.v7-focused-confirm-card h3 {
+  margin: 0;
+  color: var(--v7-text, #f4f7f2);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.v7-focused-confirm-card p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--v7-text-muted, #b3bab0);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.v7-focused-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  gap: 8px;
+}
+
+.v7-focused-confirm-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--v7-border, rgb(255 255 255 / 10.5%));
+  border-radius: var(--v7-radius-sm, 8px);
+  outline: none;
+  background: transparent;
+  color: var(--v7-text, #f4f7f2);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.v7-focused-confirm-actions button:hover:not(:disabled),
+.v7-focused-confirm-actions button:focus-visible {
+  border-color: var(--v7-border-strong, rgb(255 255 255 / 18%));
+  background: var(--v7-surface-hover, rgb(44 50 46 / 90%));
+}
+
+.v7-focused-confirm-actions button:focus-visible {
+  border-color: var(--v7-focus, #89f7ff);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--v7-focus, #89f7ff) 14%, transparent);
+}
+
+.v7-focused-confirm-actions .v7-focused-confirm-danger {
+  border-color: transparent;
+  background: var(--v7-danger, #f27b72);
+  color: #1a0806;
+}
+
+.v7-focused-confirm-actions .v7-focused-confirm-danger:hover:not(:disabled),
+.v7-focused-confirm-actions .v7-focused-confirm-danger:focus-visible {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--v7-danger, #f27b72) 84%, white);
+}
+
+.v7-focused-confirm-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 @media (max-width: 1000px) {

@@ -3,6 +3,7 @@ import {
   addTag,
   normalizeTags,
   removeTag,
+  suggestTags,
   tagValidationError,
 } from "./tag-editor-model";
 
@@ -86,5 +87,35 @@ describe("tagValidationError", () => {
         " tag 0 ",
       ),
     ).toBeNull();
+  });
+});
+
+describe("suggestTags", () => {
+  const known = ["Editorial", "Motion", "Monochrome", "Packaging", "Type"];
+
+  it("offers known tags the Fragment does not have yet", () => {
+    expect(suggestTags(known, ["motion"], "")).toEqual([
+      "Editorial",
+      "Monochrome",
+      "Packaging",
+      "Type",
+    ]);
+  });
+
+  it("ranks prefix matches before substring matches, case-insensitively", () => {
+    expect(suggestTags(known, [], "mo")).toEqual(["Motion", "Monochrome"]);
+    expect(suggestTags(known, [], "ION")).toEqual(["Motion"]);
+    expect(suggestTags(known, [], "o")).toEqual([
+      "Editorial",
+      "Motion",
+      "Monochrome",
+    ]);
+  });
+
+  it("hides an exact match, respects the limit and tolerates messy input", () => {
+    expect(suggestTags(known, [], " motion ")).toEqual([]);
+    expect(suggestTags(known, [], "", 2)).toEqual(["Editorial", "Motion"]);
+    expect(suggestTags(["  Type ", "TYPE", ""], ["type"], "")).toEqual([]);
+    expect(suggestTags(known, [], "x", 0)).toEqual([]);
   });
 });

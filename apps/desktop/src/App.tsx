@@ -1695,9 +1695,8 @@ export default function App() {
           return;
         }
         if (selectedFragment || quickPreviewFragment) {
-          event.preventDefault();
-          setSelectedFragment(null);
-          setQuickPreviewFragment(null);
+          // The focused preview owns its close shortcut: it closes an inner
+          // editor first and animates out before asking to be unmounted.
           return;
         }
       }
@@ -3869,10 +3868,19 @@ export default function App() {
             fragmentContextMenu.fragment.id === focusedFragment.id
           }
           assetSources={assetSourcesFor(focusedFragment, "detail")}
+          thumbnailSources={assetSourcesFor(focusedFragment, "gallery")}
+          prefetchSources={[
+            focusedCollection[focusedIndex + 1],
+            focusedCollection[focusedIndex - 1],
+          ]
+            .filter((item): item is Fragment => Boolean(item))
+            .map((item) => assetSourcesFor(item, "detail")[0]?.url ?? "")
+            .filter(Boolean)}
           closeShortcut={v7Settings.shortcuts.closeOverlay}
           currentIndex={focusedIndex}
           fragment={focusedFragment}
           frames={displayFrames}
+          knownTags={knownTags}
           tags={fragmentTagsById[focusedFragment.id] ?? []}
           tagsLoading={
             !previewMode &&
@@ -3884,6 +3892,17 @@ export default function App() {
             setSelectedFragment(null);
             setQuickPreviewFragment(null);
           }}
+          onCopy={
+            isTauriRuntime() && !isDemoFragment(focusedFragment)
+              ? () => copyFragmentImage(focusedFragment.id)
+              : undefined
+          }
+          onNotify={(notice) => setStatus(notice.message)}
+          onTrash={
+            activeView === "trash"
+              ? undefined
+              : () => moveFragmentsToTrash([focusedFragment.id])
+          }
           onFrameChange={
             activeView === "trash"
               ? undefined

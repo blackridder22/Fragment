@@ -12,12 +12,20 @@ export function SvgPreview({
   fragment,
   assetRoot,
   initialUrl,
+  thumbnailUrl = null,
+  onFirstPixels,
+  onDecoded,
 }: {
   fragment: Fragment;
   assetRoot: string;
   initialUrl: string;
+  /** Already decoded gallery thumbnail shown until the SVG render decodes. */
+  thumbnailUrl?: string | null;
+  onFirstPixels?: () => void;
+  onDecoded?: () => void;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
+  const [thumbVisible, setThumbVisible] = useState(Boolean(thumbnailUrl));
   const [zoom, setZoom] = useState<"fit" | number>("fit");
   const [background, setBackground] = useState("transparent");
   const [size, setSize] = useState({ width: 640, height: 480 });
@@ -168,12 +176,38 @@ export function SvgPreview({
             height: Math.max(size.height, displayHeight),
           }}
         >
+          {thumbVisible && thumbnailUrl ? (
+            <img
+              alt=""
+              aria-hidden="true"
+              className="fragment-svg-thumb"
+              decoding="async"
+              draggable={false}
+              onError={() => setThumbVisible(false)}
+              onLoad={() => requestAnimationFrame(() => onFirstPixels?.())}
+              src={thumbnailUrl}
+              style={{ width: displayWidth, height: displayHeight }}
+            />
+          ) : null}
           {source ? (
             <img
               alt={fragment.title || "SVG Fragment"}
               src={source}
               draggable={false}
               style={{ width: displayWidth, height: displayHeight }}
+              onLoad={(event) => {
+                const image = event.currentTarget;
+                const decoded =
+                  typeof image.decode === "function"
+                    ? image.decode()
+                    : Promise.resolve();
+                void decoded
+                  .catch(() => undefined)
+                  .then(() => {
+                    setThumbVisible(false);
+                    onDecoded?.();
+                  });
+              }}
               onError={() => {
                 if (!repaired.current) {
                   repaired.current = true;

@@ -1,31 +1,45 @@
 import type { ColorFilter, Fragment, Frame } from "@fragment/shared";
-import { PaletteSection } from "../features/colors/PaletteSection";
-import { SvgPreview } from "../features/fragments/SvgPreview";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import {
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ImageOff,
-  MoreHorizontal,
-  Pencil,
-  X,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type AnimationEvent as ReactAnimationEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { normalizeFragmentTitle } from "../features/fragments/fragment-title-policy";
 import {
   DEFAULT_SHORTCUT_BINDINGS,
-  matchesShortcut,
   type ShortcutBinding,
 } from "../features/shortcuts/shortcut-model";
-import {
-  addTag,
-  removeTag,
-  tagValidationError,
-} from "../features/tags/tag-editor-model";
 import type { AssetSource } from "../lib/assets";
+import {
+  FocusedDetailsPanel,
+  type FocusedDetailsHandle,
+  type PreviewNotice,
+} from "./FocusedDetailsPanel";
+import { FocusedPreviewStage } from "./FocusedPreviewStage";
+import { isEditableElement, resolvePreviewKey } from "./preview-keyboard";
+import {
+  cardImageRect,
+  focusCard,
+  prefersReducedMotion,
+  readDurationToken,
+  type Rect,
+} from "./preview-motion";
+import {
+  startPreviewPerf,
+  type PreviewPerfKind,
+  type PreviewPerfSession,
+} from "./preview-perf";
+import { createPreviewPrefetcher } from "./preview-prefetch";
 import "../styles/v7-preview.css";
 
 type MaybeAsyncAction = () => void | Promise<void>;
+
+export type { PreviewNotice } from "./FocusedDetailsPanel";
 
 export type FocusedFrameOverlayProps = {
   assetRoot?: string;
@@ -34,7 +48,16 @@ export type FocusedFrameOverlayProps = {
   fragment: Fragment;
   frames: Frame[];
   tags: string[];
+  /** Tags across the Vault, offered as suggestions while adding a tag. */
+  knownTags?: string[];
+  /** Preview-first sources for the stage (preview, thumbnail, original). */
   assetSources: AssetSource[];
+  /** Thumbnail-first sources, already decoded by the gallery. */
+  thumbnailSources?: AssetSource[];
+  /** Preview URLs of the next and previous Fragments, warmed after decode. */
+  prefetchSources?: string[];
+  /** Where the image box animates from when the gallery can supply it. */
+  originRect?: Rect | null;
   currentIndex: number;
   total: number;
   onClose: () => void;
@@ -51,8 +74,20 @@ export type FocusedFrameOverlayProps = {
   onTagsChange?: (tags: string[]) => void | Promise<void>;
   onReveal?: MaybeAsyncAction;
   onOpenSource?: MaybeAsyncAction;
+  onCopy?: MaybeAsyncAction;
+  /** Moves the Fragment to Trash after the in-overlay confirmation. */
+  onTrash?: () => boolean | void | Promise<boolean | void>;
+  /** Mirrors every visible outcome to the host feedback surface. */
+  onNotify?: (notice: PreviewNotice) => void;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
 };
+
+const NOTICE_TIMEOUT_MS = { success: 2200, info: 2600, error: 5200 } as const;
+const CLOSE_FALLBACK_MS = 80;
+
+function errorMessage(caught: unknown) {
+  return caught instanceof Error ? caught.message : String(caught);
+}
 
 export function FocusedFrameOverlay({
   assetRoot = "",
@@ -61,7 +96,11 @@ export function FocusedFrameOverlay({
   fragment,
   frames,
   tags,
+  knownTags = [],
   assetSources,
+  thumbnailSources = [],
+  prefetchSources = [],
+  originRect: originRectProp = null,
   currentIndex,
   total,
   onClose,
@@ -78,108 +117,221 @@ export function FocusedFrameOverlay({
   onTagsChange,
   onReveal,
   onOpenSource,
+  onCopy,
+  onTrash,
+  onNotify,
   onAssetFallback,
 }: FocusedFrameOverlayProps) {
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const titleInputRef = useRef<HTMLInputElement | null>(null);
-  const tagInputRef = useRef<HTMLInputElement | null>(null);
-  const attemptedFallbacks = useRef(new Set<string>());
-  const [assetIndex, setAssetIndex] = useState(0);
-  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
-  const [imageUnavailable, setImageUnavailable] = useState(
-    assetSources.length === 0,
-  );
-  const [noteDraft, setNoteDraft] = useState(fragment.note ?? "");
-  const [frameChangePending, setFrameChangePending] = useState(false);
-  const [titleEditorOpen, setTitleEditorOpen] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(
-    normalizeFragmentTitle(fragment.title ?? ""),
-  );
-  const [titleChangePending, setTitleChangePending] = useState(false);
-  const [titleError, setTitleError] = useState<string | null>(null);
-  const [tagEditorOpen, setTagEditorOpen] = useState(false);
-  const [tagDraft, setTagDraft] = useState("");
-  const [tagChangePending, setTagChangePending] = useState(false);
-  const [tagError, setTagError] = useState<string | null>(null);
-  const assetKey = useMemo(
-    () =>
-      assetSources
-        .map((source) => `${source.url}\u0000${source.relativePath ?? ""}`)
-        .join("\u0001"),
-    [assetSources],
-  );
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const detailsRef = useRef<FocusedDetailsHandle | null>(null);
+  const mounted = useRef(false);
+  const closingRef = useRef(false);
+  const finishedRef = useRef(false);
+  const closeTimer = useRef<number | null>(null);
+  const confirmOpenRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  const onNotifyRef = useRef(onNotify);
+  const perfRef = useRef<PreviewPerfSession | null>(null);
+  const perfFragmentRef = useRef<string | null>(null);
+  const perfKindRef = useRef<PreviewPerfKind>("open");
 
-  const activeSource = assetSources[assetIndex];
-  const imageUrl = fallbackUrl ?? activeSource?.url ?? "";
+  const [prefetcher] = useState(() => createPreviewPrefetcher());
+  const [originRect] = useState<Rect | null>(
+    () =>
+      originRectProp ??
+      (prefersReducedMotion() ? null : cardImageRect(fragment.id)),
+  );
+  const [closing, setClosing] = useState(false);
+  const [confirmTrash, setConfirmTrash] = useState(false);
+  const [busy, setBusy] = useState<"copy" | "trash" | null>(null);
+  const [notice, setNotice] = useState<PreviewNotice | null>(null);
+
+  const title =
+    normalizeFragmentTitle(fragment.title ?? "") || "Untitled Fragment";
   const activeFrame = frames.find((frame) => frame.id === fragment.frameId);
-  const frameTitle =
-    normalizeFragmentTitle(fragment.title ?? "") || "Untitled Frame";
   const sourceUrl = fragment.sourceUrl ?? fragment.pageUrl ?? null;
   const safeTotal = Math.max(1, total);
   const displayIndex = Math.min(Math.max(currentIndex + 1, 1), safeTotal);
   const canGoPrevious = currentIndex > 0;
   const canGoNext = currentIndex + 1 < total;
 
-  useEffect(() => {
-    attemptedFallbacks.current.clear();
-    setAssetIndex(0);
-    setFallbackUrl(null);
-    setImageUnavailable(assetSources.length === 0);
-  }, [assetKey, assetSources.length, fragment.id]);
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+    onNotifyRef.current = onNotify;
+    confirmOpenRef.current = confirmTrash;
+  });
 
-  useEffect(() => {
-    setNoteDraft(fragment.note ?? "");
-  }, [fragment.id, fragment.note]);
-
-  useEffect(() => {
-    setTitleEditorOpen(false);
-    setTitleDraft(normalizeFragmentTitle(fragment.title ?? ""));
-    setTitleError(null);
-  }, [fragment.id, fragment.title]);
-
-  useEffect(() => {
-    if (titleEditorOpen) {
-      titleInputRef.current?.focus();
-      titleInputRef.current?.select();
-    }
-  }, [titleEditorOpen]);
-
-  useEffect(() => {
-    setTagEditorOpen(false);
-    setTagDraft("");
-    setTagError(null);
+  // One timing session per Fragment shown, started before first paint.
+  useLayoutEffect(() => {
+    if (perfFragmentRef.current === fragment.id) return;
+    perfFragmentRef.current = fragment.id;
+    perfRef.current = startPreviewPerf(fragment.id, perfKindRef.current);
+    perfKindRef.current = "navigate";
   }, [fragment.id]);
 
   useEffect(() => {
-    if (tagEditorOpen) tagInputRef.current?.focus();
-  }, [tagEditorOpen]);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+      prefetcher.cancel();
+    };
+  }, [prefetcher]);
 
+  // Focus the dialog on open and return focus to the originating card on close.
   useEffect(() => {
     const previouslyFocused = document.activeElement;
-    closeButtonRef.current?.focus();
-
+    const originId = fragment.id;
+    rootRef.current?.focus({ preventScroll: true });
     return () => {
+      if (focusCard(originId)) return;
       if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     };
+    // Runs once: the originating card is the one the overlay opened with.
   }, []);
 
   useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(
+      () => setNotice(null),
+      NOTICE_TIMEOUT_MS[notice.tone],
+    );
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const report = useCallback((next: PreviewNotice) => {
+    if (mounted.current) setNotice({ ...next });
+    onNotifyRef.current?.(next);
+  }, []);
+
+  const finishClose = useCallback(() => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    onCloseRef.current();
+  }, []);
+
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    detailsRef.current?.flushNotes();
+    const root = rootRef.current;
+    const duration = root ? readDurationToken(root, "--preview-dur-fast") : 0;
+    if (duration <= 0) {
+      finishClose();
+      return;
+    }
+    setClosing(true);
+    closeTimer.current = window.setTimeout(
+      finishClose,
+      duration + CLOSE_FALLBACK_MS,
+    );
+  }, [finishClose]);
+
+  function handleAnimationEnd(event: ReactAnimationEvent<HTMLDivElement>) {
+    if (event.target === event.currentTarget && closingRef.current) {
+      finishClose();
+    }
+  }
+
+  const navigate = useCallback(
+    (direction: -1 | 1) => {
+      if (closingRef.current) return;
+      detailsRef.current?.flushNotes();
+      if (direction < 0) onPrevious();
+      else onNext();
+    },
+    [onNext, onPrevious],
+  );
+
+  const copyImage = useCallback(async () => {
+    if (!onCopy || busy) return;
+    setBusy("copy");
+    try {
+      await onCopy();
+      report({ tone: "success", message: "Image copied" });
+    } catch (caught) {
+      report({
+        tone: "error",
+        message: `Copy failed: ${errorMessage(caught)}`,
+      });
+    } finally {
+      if (mounted.current) setBusy(null);
+    }
+  }, [busy, onCopy, report]);
+
+  const confirmMoveToTrash = useCallback(async () => {
+    if (!onTrash || busy) return;
+    setBusy("trash");
+    try {
+      const outcome = await onTrash();
+      if (outcome === false) {
+        report({ tone: "error", message: "Could not move to Trash" });
+      } else {
+        report({ tone: "success", message: "Moved to Trash" });
+      }
+    } catch (caught) {
+      report({
+        tone: "error",
+        message: `Could not move to Trash: ${errorMessage(caught)}`,
+      });
+    } finally {
+      if (mounted.current) {
+        setBusy(null);
+        setConfirmTrash(false);
+        rootRef.current?.focus({ preventScroll: true });
+      }
+    }
+  }, [busy, onTrash, report]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (!shortcutCloseDisabled && matchesShortcut(event, closeShortcut)) {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-
-      if (isEditableTarget(event.target)) return;
-
-      if (event.key === "ArrowLeft" && canGoPrevious) {
-        event.preventDefault();
-        onPrevious();
-      }
-      if (event.key === "ArrowRight" && canGoNext) {
-        event.preventDefault();
-        onNext();
+      if (closingRef.current) return;
+      const action = resolvePreviewKey(event, {
+        closeBinding: closeShortcut,
+        closeDisabled: shortcutCloseDisabled,
+        editing: isEditableElement(event.target),
+        innerEditorOpen:
+          confirmOpenRef.current ||
+          (detailsRef.current?.hasOpenEditor() ?? false),
+        canGoPrevious,
+        canGoNext,
+        canCopy: Boolean(onCopy),
+        canTrash: Boolean(onTrash),
+        canSaveNotes: Boolean(onNotesChange),
+      });
+      if (action === "none") return;
+      event.preventDefault();
+      switch (action) {
+        case "close":
+          requestClose();
+          break;
+        case "close-editor":
+          if (confirmOpenRef.current) {
+            setConfirmTrash(false);
+            rootRef.current?.focus({ preventScroll: true });
+          } else {
+            detailsRef.current?.closeEditor();
+          }
+          break;
+        case "previous":
+          navigate(-1);
+          break;
+        case "next":
+          navigate(1);
+          break;
+        case "copy":
+          void copyImage();
+          break;
+        case "trash":
+          setConfirmTrash(true);
+          break;
+        case "save-notes":
+          void detailsRef.current?.saveNotes();
+          break;
       }
     }
 
@@ -189,161 +341,42 @@ export function FocusedFrameOverlay({
     canGoNext,
     canGoPrevious,
     closeShortcut,
-    onClose,
-    onNext,
-    onPrevious,
+    copyImage,
+    navigate,
+    onCopy,
+    onNotesChange,
+    onTrash,
+    requestClose,
     shortcutCloseDisabled,
   ]);
 
-  async function handleImageError() {
-    const fallbackKey = `${fragment.id}:${assetIndex}:${activeSource?.relativePath ?? ""}`;
-
-    if (
-      activeSource?.relativePath &&
-      onAssetFallback &&
-      !attemptedFallbacks.current.has(fallbackKey)
-    ) {
-      attemptedFallbacks.current.add(fallbackKey);
-      const resolved = await onAssetFallback(activeSource.relativePath);
-      if (resolved && resolved !== imageUrl) {
-        setFallbackUrl(resolved);
-        return;
-      }
-    }
-
-    if (assetIndex + 1 < assetSources.length) {
-      setAssetIndex((index) => index + 1);
-      setFallbackUrl(null);
-      return;
-    }
-
-    setImageUnavailable(true);
-  }
-
-  function updateNotes(value: string) {
-    setNoteDraft(value);
-  }
-
-  function commitNotes() {
-    if (noteDraft !== (fragment.note ?? "")) {
-      void onNotesChange?.(noteDraft);
-    }
-  }
-
-  function beginTitleEdit() {
-    setTitleDraft(normalizeFragmentTitle(fragment.title ?? ""));
-    setTitleError(null);
-    setTitleEditorOpen(true);
-  }
-
-  function cancelTitleEdit() {
-    if (titleChangePending) return;
-    setTitleDraft(normalizeFragmentTitle(fragment.title ?? ""));
-    setTitleError(null);
-    setTitleEditorOpen(false);
-  }
-
-  async function saveTitle() {
-    if (!onTitleChange || titleChangePending) return;
-
-    const nextTitle = normalizeFragmentTitle(titleDraft);
-    if (!nextTitle) {
-      setTitleError("Enter a title before saving.");
-      return;
-    }
-
-    const currentTitle = normalizeFragmentTitle(fragment.title ?? "");
-    setTitleDraft(nextTitle);
-    setTitleError(null);
-    if (nextTitle === currentTitle) {
-      setTitleEditorOpen(false);
-      return;
-    }
-
-    setTitleChangePending(true);
-    try {
-      await onTitleChange(nextTitle);
-      setTitleEditorOpen(false);
-    } catch (caught) {
-      setTitleError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setTitleChangePending(false);
-    }
-  }
-
-  async function changeFrame(frameId: string) {
-    if (!onFrameChange || frameId === fragment.frameId || frameChangePending) {
-      return;
-    }
-    setFrameChangePending(true);
-    try {
-      await onFrameChange(frameId);
-    } finally {
-      setFrameChangePending(false);
-    }
-  }
-
-  async function persistTags(nextTags: string[]) {
-    if (!onTagsChange || tagChangePending || tagsLoading) return false;
-
-    setTagChangePending(true);
-    setTagError(null);
-    try {
-      await onTagsChange(nextTags);
-      return true;
-    } catch (caught) {
-      setTagError(caught instanceof Error ? caught.message : String(caught));
-      return false;
-    } finally {
-      setTagChangePending(false);
-    }
-  }
-
-  async function addTagFromDraft() {
-    const validationError = tagValidationError(tags, tagDraft);
-    if (validationError) {
-      setTagError(validationError);
-      return;
-    }
-
-    const nextTags = addTag(tags, tagDraft);
-    const unchanged =
-      nextTags.length === tags.length &&
-      nextTags.every((tag, index) => tag === tags[index]);
-    if (unchanged || (await persistTags(nextTags))) {
-      setTagDraft("");
-      setTagEditorOpen(false);
-      setTagError(null);
-    }
-  }
-
-  async function removeTagValue(tag: string) {
-    await persistTags(removeTag(tags, tag));
-  }
-
   return (
     <div
-      aria-label={`Focused Frame preview: ${frameTitle}`}
+      aria-label={`Fragment preview: ${title}`}
       aria-modal="true"
       className="v7-focused-overlay"
+      data-flip={originRect ? "true" : undefined}
+      data-state={closing ? "closing" : "open"}
+      onAnimationEnd={handleAnimationEnd}
       onMouseDown={(event) => {
-        if (event.currentTarget === event.target) onClose();
+        if (event.currentTarget === event.target) requestClose();
       }}
+      ref={rootRef}
       role="dialog"
+      tabIndex={-1}
     >
       <header className="v7-focused-topbar">
-        <nav aria-label="Frame location" className="v7-focused-breadcrumbs">
+        <nav aria-label="Fragment location" className="v7-focused-breadcrumbs">
           <span>Frames</span>
           <span aria-hidden="true">/</span>
           <span>{activeFrame?.name ?? "Vault"}</span>
           <span aria-hidden="true">/</span>
-          <strong>{frameTitle}</strong>
+          <strong>{title}</strong>
         </nav>
         <button
-          aria-label="Close focused preview"
+          aria-label="Close preview"
           className="v7-focused-close"
-          onClick={onClose}
-          ref={closeButtonRef}
+          onClick={requestClose}
           type="button"
         >
           <X aria-hidden="true" size={16} strokeWidth={1.8} />
@@ -354,30 +387,31 @@ export function FocusedFrameOverlay({
         className="v7-focused-stage"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <section className="v7-focused-preview-pane" aria-label="Frame image">
-          <div className="v7-focused-image-stage">
-            {fragment.mimeType === "image/svg+xml" && assetRoot ? <SvgPreview key={fragment.id} fragment={fragment} assetRoot={assetRoot} initialUrl={imageUrl} /> : imageUnavailable ? (
-              <div className="v7-focused-image-fallback">
-                <ImageOff aria-hidden="true" size={30} strokeWidth={1.6} />
-                <strong>Preview unavailable</strong>
-                <span>The original Frame could not be displayed.</span>
-              </div>
-            ) : (
-              <img
-                alt={frameTitle}
-                decoding="async"
-                draggable={false}
-                onError={() => void handleImageError()}
-                src={imageUrl}
-              />
-            )}
-          </div>
+        <section
+          aria-label="Fragment image"
+          className="v7-focused-preview-pane"
+        >
+          <FocusedPreviewStage
+            assetRoot={assetRoot}
+            assetSources={assetSources}
+            fragment={fragment}
+            onAssetFallback={onAssetFallback}
+            originRect={originRect}
+            perfRef={perfRef}
+            prefetchSources={prefetchSources}
+            prefetcher={prefetcher}
+            thumbnailSources={thumbnailSources}
+            title={title}
+          />
 
-          <nav aria-label="Frame preview navigation" className="v7-focused-nav">
+          <nav
+            aria-label="Fragment preview navigation"
+            className="v7-focused-nav"
+          >
             <button
-              aria-label="Previous Frame"
+              aria-label="Previous Fragment"
               disabled={!canGoPrevious}
-              onClick={onPrevious}
+              onClick={() => navigate(-1)}
               type="button"
             >
               <ChevronLeft aria-hidden="true" size={16} strokeWidth={1.8} />
@@ -388,9 +422,9 @@ export function FocusedFrameOverlay({
               <strong>{safeTotal}</strong>
             </span>
             <button
-              aria-label="Next Frame"
+              aria-label="Next Fragment"
               disabled={!canGoNext}
-              onClick={onNext}
+              onClick={() => navigate(1)}
               type="button"
             >
               <ChevronRight aria-hidden="true" size={16} strokeWidth={1.8} />
@@ -398,319 +432,115 @@ export function FocusedFrameOverlay({
           </nav>
         </section>
 
-        <aside className="v7-focused-details" aria-label="Frame details">
-          <header className="v7-focused-details-header">
-            <div className="v7-focused-title-row">
-              {titleEditorOpen ? (
-                <form
-                  aria-busy={titleChangePending}
-                  className="v7-focused-title-editor"
-                  onKeyDown={(event) => {
-                    event.stopPropagation();
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      cancelTitleEdit();
-                    }
-                  }}
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void saveTitle();
-                  }}
-                >
-                  <div className="v7-focused-title-editor-controls">
-                    <input
-                      aria-describedby={
-                        titleError ? "v7-focused-title-error" : undefined
-                      }
-                      aria-invalid={Boolean(titleError)}
-                      aria-label="Frame title"
-                      autoComplete="off"
-                      disabled={titleChangePending}
-                      onChange={(event) => {
-                        setTitleDraft(event.target.value);
-                        if (titleError) setTitleError(null);
-                      }}
-                      placeholder="Untitled Frame"
-                      ref={titleInputRef}
-                      value={titleDraft}
-                    />
-                    <button disabled={titleChangePending} type="submit">
-                      {titleChangePending ? "Saving…" : "Save"}
-                    </button>
-                    <button
-                      disabled={titleChangePending}
-                      onClick={cancelTitleEdit}
-                      type="button"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {titleError ? (
-                    <span id="v7-focused-title-error" role="alert">
-                      {titleError}
-                    </span>
-                  ) : null}
-                </form>
-              ) : (
-                <>
-                  <div className="v7-focused-title-display">
-                    <h2 title={frameTitle}>{frameTitle}</h2>
-                    {onTitleChange ? (
-                      <button
-                        aria-label="Edit Frame title"
-                        className="v7-focused-title-edit"
-                        onClick={beginTitleEdit}
-                        title="Edit title"
-                        type="button"
-                      >
-                        <Pencil
-                          aria-hidden="true"
-                          size={16}
-                          strokeWidth={2}
-                        />
-                      </button>
-                    ) : null}
-                  </div>
-                  <button
-                    aria-expanded={actionsOpen}
-                    aria-haspopup="menu"
-                    aria-label="More Frame actions"
-                    className="v7-focused-more"
-                    disabled={!onMoreActions}
-                    onClick={(event) => {
-                      const bounds =
-                        event.currentTarget.getBoundingClientRect();
-                      onMoreActions?.({
-                        x: bounds.right,
-                        y: bounds.bottom + 6,
-                      });
-                    }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    type="button"
-                  >
-                    <MoreHorizontal aria-hidden="true" size={16} strokeWidth={2} />
-                  </button>
-                </>
-              )}
-            </div>
-            <span className="v7-focused-metadata">
-              {formatMetadata(fragment)}
-            </span>
-          </header>
-
-          <div className="v7-focused-details-body">
-            {showPalette ? <PaletteSection key={fragment.id} id={fragment.id} onFindColor={onFindColor} /> : null}
-            <section className="v7-focused-detail-section">
-              <label className="v7-focused-label" htmlFor="v7-frame-fragment">
-                Fragment
-              </label>
-              <div className="v7-focused-select-wrap">
-                <select
-                  aria-busy={frameChangePending}
-                  disabled={!onFrameChange || frameChangePending}
-                  id="v7-frame-fragment"
-                  onChange={(event) => void changeFrame(event.target.value)}
-                  value={fragment.frameId}
-                >
-                  {!activeFrame ? (
-                    <option value={fragment.frameId}>Vault</option>
-                  ) : null}
-                  {frames.map((frame) => (
-                    <option key={frame.id} value={frame.id}>
-                      {frame.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown aria-hidden="true" size={13} strokeWidth={1.7} />
-              </div>
-            </section>
-
-            <section className="v7-focused-detail-section v7-focused-source">
-              <span className="v7-focused-label">Source</span>
-              <strong>{sourceName(fragment, sourceUrl)}</strong>
-              {sourceUrl ? (
-                <button
-                  disabled={!onOpenSource}
-                  onClick={() => void onOpenSource?.()}
-                  type="button"
-                >
-                  {compactSource(sourceUrl)}
-                </button>
-              ) : (
-                <span className="v7-focused-empty-detail">Local import</span>
-              )}
-            </section>
-
-            <section className="v7-focused-detail-section">
-              <span className="v7-focused-label">Tags</span>
-              <div className="v7-focused-tags">
-                {tags.map((tag) => (
-                  <button
-                    aria-label={`Remove tag ${tag}`}
-                    className="v7-focused-tag"
-                    disabled={!onTagsChange || tagChangePending || tagsLoading}
-                    key={tag}
-                    onClick={() => void removeTagValue(tag)}
-                    title={`Remove ${tag}`}
-                    type="button"
-                  >
-                    <span>{tag}</span>
-                    <X aria-hidden="true" size={11} strokeWidth={1.8} />
-                  </button>
-                ))}
-                {tagEditorOpen ? (
-                  <form
-                    className="v7-focused-tag-editor"
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        setTagDraft("");
-                        setTagEditorOpen(false);
-                        setTagError(null);
-                      }
-                    }}
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void addTagFromDraft();
-                    }}
-                  >
-                    <input
-                      aria-label="Tag name"
-                      autoComplete="off"
-                      disabled={tagChangePending || tagsLoading}
-                      onChange={(event) => setTagDraft(event.target.value)}
-                      placeholder="Tag name"
-                      ref={tagInputRef}
-                      value={tagDraft}
-                    />
-                    <button
-                      disabled={tagChangePending || tagsLoading}
-                      type="submit"
-                    >
-                      Add
-                    </button>
-                    <button
-                      aria-label="Cancel adding tag"
-                      disabled={tagChangePending}
-                      onClick={() => {
-                        setTagDraft("");
-                        setTagEditorOpen(false);
-                        setTagError(null);
-                      }}
-                      type="button"
-                    >
-                      <X aria-hidden="true" size={12} strokeWidth={1.8} />
-                    </button>
-                  </form>
-                ) : (
-                  <button
-                    className="v7-focused-tag v7-focused-tag-add"
-                    disabled={!onTagsChange || tagsLoading}
-                    onClick={() => setTagEditorOpen(true)}
-                    type="button"
-                  >
-                    {tagsLoading ? "Loading…" : "+ Add"}
-                  </button>
-                )}
-              </div>
-              {tagError ? (
-                <span className="v7-focused-tag-error" role="alert">
-                  {tagError}
-                </span>
-              ) : null}
-            </section>
-
-            <section className="v7-focused-notes">
-              <label className="v7-focused-label" htmlFor="v7-frame-notes">
-                Notes
-              </label>
-              <textarea
-                id="v7-frame-notes"
-                onBlur={commitNotes}
-                onChange={(event) => updateNotes(event.target.value)}
-                placeholder="Add notes about this Frame…"
-                readOnly={!onNotesChange}
-                value={noteDraft}
-              />
-            </section>
-          </div>
-
-          <footer className="v7-focused-actions">
-            <button
-              disabled={!onReveal}
-              onClick={() => void onReveal?.()}
-              type="button"
-            >
-              Reveal
-            </button>
-            <button
-              className="v7-focused-primary-action"
-              disabled={!onOpenSource || !sourceUrl}
-              onClick={() => void onOpenSource?.()}
-              type="button"
-            >
-              Open Source
-            </button>
-          </footer>
-        </aside>
+        <FocusedDetailsPanel
+          actionsOpen={actionsOpen}
+          fragment={fragment}
+          frames={frames}
+          knownTags={knownTags}
+          notice={notice}
+          onFindColor={onFindColor}
+          onFrameChange={onFrameChange}
+          onMoreActions={onMoreActions}
+          onNotesChange={onNotesChange}
+          onOpenSource={onOpenSource}
+          onReport={report}
+          onReveal={onReveal}
+          onTagsChange={onTagsChange}
+          onTitleChange={onTitleChange}
+          ref={detailsRef}
+          showPalette={showPalette}
+          sourceUrl={sourceUrl}
+          tags={tags}
+          tagsLoading={tagsLoading}
+          title={title}
+        />
       </div>
+
+      {confirmTrash ? (
+        <TrashConfirm
+          busy={busy === "trash"}
+          onCancel={() => {
+            setConfirmTrash(false);
+            rootRef.current?.focus({ preventScroll: true });
+          }}
+          onConfirm={() => void confirmMoveToTrash()}
+          title={title}
+        />
+      ) : null}
     </div>
   );
 }
 
-function formatMetadata(fragment: Fragment) {
-  const parts: string[] = [];
-  if (fragment.width && fragment.height) {
-    parts.push(`${fragment.width} × ${fragment.height}`);
+function TrashConfirm({
+  busy,
+  onCancel,
+  onConfirm,
+  title,
+}: {
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+  title: string;
+}) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  function trapTab(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Tab") return;
+    const active = document.activeElement;
+    if (event.shiftKey && active === cancelRef.current) {
+      event.preventDefault();
+      confirmRef.current?.focus();
+    } else if (!event.shiftKey && active === confirmRef.current) {
+      event.preventDefault();
+      cancelRef.current?.focus();
+    }
   }
-  parts.push(fileType(fragment));
-  if (fragment.fileSize) parts.push(formatBytes(fragment.fileSize));
-  return parts.join(" · ");
-}
 
-function fileType(fragment: Fragment) {
-  if (fragment.mimeType === "image/svg+xml") return "SVG";
-  const mimeSubtype = fragment.mimeType?.split("/").pop();
-  const extension = fragment.originalPath.split(".").pop();
-  const value = mimeSubtype || extension || "Image";
-  if (value.toLowerCase() === "jpeg") return "JPG";
-  return value.toUpperCase();
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1_000) return `${bytes} B`;
-  if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
-  if (bytes < 1_000_000_000) {
-    return `${(bytes / 1_000_000).toFixed(1).replace(/\.0$/, "")} MB`;
-  }
-  return `${(bytes / 1_000_000_000).toFixed(1).replace(/\.0$/, "")} GB`;
-}
-
-function sourceName(fragment: Fragment, sourceUrl: string | null) {
-  if (fragment.siteName?.trim()) return fragment.siteName;
-  if (!sourceUrl) return "Local Frame";
-  try {
-    return new URL(sourceUrl).hostname.replace(/^www\./, "");
-  } catch {
-    return "Web source";
-  }
-}
-
-function compactSource(sourceUrl: string) {
-  try {
-    const url = new URL(sourceUrl);
-    return `${url.hostname.replace(/^www\./, "")}${url.pathname === "/" ? "" : url.pathname}`;
-  } catch {
-    return sourceUrl;
-  }
-}
-
-function isEditableTarget(target: EventTarget | null) {
   return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
+    <div
+      className="v7-focused-confirm"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target && !busy) onCancel();
+      }}
+    >
+      <div
+        aria-busy={busy}
+        aria-describedby="v7-focused-confirm-copy"
+        aria-labelledby="v7-focused-confirm-title"
+        aria-modal="true"
+        className="v7-focused-confirm-card"
+        onKeyDown={trapTab}
+        role="alertdialog"
+      >
+        <h3 id="v7-focused-confirm-title">Move to Trash?</h3>
+        <p id="v7-focused-confirm-copy">
+          “{title}” moves to Trash. You can restore it from there.
+        </p>
+        <div className="v7-focused-confirm-actions">
+          <button
+            disabled={busy}
+            onClick={onCancel}
+            ref={cancelRef}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            className="v7-focused-confirm-danger"
+            disabled={busy}
+            onClick={onConfirm}
+            ref={confirmRef}
+            type="button"
+          >
+            {busy ? "Moving…" : "Move to Trash"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
