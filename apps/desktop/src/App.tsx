@@ -12,7 +12,7 @@ import {
 import type { Fragment, Frame } from "@fragment/shared";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { LoaderCircle, Trash2, Undo2, X } from "lucide-react";
+import { LoaderCircle, RotateCcw, Trash2, Undo2, X } from "lucide-react";
 import type { SortMode, SourceFilter } from "./components/TopCommandBar";
 import { CreateFrameModal } from "./features/frames/CreateFrameModal";
 import {
@@ -114,9 +114,27 @@ import {
   createPreviewTrashState,
   movePreviewItemsToTrash,
   previewIdsAtLocation,
+  purgePreviewItems,
   purgePreviewTrash,
   restorePreviewItems,
 } from "./features/trash/preview-trash-state";
+import {
+  estimateDeleteAfter,
+  retentionFromDeletePolicy,
+} from "./features/trash/retention";
+import {
+  deleteFragmentsForever,
+  deleteFrameForever,
+  moveFragmentsBackToTrash,
+  moveFrameBackToTrash,
+  restoreFragmentsNow,
+  restoreFrameWithUniqueName,
+  tauriTrashBackend,
+  type EmptyTrashSummary,
+  type RestoredFrameResult,
+} from "./features/trash/trash-actions";
+import { removeFragmentsFromPage } from "./features/trash/trash-model";
+import { observeTrashTotal } from "./features/trash/trash-session";
 import { DesktopShell, LibraryToolbar, type V7View } from "./v7/DesktopShell";
 import { FramesPage } from "./v7/FramesPage";
 import { VaultPage } from "./v7/VaultPage";
@@ -124,6 +142,7 @@ import {
   runRecoverableTrashAction,
   TrashPage as V7TrashPage,
   type TrashSort,
+  type TrashToast,
 } from "./v7/TrashPage";
 import {
   SettingsPage as V7SettingsPage,
@@ -153,6 +172,12 @@ type TrashUndoState =
   | { kind: "fragments"; ids: string[]; label: string }
   | { kind: "frame"; frameId: string; label: string }
   | { kind: "import-summary"; ids: string[]; label: string }
+  | {
+      kind: "custom";
+      label: string;
+      tone: TrashToast["tone"];
+      undo?: TrashToast["undo"];
+    }
   | null;
 
 const THEME_STORAGE_KEY = "fragment-theme";
@@ -1111,15 +1136,36 @@ export default function App() {
         ];
       }),
     );
+    // Demo rows carry no retention fields; stamp them the way the backend
+    // would so the preview shows the same "Deletes in N days" label.
+    const trashedAt = new Date().toISOString();
+    const retention = retentionFromDeletePolicy(deletePolicy);
     return previewIdsAtLocation(demoFragmentIds, previewTrashState, "trashed")
       .map((id) => byId.get(id))
-      .filter((fragment): fragment is Fragment => Boolean(fragment));
+      .filter((fragment): fragment is Fragment => Boolean(fragment))
+      .map((fragment) => ({
+        ...fragment,
+        deletedAt: fragment.deletedAt ?? trashedAt,
+        deleteAfter:
+          fragment.deleteAfter ?? estimateDeleteAfter(trashedAt, retention),
+      }));
   }, [
+    deletePolicy,
     demoFragmentIds,
     previewFrameAssignments,
     previewTitleOverrides,
     previewTrashState,
   ]);
+
+  // Lets the Trash page pulse its Empty button once per session, the first
+  // time the Trash becomes non-empty after the library has loaded.
+  const sessionTrashTotal = previewMode
+    ? previewTrashedDemoFragments.length
+    : trashTotal + trashedFrames.length;
+  const libraryLoaded = previewMode || defaultFrameId !== null;
+  useEffect(() => {
+    observeTrashTotal(sessionTrashTotal, libraryLoaded);
+  }, [libraryLoaded, sessionTrashTotal]);
 
   const demoCounts = useMemo(() => {
     const next = new Map<string, number>();
@@ -1330,29 +1376,13 @@ export default function App() {
     () => galleryFragments.map((fragment) => fragment.id),
     [galleryFragments],
   );
-  const visibleTrashedFragments = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return trashedFragments
-      .filter((fragment) => {
-        if (!matchesSourceFilter(fragment, sourceFilter)) {
-          return false;
-        }
-        if (!normalized) {
-          return true;
-        }
-        return [
-          fragment.title,
-          fragment.description,
-          fragment.note,
-          fragment.sourceUrl,
-          fragment.pageUrl,
-          frameById.get(fragment.frameId)?.name,
-        ]
-          .filter(Boolean)
-          .some((value) => value!.toLowerCase().includes(normalized));
-      })
-      .sort((left, right) => compareFragments(left, right, sortMode));
-  }, [frameById, query, sortMode, sourceFilter, trashedFragments]);
+  // The trashed page is already filtered (query, source, color) and sorted by
+  // deleted date on the server in loadTrashPage; re-sorting it here by the
+  // gallery sort would scramble the Trash page's own deleted-date order. The
+  // browser preview substitutes its demo Trash so selection works there too.
+  const visibleTrashedFragments = previewMode
+    ? previewTrashedDemoFragments
+    : trashedFragments;
   const visibleTrashedFragmentIds = useMemo(
     () => visibleTrashedFragments.map((fragment) => fragment.id),
     [visibleTrashedFragments],
@@ -2948,9 +2978,11 @@ export default function App() {
     }
 
     const successLabel =
-      undo.kind === "frame"
-        ? "Restored Fragment"
-        : undo.kind === "import-summary"
+      undo.kind === "custom"
+        ? (undo.undo?.doneLabel ?? "Undone")
+        : undo.kind === "frame"
+          ? "Restored Fragment"
+          : undo.kind === "import-summary"
           ? undo.ids.length === 1
             ? "Removed linked Frame"
             : `Removed ${undo.ids.length} linked Frames`
@@ -2963,6 +2995,11 @@ export default function App() {
     try {
       const succeeded = await runRecoverableTrashAction(
         async () => {
+          if (undo.kind === "custom") {
+            // Trash page undos patch the library themselves.
+            await undo.undo?.run();
+            return;
+          }
           if (undo.kind === "frame") {
             await restoreFrame(undo.frameId);
           } else if (undo.kind === "import-summary") {
@@ -2983,10 +3020,23 @@ export default function App() {
       if (succeeded) {
         setStatus(successLabel);
         clearTrashUndo();
+        if (undo.kind === "custom") {
+          showTrashNotice(successLabel);
+        }
       }
     } finally {
       setTrashUndoRequestPending(false);
     }
+  }
+
+  /** A short, non-undoable toast; used to confirm the result of an Undo. */
+  function showTrashNotice(label: string) {
+    clearTrashUndoTimer();
+    setTrashUndo({ kind: "custom", label, tone: "neutral" });
+    trashUndoTimer.current = window.setTimeout(() => {
+      trashUndoTimer.current = null;
+      setTrashUndo(null);
+    }, 4000);
   }
 
   async function moveFragmentsToTrash(ids: string[]) {
@@ -3100,6 +3150,157 @@ export default function App() {
     await refreshSnapshot();
     setError(caught instanceof Error ? caught.message : String(caught));
     setStatus("Restore failed · Try again");
+  }
+
+  // Trash page actions (wt-23). Each action is one backend call followed by a
+  // local patch of the loaded page and the sidebar counts; the gallery page
+  // reloads on its own when the view changes.
+  const trashRetention = retentionFromDeletePolicy(deletePolicy);
+
+  async function patchLibraryFromSnapshot() {
+    const snapshot = await loadLibrarySnapshot(LIBRARY_PAGE_SIZE);
+    const metadata = readSnapshotMetadata(snapshot);
+    setFrames(snapshot.frames);
+    setFrameFragmentCounts(metadata.frameCounts);
+    setTrashTotal(metadata.trashTotal);
+    rememberRevision(snapshot.revision);
+  }
+
+  function removeTrashedFragmentsLocally(ids: string[]) {
+    const result = removeFragmentsFromPage(
+      trashedFragmentsRef.current,
+      ids,
+      trashNextOffsetRef.current,
+    );
+    trashedFragmentsRef.current = result.remaining;
+    trashNextOffsetRef.current = result.nextOffset;
+    setTrashedFragments(result.remaining);
+    setTrashTotal((current) => Math.max(0, current - ids.length));
+    setSelectedFragment((current) =>
+      current && ids.includes(current.id) ? null : current,
+    );
+    setQuickPreviewFragment((current) =>
+      current && ids.includes(current.id) ? null : current,
+    );
+    return result.removed;
+  }
+
+  async function restoreTrashedFragmentsFromPage(ids: string[]) {
+    if (previewMode) {
+      setPreviewTrashState((current) => restorePreviewItems(current, ids));
+      return;
+    }
+    setError(null);
+    const realIds = await restoreFragmentsNow(tauriTrashBackend, ids);
+    const removed = removeTrashedFragmentsLocally(realIds);
+    if (removed.length === realIds.length) {
+      setFrameFragmentCounts((current) => {
+        const next = { ...current };
+        removed.forEach((fragment) => {
+          next[fragment.frameId] = (next[fragment.frameId] ?? 0) + 1;
+        });
+        return next;
+      });
+    } else {
+      // Some restored rows were never loaded (Restore all), so take the
+      // authoritative counts from one snapshot call.
+      await patchLibraryFromSnapshot();
+    }
+  }
+
+  async function restoreTrashedFrameFromPage(
+    frame: Frame,
+  ): Promise<RestoredFrameResult> {
+    if (previewMode) {
+      return { frame, renamedFrom: null };
+    }
+    setError(null);
+    const result = await restoreFrameWithUniqueName(
+      tauriTrashBackend,
+      frame,
+      frames,
+    );
+    setTrashedFrames((current) => current.filter((item) => item.id !== frame.id));
+    await patchLibraryFromSnapshot();
+    return result;
+  }
+
+  async function deleteTrashedFragmentsNow(ids: string[]) {
+    if (previewMode) {
+      setPreviewTrashState((current) => purgePreviewItems(current, ids));
+      return;
+    }
+    setError(null);
+    const realIds = await deleteFragmentsForever(tauriTrashBackend, ids);
+    removeTrashedFragmentsLocally(realIds);
+  }
+
+  async function deleteTrashedFrameNow(frame: Frame) {
+    if (previewMode) return;
+    setError(null);
+    await deleteFrameForever(tauriTrashBackend, frame.id);
+    setTrashedFrames((current) => current.filter((item) => item.id !== frame.id));
+  }
+
+  async function retrashFragmentsFromPage(ids: string[]) {
+    if (previewMode) {
+      setPreviewTrashState((current) => movePreviewItemsToTrash(current, ids));
+      return;
+    }
+    setError(null);
+    await moveFragmentsBackToTrash(tauriTrashBackend, ids, trashRetention);
+    await Promise.all([loadTrashPage(true, true), patchLibraryFromSnapshot()]);
+  }
+
+  async function retrashFrameFromPage(frame: Frame) {
+    if (previewMode) return;
+    setError(null);
+    await moveFrameBackToTrash(tauriTrashBackend, frame.id, trashRetention);
+    if (
+      selectedFrameId &&
+      descendantFrameIds(frames, frame.id).includes(selectedFrameId)
+    ) {
+      selectedFrameIdRef.current = null;
+      setSelectedFrameId(null);
+    }
+    await Promise.all([loadTrashPage(true, true), patchLibraryFromSnapshot()]);
+  }
+
+  function listAllTrashedFragmentIds() {
+    if (previewMode) {
+      return Promise.resolve(
+        previewTrashedDemoFragments.map((fragment) => fragment.id),
+      );
+    }
+    return listFragmentIds({
+      expectedPaletteRevision: fragmentFilter.color
+        ? trashPaletteRevision.current
+        : null,
+      trashed: true,
+      query,
+      sourceFilter,
+      filter: filterWithLibraryControls(fragmentFilter, query, sourceFilter),
+      sortMode,
+    });
+  }
+
+  function notifyFromTrash(toast: TrashToast) {
+    if (trashUndoPendingRef.current) return;
+    clearTrashUndo();
+    setTrashUndo({
+      kind: "custom",
+      label: toast.label,
+      tone: toast.tone,
+      undo: toast.undo,
+    });
+    setStatus(toast.label);
+    trashUndoTimer.current = window.setTimeout(
+      () => {
+        trashUndoTimer.current = null;
+        setTrashUndo(null);
+      },
+      toast.undo ? 6000 : 4000,
+    );
   }
 
   const v7Layout = browsingMode.layout === "grid" ? "grid" : "masonry";
@@ -3241,21 +3442,23 @@ export default function App() {
     }
   }
 
-  async function emptyTrashPermanently() {
+  async function emptyTrashPermanently(): Promise<EmptyTrashSummary | void> {
     if (trashUndoPendingRef.current) {
       setStatus("Wait for Undo to finish");
-      return;
+      throw new Error("Wait for Undo to finish before emptying the Trash");
     }
     if (previewMode) {
+      const removed = previewTrashedDemoFragments.length;
       dismissTrashUndo();
       setPreviewTrashState(purgePreviewTrash);
       setSelectedFragment(null);
       setQuickPreviewFragment(null);
       setStatus("Trash emptied");
-      return;
+      return { fragments: removed, frames: 0 };
     }
+    let report: Awaited<ReturnType<typeof emptyNativeTrash>>;
     try {
-      await emptyNativeTrash();
+      report = await emptyNativeTrash();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       throw caught;
@@ -3284,6 +3487,7 @@ export default function App() {
       setError("Trash emptied but refresh failed");
       setStatus("Trash emptied but refresh failed");
     });
+    return { fragments: report.fragments, frames: report.frames };
   }
 
   function showFocusedSibling(direction: -1 | 1) {
@@ -3575,42 +3779,35 @@ export default function App() {
             dispatchSelection({ type: "clear", scopeKey: "" });
             void loadTrashPage(true);
           }}
+          activeFrames={displayFrames}
           assetSourcesFor={(fragment) => assetSourcesFor(fragment, "gallery")}
           frameNameFor={(frameId) =>
             (frameById.get(frameId) ?? demoFrameById.get(frameId))?.name ??
             "Vault"
           }
           fragments={v7TrashFragments}
+          fragmentTotal={previewMode ? v7TrashFragments.length : trashTotal}
           frames={v7TrashFrames}
           hasMore={!previewMode && trashHasMore}
+          loaded={previewMode || trashLoaded}
           loading={trashLoading}
-          retentionLabel={
-            deletePolicy === "forever"
-              ? "Deleted immediately"
-              : `Permanently removed after ${deletePolicy} days`
-          }
+          retention={trashRetention}
+          selectedIds={selectedFragmentIdSet}
           sort={trashSort}
+          onActionError={reportTrashRestoreFailure}
           onAssetFallback={resolveAssetFallback}
+          onClearSelection={deselectAllFragments}
+          onDeleteFragmentsNow={deleteTrashedFragmentsNow}
+          onDeleteFrameNow={deleteTrashedFrameNow}
           onEmptyTrash={emptyTrashPermanently}
+          onListAllFragmentIds={listAllTrashedFragmentIds}
           onLoadMore={previewMode ? undefined : loadNextTrashPage}
-          onRestoreError={reportTrashRestoreFailure}
-          onRestoreFragment={async (fragment) => {
-            if (isDemoFragment(fragment)) {
-              setPreviewTrashState((current) =>
-                restorePreviewItems(current, [fragment.id]),
-              );
-              setStatus("Restored Frame");
-              return;
-            }
-            setError(null);
-            await restoreFragments([fragment.id]);
-            await refreshSnapshot(true);
-            setStatus("Restored Frame");
-          }}
-          onRestoreFrame={async (frame) => {
-            if (frame.id.startsWith("demo-")) return;
-            await restoreTrashedFrame(frame);
-          }}
+          onNotify={notifyFromTrash}
+          onOpen={openFragmentPreview}
+          onPointerDown={handleGalleryPointerDown}
+          onRestoreFragments={restoreTrashedFragmentsFromPage}
+          onRestoreFrame={restoreTrashedFrameFromPage}
+          onSelectAll={selectAllMatchingFragments}
           onSortChange={(nextSort) => {
             trashSortRef.current = nextSort;
             setTrashSort(nextSort);
@@ -3618,11 +3815,9 @@ export default function App() {
               void loadTrashPage(true, false, nextSort);
             }
           }}
-          total={
-            previewMode
-              ? v7TrashFragments.length + v7TrashFrames.length
-              : trashTotal + v7TrashFrames.length
-          }
+          onToggleSelect={(fragment) => toggleFragmentSelection(fragment.id)}
+          onTrashFragments={retrashFragmentsFromPage}
+          onTrashFrame={retrashFrameFromPage}
         />
       ) : (
         <V7SettingsPage
@@ -3795,8 +3990,20 @@ export default function App() {
           data-pending={trashUndoPending}
           role="region"
         >
-          <span className="v7-undo-icon" aria-hidden="true">
-            {trashUndo.kind === "import-summary" ? (
+          <span
+            aria-hidden="true"
+            className="v7-undo-icon"
+            data-tone={trashUndo.kind === "custom" ? trashUndo.tone : undefined}
+          >
+            {trashUndo.kind === "custom" ? (
+              trashUndo.tone === "restore" ? (
+                <RotateCcw size={16} />
+              ) : trashUndo.tone === "delete" ? (
+                <Trash2 size={16} />
+              ) : (
+                <Undo2 size={16} />
+              )
+            ) : trashUndo.kind === "import-summary" ? (
               <Undo2 size={16} />
             ) : (
               <Trash2 size={16} />
@@ -3805,7 +4012,12 @@ export default function App() {
           <strong aria-atomic="true" aria-live="polite">
             {trashUndo.label}
           </strong>
-          {trashUndo.kind !== "import-summary" || trashUndo.ids.length > 0 ? (
+          {(
+            trashUndo.kind === "custom"
+              ? Boolean(trashUndo.undo)
+              : trashUndo.kind !== "import-summary" ||
+                trashUndo.ids.length > 0
+          ) ? (
             <button
               className="v7-undo-action"
               disabled={trashUndoPending}
