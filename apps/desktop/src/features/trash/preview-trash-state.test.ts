@@ -3,6 +3,7 @@ import {
   createPreviewTrashState,
   movePreviewItemsToTrash,
   previewIdsAtLocation,
+  purgePreviewItems,
   purgePreviewTrash,
   restorePreviewItems,
 } from "./preview-trash-state";
@@ -34,6 +35,19 @@ describe("preview Trash state", () => {
 
     expect(previewIdsAtLocation(ids, restored, "active")).toEqual(ids);
     expect(previewIdsAtLocation(ids, restored, "trashed")).toEqual([]);
+  });
+
+  it("deletes selected trashed items now and leaves the rest recoverable", () => {
+    const moved = movePreviewItemsToTrash(createPreviewTrashState(), [
+      "demo-a",
+      "demo-b",
+    ]);
+    const purged = purgePreviewItems(moved, ["demo-a", "demo-c"]);
+
+    expect(previewIdsAtLocation(ids, purged, "purged")).toEqual(["demo-a"]);
+    expect(previewIdsAtLocation(ids, purged, "trashed")).toEqual(["demo-b"]);
+    expect(previewIdsAtLocation(ids, purged, "active")).toEqual(["demo-c"]);
+    expect(purgePreviewItems(purged, ["demo-c"])).toBe(purged);
   });
 
   it("purges Trash without allowing restore or a later move to revive items", () => {

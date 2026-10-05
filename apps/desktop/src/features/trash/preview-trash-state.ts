@@ -44,6 +44,25 @@ export function restorePreviewItems(
   return changed ? next : state;
 }
 
+/** "Delete now" for the browser preview: only trashed items can be purged. */
+export function purgePreviewItems(
+  state: PreviewTrashState,
+  ids: readonly string[],
+): PreviewTrashState {
+  const next = new Map(state);
+  let changed = false;
+
+  for (const id of new Set(ids)) {
+    if (next.get(id) !== "trashed") {
+      continue;
+    }
+    next.set(id, "purged");
+    changed = true;
+  }
+
+  return changed ? next : state;
+}
+
 export function purgePreviewTrash(state: PreviewTrashState): PreviewTrashState {
   const next = new Map(state);
   let changed = false;
