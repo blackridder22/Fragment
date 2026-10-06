@@ -69,6 +69,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo fmt --all -- --check
 
+      - name: Build native host
+        # tauri-build validates the bundled resource
+        # ../../../target/release/fragment-host before any desktop crate compiles.
+        if: ${{ !cancelled() }}
+        run: cargo build --release -p fragment-host --bin fragment-host --locked
+
       - name: Run Clippy
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
