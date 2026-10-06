@@ -29,6 +29,11 @@ export type PaletteIndexStatus = {
   failed: number;
   revision: string;
 };
+export type DerivativesStatus = {
+  pending: number;
+  done: number;
+  failed: number;
+};
 export type FragmentMediaInfo = {
   kind: "raster" | "vector";
   width: number | null;

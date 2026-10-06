@@ -387,9 +387,9 @@ Default macOS library path:
       06/
         <fragment-id>.<ext>
   thumbnails/
-    <fragment-id>.png
+    <asset-id>.webp          # raster sources; SVG sources keep <asset-id>.png
   previews/
-    <fragment-id>.png
+    <asset-id>.webp          # only when the original is > 1600 px or not browser-displayable
   temp/
   logs/
 ```
@@ -399,7 +399,23 @@ Rules:
 - SQLite stores metadata only.
 - Original images are stored on disk.
 - Thumbnails and previews are derived files.
-- The MVP writes derived thumbnails/previews as PNG for reliable macOS WebKit rendering.
+- Raster derivatives are lossy WebP (libwebp via the `webp` crate): thumbnails 640 px at
+  quality 82, previews 1600 px at quality 85, alpha plane kept lossless. Measured on the author's
+  Vault (v0.0.9): 12 PNG thumbnails 2.99 MB -> WebP 0.37 MB (8.2x) with alpha intact; one
+  1600x702 PNG preview 1.39 MB -> 175 KB. WKWebView on macOS 11+ decodes WebP natively.
+- PNG is used only for SVG-rendered tiers (`svg.rs`, `previews.rs`), where tiny-skia's exact
+  straight-alpha output matters more than bytes. There is no PNG fallback for raster
+  derivatives: libwebp is a build requirement.
+- Decoding applies the EXIF orientation: thumbnails, previews and the stored width/height
+  describe the image as WebKit displays the original.
+- No preview file is written when the original's longest edge is <= 1600 px, its format is
+  browser-displayable (JPEG, PNG, WebP, GIF) and it carries no EXIF orientation;
+  `preview_path` then equals `original_path`. A rotated or flipped original always gets a
+  generated preview so grid and preview agree.
+- `assets.derivatives_version` records the policy an asset was written with (1 = PNG,
+  2 = WebP + skip rule). Older rows are regenerated in the background (`derivative_jobs.rs`);
+  the replaced files are queued as deferred and deleted at the next desktop launch, never by
+  the process whose UI may still display them.
 - The original file is the source of truth for the image asset.
 - Paths stored in the database should be relative to the Fragment app data root whenever possible.
 - Never trust paths received from the extension.
@@ -674,8 +690,9 @@ For most captures:
 8. Check for exact duplicate by SHA-256.
 9. If duplicate exists, return duplicate result instead of saving a second original unless future settings say otherwise.
 10. Save original under app data `originals/YYYY/MM/<fragment-id>.<ext>`.
-11. Generate thumbnail under `thumbnails/<fragment-id>.png`.
-12. Generate preview under `previews/<fragment-id>.png`.
+11. Generate thumbnail under `thumbnails/<asset-id>.webp`.
+12. Generate preview under `previews/<asset-id>.webp`, or point `preview_path` at the original
+    when it is <= 1600 px and browser-displayable.
 13. Insert row into `fragments`.
 14. Insert tags into `tags` and `fragment_tags`.
 15. Return success.
