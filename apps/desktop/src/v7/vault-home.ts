@@ -1,5 +1,5 @@
 import type { Fragment, Frame } from "@fragment/shared";
-import type { BrowsingDensity } from "../features/library/BrowsingModeControl";
+import type { BrowsingDensity } from "../store/library-types";
 import { sortFrames } from "../features/frames/frame-tree";
 
 /** Folder cards shown before the "Show all Frames" expander. */

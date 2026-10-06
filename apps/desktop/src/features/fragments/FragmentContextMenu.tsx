@@ -165,10 +165,10 @@ export function FragmentContextMenu({
         <div>
           <strong>
             {fragmentIds.length > 1
-              ? `${fragmentIds.length} Frames`
-              : (fragment.title ?? "Untitled Frame")}
+              ? `${fragmentIds.length} Fragments`
+              : (fragment.title ?? "Untitled Fragment")}
           </strong>
-          <span>{fragmentIds.length > 1 ? "Selection" : "Frame"}</span>
+          <span>{fragmentIds.length > 1 ? "Selection" : "Fragment"}</span>
         </div>
       </header>
       {fragmentIds.length === 1 ? (
@@ -208,7 +208,7 @@ export function FragmentContextMenu({
       <div className="fragment-context-divider" />
       <div className="fragment-context-submenu">
         <span>
-          <FolderPlus aria-hidden="true" size={14} /> Add to Fragment
+          <FolderPlus aria-hidden="true" size={14} /> Add to Frame
         </span>
         <div>
           {frames.map((frame) => (

@@ -6,10 +6,9 @@ describe("TrashPage totals", () => {
   it("reports the global total even before every page is loaded", () => {
     const markup = renderToStaticMarkup(
       <TrashPage
-        assetSourcesFor={() => []}
-        fragments={[]}
         frameNameFor={() => "Vault"}
         frames={[]}
+        items={[]}
         loading={false}
         retentionLabel="Permanently removed after 31 days"
         total={72}

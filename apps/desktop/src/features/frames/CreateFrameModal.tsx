@@ -21,7 +21,7 @@ export function CreateFrameModal({
   const description =
     actionLabel === "Save"
       ? "Update the name used throughout your Vault."
-      : "Create a folder for related Frames.";
+      : "A collection for related Fragments.";
 
   useEffect(() => setName(initialName), [initialName]);
 

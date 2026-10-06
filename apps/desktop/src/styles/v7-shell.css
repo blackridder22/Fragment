@@ -118,20 +118,6 @@
 }
 
 .v7-history-controls button,
-.v7-icon-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--v7-text-muted);
-  background: transparent;
-  cursor: pointer;
-}
-
 .v7-history-controls button:hover:not(:disabled),
 .v7-icon-control:hover {
   color: var(--v7-text);
@@ -245,7 +231,7 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   transform: none;
-  transition: background-color 120ms ease;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .v7-primary-button:hover {
@@ -530,7 +516,7 @@
 }
 
 .v7-tree-chevron svg {
-  transition: transform 120ms ease;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .v7-tree-chevron svg[data-expanded="true"] {
@@ -796,16 +782,5 @@
   .v7-global-search kbd,
   .v7-density-control {
     display: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .v7-app *,
-  .v7-app *::before,
-  .v7-app *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
   }
 }
