@@ -110,7 +110,7 @@ export function SelectionActionBar({
     <>
       <div
         aria-busy={pending}
-        aria-label="Frame selection actions"
+        aria-label="Fragment selection actions"
         className="v7-selection-action-bar"
         onKeyDown={closePanelOnEscape}
         ref={toolbarRef}
@@ -131,7 +131,7 @@ export function SelectionActionBar({
           onClick={() => togglePanel("move")}
           type="button"
         >
-          Move to Fragment
+          Move to Frame
         </button>
         <button
           aria-expanded={panel === "tag"}
@@ -150,7 +150,7 @@ export function SelectionActionBar({
           Trash
         </button>
         <button
-          aria-label="Clear Frame selection"
+          aria-label="Clear Fragment selection"
           className="v7-selection-clear"
           disabled={pending}
           onClick={onClear}
@@ -165,7 +165,9 @@ export function SelectionActionBar({
         <div
           aria-busy={pending}
           aria-label={
-            panel === "move" ? "Move selected Frames" : "Tag selected Frames"
+            panel === "move"
+              ? "Move selected Fragments"
+              : "Tag selected Fragments"
           }
           className="v7-selection-action-panel"
           onKeyDown={closePanelOnEscape}
@@ -173,9 +175,7 @@ export function SelectionActionBar({
           role="dialog"
         >
           <header>
-            <strong>
-              {panel === "move" ? "Move to Fragment" : "Add a tag"}
-            </strong>
+            <strong>{panel === "move" ? "Move to Frame" : "Add a tag"}</strong>
             <span>{count} selected</span>
           </header>
           {panel === "move" ? (

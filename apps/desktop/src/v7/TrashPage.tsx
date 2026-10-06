@@ -1,13 +1,21 @@
-import type { ColorFilter, Fragment, Frame, PaletteIndexStatus } from "@fragment/shared";
+import type {
+  ColorFilter,
+  Fragment,
+  Frame,
+  PaletteIndexStatus,
+} from "@fragment/shared";
 import { ColorFilterControl } from "../features/colors/ColorFilterControl";
 import { Check, ChevronDown, Folder, ImageOff, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../components/Modal";
 import type { AssetSource } from "../lib/assets";
+import type { GalleryCard } from "../store/library-selectors";
+import type { TrashSort } from "../store/library-types";
 import { PaginationFooter } from "./PaginationFooter";
 
+export type { TrashSort } from "../store/library-types";
+
 type TrashFilter = "all" | "fragments" | "frames";
-export type TrashSort = "newest" | "oldest";
 type MaybePromise = void | Promise<void>;
 
 export async function runRecoverableTrashAction(
@@ -27,21 +35,22 @@ export async function runRecoverableTrashAction(
   }
 }
 
-type TrashedFrame = {
+type TrashedFragmentEntry = {
   key: string;
-  kind: "frame";
+  kind: "fragment";
   record: Fragment;
+  card: GalleryCard;
   deletedAt: string;
 };
 
-type TrashedFragment = {
+type TrashedFrameEntry = {
   key: string;
-  kind: "fragment";
+  kind: "frame";
   record: Frame;
   deletedAt: string;
 };
 
-type TrashEntry = TrashedFrame | TrashedFragment;
+type TrashEntry = TrashedFragmentEntry | TrashedFrameEntry;
 
 export type TrashPageProps = {
   color?: ColorFilter | null;
@@ -49,10 +58,11 @@ export type TrashPageProps = {
   colorResultsChanged?: boolean;
   onColorChange?: (color: ColorFilter | null) => void;
   onRefreshColors?: () => void;
-  fragments: Fragment[];
+  /** Trashed Fragments with their asset sources and Frame name precomputed. */
+  items: GalleryCard[];
   frames: Frame[];
-  assetSourcesFor: (fragment: Fragment) => AssetSource[];
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
+  /** Name of a Frame by id, used for a trashed Frame's parent. */
   frameNameFor: (frameId: string) => string;
   hasMore?: boolean;
   loading: boolean;
@@ -73,9 +83,8 @@ export function TrashPage({
   colorResultsChanged,
   onColorChange,
   onRefreshColors,
-  fragments,
+  items,
   frames,
-  assetSourcesFor,
   onAssetFallback,
   frameNameFor,
   hasMore = false,
@@ -100,19 +109,22 @@ export function TrashPage({
 
   const entries = useMemo<TrashEntry[]>(() => {
     const next: TrashEntry[] = [
-      ...fragments.map(
-        (fragment): TrashedFrame => ({
-          key: `frame:${fragment.id}`,
-          kind: "frame",
-          record: fragment,
+      ...items.map(
+        (card): TrashedFragmentEntry => ({
+          key: `fragment:${card.fragment.id}`,
+          kind: "fragment",
+          record: card.fragment,
+          card,
           deletedAt:
-            fragment.deletedAt ?? fragment.updatedAt ?? fragment.createdAt,
+            card.fragment.deletedAt ??
+            card.fragment.updatedAt ??
+            card.fragment.createdAt,
         }),
       ),
       ...frames.map(
-        (frame): TrashedFragment => ({
-          key: `fragment:${frame.id}`,
-          kind: "fragment",
+        (frame): TrashedFrameEntry => ({
+          key: `frame:${frame.id}`,
+          kind: "frame",
           record: frame,
           deletedAt: frame.updatedAt ?? frame.createdAt,
         }),
@@ -123,7 +135,7 @@ export function TrashPage({
       const difference = timestamp(right.deletedAt) - timestamp(left.deletedAt);
       return sort === "newest" ? difference : -difference;
     });
-  }, [fragments, frames, sort]);
+  }, [items, frames, sort]);
 
   const visibleEntries = useMemo(
     () =>
@@ -146,7 +158,7 @@ export function TrashPage({
     try {
       await runRecoverableTrashAction(
         () =>
-          entry.kind === "frame"
+          entry.kind === "fragment"
             ? onRestoreFragment(entry.record)
             : onRestoreFrame(entry.record),
         async (caught) => {
@@ -263,15 +275,22 @@ export function TrashPage({
           </span>
         </div>
 
-        {onColorChange && color && (paletteIndex?.pending || colorResultsChanged) ? (
+        {onColorChange &&
+        color &&
+        (paletteIndex?.pending || colorResultsChanged) ? (
           <div className="fragment-index-status">
             {paletteIndex?.pending ? (
-              <span>Colors are still being extracted · {paletteIndex.pending} remaining</span>
+              <span>
+                Colors are still being extracted · {paletteIndex.pending}{" "}
+                remaining
+              </span>
             ) : null}
             {colorResultsChanged ? (
               <>
                 <span>More color results available</span>
-                <button type="button" onClick={onRefreshColors}>Refresh</button>
+                <button type="button" onClick={onRefreshColors}>
+                  Refresh
+                </button>
               </>
             ) : null}
           </div>
@@ -296,9 +315,6 @@ export function TrashPage({
 
               {visibleEntries.map((entry) => (
                 <TrashRow
-                  assetSources={
-                    entry.kind === "frame" ? assetSourcesFor(entry.record) : []
-                  }
                   entry={entry}
                   frameNameFor={frameNameFor}
                   key={entry.key}
@@ -404,26 +420,24 @@ function TrashFilterButton({
 }
 
 function TrashRow({
-  assetSources,
   entry,
   frameNameFor,
   pending,
   onAssetFallback,
   onRestore,
 }: {
-  assetSources: AssetSource[];
   entry: TrashEntry;
   frameNameFor: (frameId: string) => string;
   pending: boolean;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
   onRestore: () => void;
 }) {
-  const isFrame = entry.kind === "frame";
-  const name = isFrame
-    ? entry.record.title?.trim() || "Untitled Frame"
-    : entry.record.name.trim() || "Untitled Fragment";
-  const from = isFrame
-    ? frameNameFor(entry.record.frameId)
+  const isFragment = entry.kind === "fragment";
+  const name = isFragment
+    ? entry.record.title?.trim() || "Untitled Fragment"
+    : entry.record.name.trim() || "Unnamed Frame";
+  const from = isFragment
+    ? entry.card.folderName
     : entry.record.parentId
       ? frameNameFor(entry.record.parentId)
       : "Your Vault";
@@ -431,11 +445,11 @@ function TrashRow({
   return (
     <div className="v7-trash-row v7-trash-item-row" role="row">
       <div className="v7-trash-cell v7-trash-thumbnail-cell" role="cell">
-        {isFrame ? (
+        {isFragment ? (
           <TrashThumbnail
             alt={name}
             onAssetFallback={onAssetFallback}
-            sources={assetSources}
+            sources={entry.card.assetSources}
           />
         ) : (
           <span className="v7-trash-fragment-thumbnail" aria-hidden="true">
@@ -448,7 +462,7 @@ function TrashRow({
       </strong>
       <div className="v7-trash-cell" role="cell">
         <span className="v7-trash-type-badge">
-          {isFrame ? "Frame" : "Fragment"}
+          {isFragment ? "Fragment" : "Frame"}
         </span>
       </div>
       <span className="v7-trash-from" role="cell" title={from}>

@@ -17,13 +17,16 @@ import {
   matchesShortcut,
   type ShortcutBinding,
 } from "../features/shortcuts/shortcut-model";
-import {
-  addTag,
-  removeTag,
-  tagValidationError,
-} from "../features/tags/tag-editor-model";
 import type { AssetSource } from "../lib/assets";
+import { perfMark } from "../lib/perf";
 import "../styles/v7-preview.css";
+import {
+  compactSource,
+  formatMetadata,
+  isEditableTarget,
+  sourceName,
+} from "./focused-frame-format";
+import { FocusedTagsSection } from "./FocusedTagsSection";
 
 type MaybeAsyncAction = () => void | Promise<void>;
 
@@ -54,6 +57,10 @@ export type FocusedFrameOverlayProps = {
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
 };
 
+function markOverlayImageLoad() {
+  perfMark("overlay-image-load", "overlay-mount");
+}
+
 export function FocusedFrameOverlay({
   assetRoot = "",
   showPalette = false,
@@ -82,7 +89,6 @@ export function FocusedFrameOverlay({
 }: FocusedFrameOverlayProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
-  const tagInputRef = useRef<HTMLInputElement | null>(null);
   const attemptedFallbacks = useRef(new Set<string>());
   const [assetIndex, setAssetIndex] = useState(0);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -97,10 +103,6 @@ export function FocusedFrameOverlay({
   );
   const [titleChangePending, setTitleChangePending] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
-  const [tagEditorOpen, setTagEditorOpen] = useState(false);
-  const [tagDraft, setTagDraft] = useState("");
-  const [tagChangePending, setTagChangePending] = useState(false);
-  const [tagError, setTagError] = useState<string | null>(null);
   const assetKey = useMemo(
     () =>
       assetSources
@@ -112,13 +114,17 @@ export function FocusedFrameOverlay({
   const activeSource = assetSources[assetIndex];
   const imageUrl = fallbackUrl ?? activeSource?.url ?? "";
   const activeFrame = frames.find((frame) => frame.id === fragment.frameId);
-  const frameTitle =
-    normalizeFragmentTitle(fragment.title ?? "") || "Untitled Frame";
+  const fragmentTitle =
+    normalizeFragmentTitle(fragment.title ?? "") || "Untitled Fragment";
   const sourceUrl = fragment.sourceUrl ?? fragment.pageUrl ?? null;
   const safeTotal = Math.max(1, total);
   const displayIndex = Math.min(Math.max(currentIndex + 1, 1), safeTotal);
   const canGoPrevious = currentIndex > 0;
   const canGoNext = currentIndex + 1 < total;
+
+  useEffect(() => {
+    perfMark("overlay-mount");
+  }, []);
 
   useEffect(() => {
     attemptedFallbacks.current.clear();
@@ -143,16 +149,6 @@ export function FocusedFrameOverlay({
       titleInputRef.current?.select();
     }
   }, [titleEditorOpen]);
-
-  useEffect(() => {
-    setTagEditorOpen(false);
-    setTagDraft("");
-    setTagError(null);
-  }, [fragment.id]);
-
-  useEffect(() => {
-    if (tagEditorOpen) tagInputRef.current?.focus();
-  }, [tagEditorOpen]);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement;
@@ -220,10 +216,6 @@ export function FocusedFrameOverlay({
     setImageUnavailable(true);
   }
 
-  function updateNotes(value: string) {
-    setNoteDraft(value);
-  }
-
   function commitNotes() {
     if (noteDraft !== (fragment.note ?? "")) {
       void onNotesChange?.(noteDraft);
@@ -283,47 +275,9 @@ export function FocusedFrameOverlay({
     }
   }
 
-  async function persistTags(nextTags: string[]) {
-    if (!onTagsChange || tagChangePending || tagsLoading) return false;
-
-    setTagChangePending(true);
-    setTagError(null);
-    try {
-      await onTagsChange(nextTags);
-      return true;
-    } catch (caught) {
-      setTagError(caught instanceof Error ? caught.message : String(caught));
-      return false;
-    } finally {
-      setTagChangePending(false);
-    }
-  }
-
-  async function addTagFromDraft() {
-    const validationError = tagValidationError(tags, tagDraft);
-    if (validationError) {
-      setTagError(validationError);
-      return;
-    }
-
-    const nextTags = addTag(tags, tagDraft);
-    const unchanged =
-      nextTags.length === tags.length &&
-      nextTags.every((tag, index) => tag === tags[index]);
-    if (unchanged || (await persistTags(nextTags))) {
-      setTagDraft("");
-      setTagEditorOpen(false);
-      setTagError(null);
-    }
-  }
-
-  async function removeTagValue(tag: string) {
-    await persistTags(removeTag(tags, tag));
-  }
-
   return (
     <div
-      aria-label={`Focused Frame preview: ${frameTitle}`}
+      aria-label={`Focused Fragment preview: ${fragmentTitle}`}
       aria-modal="true"
       className="v7-focused-overlay"
       onMouseDown={(event) => {
@@ -332,12 +286,12 @@ export function FocusedFrameOverlay({
       role="dialog"
     >
       <header className="v7-focused-topbar">
-        <nav aria-label="Frame location" className="v7-focused-breadcrumbs">
-          <span>Frames</span>
+        <nav aria-label="Fragment location" className="v7-focused-breadcrumbs">
+          <span>Vault</span>
           <span aria-hidden="true">/</span>
           <span>{activeFrame?.name ?? "Vault"}</span>
           <span aria-hidden="true">/</span>
-          <strong>{frameTitle}</strong>
+          <strong>{fragmentTitle}</strong>
         </nav>
         <button
           aria-label="Close focused preview"
@@ -354,28 +308,42 @@ export function FocusedFrameOverlay({
         className="v7-focused-stage"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <section className="v7-focused-preview-pane" aria-label="Frame image">
+        <section
+          className="v7-focused-preview-pane"
+          aria-label="Fragment image"
+        >
           <div className="v7-focused-image-stage">
-            {fragment.mimeType === "image/svg+xml" && assetRoot ? <SvgPreview key={fragment.id} fragment={fragment} assetRoot={assetRoot} initialUrl={imageUrl} /> : imageUnavailable ? (
+            {fragment.mimeType === "image/svg+xml" && assetRoot ? (
+              <SvgPreview
+                key={fragment.id}
+                fragment={fragment}
+                assetRoot={assetRoot}
+                initialUrl={imageUrl}
+              />
+            ) : imageUnavailable ? (
               <div className="v7-focused-image-fallback">
                 <ImageOff aria-hidden="true" size={30} strokeWidth={1.6} />
                 <strong>Preview unavailable</strong>
-                <span>The original Frame could not be displayed.</span>
+                <span>The original Fragment could not be displayed.</span>
               </div>
             ) : (
               <img
-                alt={frameTitle}
+                alt={fragmentTitle}
                 decoding="async"
                 draggable={false}
                 onError={() => void handleImageError()}
+                onLoad={markOverlayImageLoad}
                 src={imageUrl}
               />
             )}
           </div>
 
-          <nav aria-label="Frame preview navigation" className="v7-focused-nav">
+          <nav
+            aria-label="Fragment preview navigation"
+            className="v7-focused-nav"
+          >
             <button
-              aria-label="Previous Frame"
+              aria-label="Previous Fragment"
               disabled={!canGoPrevious}
               onClick={onPrevious}
               type="button"
@@ -388,7 +356,7 @@ export function FocusedFrameOverlay({
               <strong>{safeTotal}</strong>
             </span>
             <button
-              aria-label="Next Frame"
+              aria-label="Next Fragment"
               disabled={!canGoNext}
               onClick={onNext}
               type="button"
@@ -398,7 +366,7 @@ export function FocusedFrameOverlay({
           </nav>
         </section>
 
-        <aside className="v7-focused-details" aria-label="Frame details">
+        <aside className="v7-focused-details" aria-label="Fragment details">
           <header className="v7-focused-details-header">
             <div className="v7-focused-title-row">
               {titleEditorOpen ? (
@@ -423,14 +391,14 @@ export function FocusedFrameOverlay({
                         titleError ? "v7-focused-title-error" : undefined
                       }
                       aria-invalid={Boolean(titleError)}
-                      aria-label="Frame title"
+                      aria-label="Fragment title"
                       autoComplete="off"
                       disabled={titleChangePending}
                       onChange={(event) => {
                         setTitleDraft(event.target.value);
                         if (titleError) setTitleError(null);
                       }}
-                      placeholder="Untitled Frame"
+                      placeholder="Untitled Fragment"
                       ref={titleInputRef}
                       value={titleDraft}
                     />
@@ -454,27 +422,23 @@ export function FocusedFrameOverlay({
               ) : (
                 <>
                   <div className="v7-focused-title-display">
-                    <h2 title={frameTitle}>{frameTitle}</h2>
+                    <h2 title={fragmentTitle}>{fragmentTitle}</h2>
                     {onTitleChange ? (
                       <button
-                        aria-label="Edit Frame title"
+                        aria-label="Edit Fragment title"
                         className="v7-focused-title-edit"
                         onClick={beginTitleEdit}
                         title="Edit title"
                         type="button"
                       >
-                        <Pencil
-                          aria-hidden="true"
-                          size={16}
-                          strokeWidth={2}
-                        />
+                        <Pencil aria-hidden="true" size={16} strokeWidth={2} />
                       </button>
                     ) : null}
                   </div>
                   <button
                     aria-expanded={actionsOpen}
                     aria-haspopup="menu"
-                    aria-label="More Frame actions"
+                    aria-label="More Fragment actions"
                     className="v7-focused-more"
                     disabled={!onMoreActions}
                     onClick={(event) => {
@@ -488,7 +452,11 @@ export function FocusedFrameOverlay({
                     onPointerDown={(event) => event.stopPropagation()}
                     type="button"
                   >
-                    <MoreHorizontal aria-hidden="true" size={16} strokeWidth={2} />
+                    <MoreHorizontal
+                      aria-hidden="true"
+                      size={16}
+                      strokeWidth={2}
+                    />
                   </button>
                 </>
               )}
@@ -499,10 +467,16 @@ export function FocusedFrameOverlay({
           </header>
 
           <div className="v7-focused-details-body">
-            {showPalette ? <PaletteSection key={fragment.id} id={fragment.id} onFindColor={onFindColor} /> : null}
+            {showPalette ? (
+              <PaletteSection
+                key={fragment.id}
+                id={fragment.id}
+                onFindColor={onFindColor}
+              />
+            ) : null}
             <section className="v7-focused-detail-section">
               <label className="v7-focused-label" htmlFor="v7-frame-fragment">
-                Fragment
+                Frame
               </label>
               <div className="v7-focused-select-wrap">
                 <select
@@ -541,85 +515,12 @@ export function FocusedFrameOverlay({
               )}
             </section>
 
-            <section className="v7-focused-detail-section">
-              <span className="v7-focused-label">Tags</span>
-              <div className="v7-focused-tags">
-                {tags.map((tag) => (
-                  <button
-                    aria-label={`Remove tag ${tag}`}
-                    className="v7-focused-tag"
-                    disabled={!onTagsChange || tagChangePending || tagsLoading}
-                    key={tag}
-                    onClick={() => void removeTagValue(tag)}
-                    title={`Remove ${tag}`}
-                    type="button"
-                  >
-                    <span>{tag}</span>
-                    <X aria-hidden="true" size={11} strokeWidth={1.8} />
-                  </button>
-                ))}
-                {tagEditorOpen ? (
-                  <form
-                    className="v7-focused-tag-editor"
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        setTagDraft("");
-                        setTagEditorOpen(false);
-                        setTagError(null);
-                      }
-                    }}
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void addTagFromDraft();
-                    }}
-                  >
-                    <input
-                      aria-label="Tag name"
-                      autoComplete="off"
-                      disabled={tagChangePending || tagsLoading}
-                      onChange={(event) => setTagDraft(event.target.value)}
-                      placeholder="Tag name"
-                      ref={tagInputRef}
-                      value={tagDraft}
-                    />
-                    <button
-                      disabled={tagChangePending || tagsLoading}
-                      type="submit"
-                    >
-                      Add
-                    </button>
-                    <button
-                      aria-label="Cancel adding tag"
-                      disabled={tagChangePending}
-                      onClick={() => {
-                        setTagDraft("");
-                        setTagEditorOpen(false);
-                        setTagError(null);
-                      }}
-                      type="button"
-                    >
-                      <X aria-hidden="true" size={12} strokeWidth={1.8} />
-                    </button>
-                  </form>
-                ) : (
-                  <button
-                    className="v7-focused-tag v7-focused-tag-add"
-                    disabled={!onTagsChange || tagsLoading}
-                    onClick={() => setTagEditorOpen(true)}
-                    type="button"
-                  >
-                    {tagsLoading ? "Loading…" : "+ Add"}
-                  </button>
-                )}
-              </div>
-              {tagError ? (
-                <span className="v7-focused-tag-error" role="alert">
-                  {tagError}
-                </span>
-              ) : null}
-            </section>
+            <FocusedTagsSection
+              fragmentId={fragment.id}
+              onTagsChange={onTagsChange}
+              tags={tags}
+              tagsLoading={tagsLoading}
+            />
 
             <section className="v7-focused-notes">
               <label className="v7-focused-label" htmlFor="v7-frame-notes">
@@ -628,8 +529,8 @@ export function FocusedFrameOverlay({
               <textarea
                 id="v7-frame-notes"
                 onBlur={commitNotes}
-                onChange={(event) => updateNotes(event.target.value)}
-                placeholder="Add notes about this Frame…"
+                onChange={(event) => setNoteDraft(event.target.value)}
+                placeholder="Add notes about this Fragment…"
                 readOnly={!onNotesChange}
                 value={noteDraft}
               />
@@ -656,61 +557,5 @@ export function FocusedFrameOverlay({
         </aside>
       </div>
     </div>
-  );
-}
-
-function formatMetadata(fragment: Fragment) {
-  const parts: string[] = [];
-  if (fragment.width && fragment.height) {
-    parts.push(`${fragment.width} × ${fragment.height}`);
-  }
-  parts.push(fileType(fragment));
-  if (fragment.fileSize) parts.push(formatBytes(fragment.fileSize));
-  return parts.join(" · ");
-}
-
-function fileType(fragment: Fragment) {
-  if (fragment.mimeType === "image/svg+xml") return "SVG";
-  const mimeSubtype = fragment.mimeType?.split("/").pop();
-  const extension = fragment.originalPath.split(".").pop();
-  const value = mimeSubtype || extension || "Image";
-  if (value.toLowerCase() === "jpeg") return "JPG";
-  return value.toUpperCase();
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1_000) return `${bytes} B`;
-  if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
-  if (bytes < 1_000_000_000) {
-    return `${(bytes / 1_000_000).toFixed(1).replace(/\.0$/, "")} MB`;
-  }
-  return `${(bytes / 1_000_000_000).toFixed(1).replace(/\.0$/, "")} GB`;
-}
-
-function sourceName(fragment: Fragment, sourceUrl: string | null) {
-  if (fragment.siteName?.trim()) return fragment.siteName;
-  if (!sourceUrl) return "Local Frame";
-  try {
-    return new URL(sourceUrl).hostname.replace(/^www\./, "");
-  } catch {
-    return "Web source";
-  }
-}
-
-function compactSource(sourceUrl: string) {
-  try {
-    const url = new URL(sourceUrl);
-    return `${url.hostname.replace(/^www\./, "")}${url.pathname === "/" ? "" : url.pathname}`;
-  } catch {
-    return sourceUrl;
-  }
-}
-
-function isEditableTarget(target: EventTarget | null) {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
   );
 }

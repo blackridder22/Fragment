@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -11,23 +12,22 @@ import {
 import { Check, ImageOff } from "lucide-react";
 import type { Fragment } from "@fragment/shared";
 import type { AssetSource } from "../lib/assets";
-import type { BrowsingDensity } from "../features/library/BrowsingModeControl";
+import { perfMarkOnce } from "../lib/perf";
+import type { GalleryCard } from "../store/library-selectors";
+import type { BrowsingDensity } from "../store/library-types";
 import "../styles/v7-gallery.css";
 
 export type V7GalleryLayout = "masonry" | "grid";
-
-export type V7AssetSourcesFor = (fragment: Fragment) => AssetSource[];
-export type V7FolderNameFor = (fragment: Fragment) => string;
 export type V7AssetFallback = (relativePath: string) => Promise<string | null>;
+export type { GalleryCard } from "../store/library-selectors";
 
 export type FrameGalleryProps = {
-  fragments: Fragment[];
-  assetSourcesFor: V7AssetSourcesFor;
+  /** Page items with asset sources and folder name precomputed by the store. */
+  items: GalleryCard[];
   density?: BrowsingDensity;
-  folderNameFor: V7FolderNameFor;
   layout: V7GalleryLayout;
   resultCount?: number;
-  selectedIds: Set<string>;
+  selectedIds: ReadonlySet<string>;
   onAssetFallback?: V7AssetFallback;
   onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
   onOpen: (fragment: Fragment) => void;
@@ -60,12 +60,15 @@ export type V7FrameCardProps = {
   className?: string;
   folderName: string;
   fragment: Fragment;
+  /** Masonry card height in px; a primitive so the memoized card stays stable. */
+  height?: number;
+  /** Flex weight for the home page rows. */
+  weight?: number;
   onAssetFallback?: V7AssetFallback;
   onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
   onOpen: (fragment: Fragment) => void;
   onSelect: (fragment: Fragment, event: MouseEvent<HTMLButtonElement>) => void;
   selected: boolean;
-  style?: V7FrameCardStyle;
   variant?: "gallery" | "vault";
 };
 
@@ -88,7 +91,7 @@ export function FrameCanvas({
 }
 
 type MasonryItem = {
-  fragment: Fragment;
+  card: GalleryCard;
   height: number;
 };
 
@@ -109,7 +112,7 @@ function toneFor(value: string) {
 }
 
 function titleFor(fragment: Fragment) {
-  return fragment.title?.trim() || "Untitled Frame";
+  return fragment.title?.trim() || "Untitled Fragment";
 }
 
 const MASONRY_COLUMN_COUNTS: Record<BrowsingDensity, number> = {
@@ -124,13 +127,13 @@ const MASONRY_HEIGHT_SCALE: Record<BrowsingDensity, number> = {
   large: 1.24,
 };
 
-function masonryColumns(fragments: Fragment[], density: BrowsingDensity) {
+function masonryColumns(items: GalleryCard[], density: BrowsingDensity) {
   const columns: MasonryItem[][] = Array.from(
     { length: MASONRY_COLUMN_COUNTS[density] },
     () => [],
   );
 
-  fragments.forEach((fragment, index) => {
+  items.forEach((card, index) => {
     const columnIndex = index % columns.length;
     const rowIndex = Math.floor(index / columns.length);
     const pattern =
@@ -138,10 +141,14 @@ function masonryColumns(fragments: Fragment[], density: BrowsingDensity) {
     const height = Math.round(
       pattern[rowIndex % pattern.length] * MASONRY_HEIGHT_SCALE[density],
     );
-    columns[columnIndex]!.push({ fragment, height });
+    columns[columnIndex]!.push({ card, height });
   });
 
   return columns;
+}
+
+function markFirstThumbnail() {
+  perfMarkOnce("first-thumbnail-load");
 }
 
 export function V7AssetImage({
@@ -217,25 +224,38 @@ export function V7AssetImage({
       draggable={false}
       loading="lazy"
       onError={() => void handleError()}
+      onLoad={markFirstThumbnail}
       src={displayUrl}
     />
   );
 }
 
-export function V7FrameCard({
+/**
+ * One card. Memoized: it re-renders only when its own primitive props or the
+ * stable item references change, never because the gallery around it did.
+ */
+export const V7FrameCard = memo(function V7FrameCard({
   assetSources,
   className = "",
   folderName,
   fragment,
+  height,
+  weight,
   onAssetFallback,
   onContextMenu,
   onOpen,
   onSelect,
   selected,
-  style,
   variant = "gallery",
 }: V7FrameCardProps) {
   const title = titleFor(fragment);
+  const style = useMemo<V7FrameCardStyle | undefined>(() => {
+    if (height === undefined && weight === undefined) return undefined;
+    const next: V7FrameCardStyle = {};
+    if (height !== undefined) next["--v7-card-height"] = `${height}px`;
+    if (weight !== undefined) next["--v7-card-weight"] = weight;
+    return next;
+  }, [height, weight]);
 
   return (
     <article
@@ -287,13 +307,11 @@ export function V7FrameCard({
       </button>
     </article>
   );
-}
+});
 
 export function FrameGallery({
-  fragments,
-  assetSourcesFor,
+  items,
   density = "comfortable",
-  folderNameFor,
   layout,
   resultCount,
   selectedIds,
@@ -303,16 +321,16 @@ export function FrameGallery({
   onSelect,
 }: FrameGalleryProps) {
   const columns = useMemo(
-    () => masonryColumns(fragments, density),
-    [density, fragments],
+    () => (layout === "masonry" ? masonryColumns(items, density) : []),
+    [density, items, layout],
   );
-  const accessibleCount = resultCount ?? fragments.length;
+  const accessibleCount = resultCount ?? items.length;
 
-  if (fragments.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="v7-gallery-empty" role="status">
         <ImageOff aria-hidden="true" size={24} />
-        <strong>No Frames yet</strong>
+        <strong>No Fragments yet</strong>
         <span>Import an image or save one from Capture Mode.</span>
       </div>
     );
@@ -320,7 +338,7 @@ export function FrameGallery({
 
   return (
     <div
-      aria-label={`${accessibleCount.toLocaleString()} Frames`}
+      aria-label={`${accessibleCount.toLocaleString()} Fragments`}
       className="v7-frame-gallery"
       data-density={density}
       data-layout={layout}
@@ -333,33 +351,33 @@ export function FrameGallery({
               key={`column-${columnIndex}`}
               role="presentation"
             >
-              {column.map(({ fragment, height }) => (
+              {column.map(({ card, height }) => (
                 <V7FrameCard
-                  assetSources={assetSourcesFor(fragment)}
-                  folderName={folderNameFor(fragment)}
-                  fragment={fragment}
-                  key={fragment.id}
+                  assetSources={card.assetSources}
+                  folderName={card.folderName}
+                  fragment={card.fragment}
+                  height={height}
+                  key={card.fragment.id}
                   onAssetFallback={onAssetFallback}
                   onContextMenu={onContextMenu}
                   onOpen={onOpen}
                   onSelect={onSelect}
-                  selected={selectedIds.has(fragment.id)}
-                  style={{ "--v7-card-height": `${height}px` }}
+                  selected={selectedIds.has(card.fragment.id)}
                 />
               ))}
             </div>
           ))
-        : fragments.map((fragment) => (
+        : items.map((card) => (
             <V7FrameCard
-              assetSources={assetSourcesFor(fragment)}
-              folderName={folderNameFor(fragment)}
-              fragment={fragment}
-              key={fragment.id}
+              assetSources={card.assetSources}
+              folderName={card.folderName}
+              fragment={card.fragment}
+              key={card.fragment.id}
               onAssetFallback={onAssetFallback}
               onContextMenu={onContextMenu}
               onOpen={onOpen}
               onSelect={onSelect}
-              selected={selectedIds.has(fragment.id)}
+              selected={selectedIds.has(card.fragment.id)}
             />
           ))}
     </div>

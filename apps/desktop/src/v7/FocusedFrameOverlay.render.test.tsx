@@ -22,8 +22,8 @@ describe("FocusedFrameOverlay title", () => {
 
     expect(markup).toContain('class="v7-focused-title-display"');
     expect(markup).toContain('title="Prism glass study"');
-    expect(markup).toContain('aria-label="Edit Frame title"');
-    expect(markup).not.toContain('aria-label="Frame title"');
+    expect(markup).toContain('aria-label="Edit Fragment title"');
+    expect(markup).not.toContain('aria-label="Fragment title"');
   });
 
   it("keeps the title read-only when no title callback is supplied", () => {
@@ -42,7 +42,7 @@ describe("FocusedFrameOverlay title", () => {
     );
 
     expect(markup).toContain("Prism glass study");
-    expect(markup).not.toContain('aria-label="Edit Frame title"');
+    expect(markup).not.toContain('aria-label="Edit Fragment title"');
   });
 });
 

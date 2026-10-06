@@ -1,0 +1,349 @@
+/* Resets, typography and the shared button and modal primitives.
+   Page styles live in the v7-*.css files; floating UI in overlays.css. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--theme-canvas);
+  color: var(--text);
+  font-family: var(--font);
+  letter-spacing: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 22px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+/* Glass surfaces shared by the legacy button and modal primitives. */
+.icon-button,
+.button,
+.modal,
+.frame-form input {
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.1),
+      rgba(255, 255, 255, 0.032)
+    ),
+    rgba(23, 23, 23, 0.62);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(22px) saturate(1.12);
+  backdrop-filter: blur(22px) saturate(1.12);
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 13px;
+  color: rgba(247, 247, 244, 0.62);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.icon-button:hover {
+  border-color: rgba(255, 255, 255, 0.17);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.16),
+      rgba(255, 255, 255, 0.052)
+    ),
+    rgba(38, 38, 38, 0.72);
+  color: #fff;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 15px;
+  border-radius: 13px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.button:hover,
+.icon-button:hover {
+  transform: translateY(-1px);
+}
+
+.button:active,
+.icon-button:active {
+  transform: translateY(1px);
+  box-shadow: var(--pressed-shadow);
+}
+
+.button.primary {
+  position: relative;
+  color: #fff;
+}
+
+.button.primary::after {
+  content: "";
+  align-self: end;
+  width: 18px;
+  height: 2px;
+  margin-left: -18px;
+  margin-bottom: 7px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--neon));
+  box-shadow: 0 0 12px rgba(137, 247, 255, 0.72);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  transform: none;
+}
+
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--app-sidebar-width, 78px);
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 26px;
+  background:
+    radial-gradient(
+      circle at 78% 18%,
+      rgba(137, 247, 255, 0.11),
+      transparent 34%
+    ),
+    rgba(0, 0, 0, 0.64);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+.modal {
+  position: relative;
+  width: min(980px, 100%);
+  max-height: min(860px, calc(100vh - 52px));
+  overflow: auto;
+  border-radius: 24px;
+  animation: modal-in var(--dur-base) var(--ease-out) both;
+}
+
+.modal.frame-name-modal {
+  width: min(460px, 100%);
+}
+
+.modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(18, 18, 18, 0.82);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.frame-form {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.frame-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.frame-form input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  color: var(--text);
+  border-radius: 14px;
+}
+
+.frame-name-modal .modal-header {
+  padding: 18px 18px 8px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.frame-name-modal .modal-header h2 {
+  font-size: 24px;
+  font-weight: 820;
+}
+
+.frame-form-copy p {
+  margin: -4px 0 2px;
+  color: var(--subtle);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+:root[data-theme="light"] .icon-button,
+:root[data-theme="light"] .button,
+:root[data-theme="light"] .modal,
+:root[data-theme="light"] .frame-form input {
+  border-color: rgba(18, 24, 22, 0.1);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.78),
+      rgba(255, 255, 255, 0.36)
+    ),
+    rgba(255, 255, 255, 0.42);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(28px) saturate(1.18);
+  backdrop-filter: blur(28px) saturate(1.18);
+}
+
+:root[data-theme="light"] .icon-button {
+  color: rgba(30, 36, 33, 0.62);
+}
+
+:root[data-theme="light"] .icon-button:hover {
+  border-color: rgba(18, 24, 22, 0.14);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.94),
+      rgba(255, 255, 255, 0.58)
+    ),
+    rgba(255, 255, 255, 0.74);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .button.primary::after {
+  box-shadow: 0 0 14px rgba(46, 223, 232, 0.62);
+}
+
+:root[data-theme="light"] kbd {
+  border-color: rgba(18, 24, 22, 0.08);
+  background: rgba(255, 255, 255, 0.48);
+  color: rgba(71, 77, 72, 0.76);
+}
+
+:root[data-theme="light"] .button.primary {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .button:disabled {
+  opacity: 0.48;
+}
+
+:root[data-theme="light"] .modal-backdrop {
+  background: rgba(238, 240, 237, 0.58);
+}
+
+:root[data-theme="light"] .modal-header {
+  background: rgba(255, 255, 255, 0.66);
+}
+
+@media (max-width: 760px) {
+  .modal-backdrop {
+    left: 0;
+    padding: 16px;
+  }
+}

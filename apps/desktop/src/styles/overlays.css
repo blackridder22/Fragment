@@ -1,0 +1,370 @@
+/* Floating UI shared across pages: context menu, shortcuts sheet, drag ghost, marquee. */
+
+.v7-app .fragment-context-menu {
+  position: fixed;
+  z-index: 92;
+  display: flex;
+  width: min(310px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  flex-direction: column;
+  padding: 8px;
+  gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--v7-border-strong);
+  border-radius: 14px;
+  color: var(--v7-text);
+  background: var(--v7-floating-surface);
+  box-shadow: 0 18px 40px var(--v7-shadow-color);
+  isolation: isolate;
+}
+
+.v7-app .fragment-context-menu[data-layer="overlay"] {
+  z-index: 240;
+}
+
+.v7-app .fragment-context-menu > header {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--v7-border);
+}
+
+.v7-app .fragment-context-menu > header > svg {
+  color: var(--v7-focus);
+}
+
+.v7-app .fragment-context-menu > header div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.v7-app .fragment-context-menu > header strong,
+.v7-app .fragment-context-menu > header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v7-app .fragment-context-menu > header strong {
+  color: var(--v7-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.v7-app .fragment-context-menu > header span {
+  color: var(--v7-text-faint);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.v7-app .fragment-context-menu > button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--v7-text);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v7-app .fragment-context-menu > button:hover {
+  color: var(--v7-text);
+  background: var(--v7-surface-hover);
+}
+
+.v7-app .fragment-context-menu > button:focus-visible,
+.v7-app .fragment-context-submenu button:focus-visible {
+  outline: 2px solid var(--v7-focus);
+  outline-offset: -2px;
+}
+
+.v7-app .fragment-context-menu > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.v7-app .fragment-context-menu > button.danger {
+  color: var(--v7-danger);
+}
+
+.v7-app .fragment-context-menu kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 18px;
+  padding: 0;
+  gap: 4px;
+  border: 0;
+  color: var(--v7-text-faint);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.v7-app .fragment-context-divider {
+  height: 1px;
+  margin: 0;
+  background: var(--v7-border);
+}
+
+.v7-app .fragment-context-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 4px;
+}
+
+.v7-app .fragment-context-submenu > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  color: var(--v7-text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.v7-app .fragment-context-submenu > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.v7-app .fragment-context-submenu button {
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--v7-border);
+  border-radius: 8px;
+  background: var(--v7-surface-strong);
+  color: var(--v7-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.v7-app .fragment-context-submenu button:hover {
+  border-color: var(--v7-border-strong);
+  color: var(--v7-text);
+  background: var(--v7-surface-hover);
+}
+
+.shortcuts-backdrop {
+  position: fixed;
+  inset: 0 0 0 var(--app-sidebar-width, 78px);
+  z-index: 96;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, 0.46);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.shortcuts-sheet {
+  width: min(520px, 92%);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 22px;
+  background:
+    radial-gradient(
+      circle at 84% 0%,
+      rgba(137, 247, 255, 0.09),
+      transparent 34%
+    ),
+    rgba(16, 17, 17, 0.97);
+  box-shadow: 0 36px 100px rgba(0, 0, 0, 0.62);
+}
+
+.shortcuts-sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.shortcuts-sheet > header span {
+  color: var(--accent-strong);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shortcuts-sheet h2 {
+  margin: 4px 0 0;
+  font-size: 19px;
+}
+
+.shortcuts-sheet > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 10px;
+}
+
+.shortcuts-sheet > div > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.shortcuts-sheet > div > div:hover {
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+}
+
+.shortcuts-sheet > footer {
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--subtle);
+  font-size: 9px;
+  text-align: center;
+}
+
+:root[data-theme="light"] .shortcuts-sheet {
+  border-color: rgba(18, 24, 22, 0.13);
+  background:
+    radial-gradient(
+      circle at 86% 0%,
+      rgba(46, 223, 232, 0.11),
+      transparent 34%
+    ),
+    rgba(247, 249, 246, 0.97);
+  box-shadow:
+    0 34px 90px rgba(70, 78, 72, 0.24),
+    inset 0 1px rgba(255, 255, 255, 0.86);
+}
+
+:root[data-theme="light"] .shortcuts-backdrop {
+  background: rgba(235, 239, 234, 0.58);
+}
+
+/* Pointer drag: the grabbing cursor must win over every per-element cursor. */
+body[data-drag-active],
+body[data-drag-active] * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+.drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 260px;
+  padding: 9px 12px 9px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 15px;
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: 0 18px 40px var(--theme-shadow-color);
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
+  backdrop-filter: blur(18px) saturate(1.18);
+}
+
+.drag-ghost > strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drag-ghost-stack {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+}
+
+.drag-ghost-image,
+.drag-ghost-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--canvas-soft);
+  object-fit: cover;
+  box-shadow: 0 5px 12px var(--theme-shadow-color);
+}
+
+.drag-ghost-image:nth-child(1) {
+  transform: rotate(-4deg);
+}
+
+.drag-ghost-image:nth-child(2) {
+  transform: translate(2px, -1px) rotate(3deg);
+}
+
+.drag-ghost-image:nth-child(3) {
+  transform: translate(4px, -2px) rotate(6deg);
+}
+
+.drag-ghost-badge {
+  display: grid;
+  min-width: 25px;
+  height: 25px;
+  place-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  color: #061012;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.marquee-selection {
+  position: fixed;
+  z-index: 900;
+  border: 1px solid rgba(137, 247, 255, 0.88);
+  border-radius: 4px;
+  background: rgba(137, 247, 255, 0.12);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 20px rgba(137, 247, 255, 0.08);
+  pointer-events: none;
+}

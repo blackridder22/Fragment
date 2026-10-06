@@ -16,16 +16,16 @@ self-contained: paste it into the agent that owns that worktree. All agents read
 Wave 1 runs first and in parallel. Wave 2 starts only after `wt/00-foundation` is merged into
 `test-main`, because it changes App.tsx, the store, the page props and the CSS files every page uses.
 
-| Wave | Branch | Prompt | Owns |
-| --- | --- | --- | --- |
-| 1 | `wt/00-foundation` | `00-foundation.md` | App.tsx split, store, loader, dead code/CSS, vocabulary, toast, confirm dialog, motion tokens, perf flag |
-| 1 | `wt/10-core-derivatives` | `10-core-derivatives.md` | Rust: WebP/JPEG derivatives, regeneration, palette loop backoff, resize throttle, release profile |
-| 2 | `wt/20-gallery` | `20-gallery.md` | Frames gallery page: real masonry, virtualization, filters, card motion |
-| 2 | `wt/21-preview` | `21-preview.md` | Focused preview overlay: progressive image, prefetch, open/close motion, details panel |
-| 2 | `wt/22-vault-home` | `22-vault-home.md` | Your Vault home page: folder cards, recently added, empty state |
-| 2 | `wt/23-trash` | `23-trash.md` | Trash page |
-| 2 | `wt/24-settings` | `24-settings.md` | Settings page and shortcuts |
-| 2 | `wt/25-shell` | `25-shell.md` | Sidebar, Frame tree, window bar, menus, search, history, selection bar |
+| Wave | Branch                   | Prompt                   | Owns                                                                                                     |
+| ---- | ------------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| 1    | `wt/00-foundation`       | `00-foundation.md`       | App.tsx split, store, loader, dead code/CSS, vocabulary, toast, confirm dialog, motion tokens, perf flag |
+| 1    | `wt/10-core-derivatives` | `10-core-derivatives.md` | Rust: WebP/JPEG derivatives, regeneration, palette loop backoff, resize throttle, release profile        |
+| 2    | `wt/20-gallery`          | `20-gallery.md`          | Frames gallery page: real masonry, virtualization, filters, card motion                                  |
+| 2    | `wt/21-preview`          | `21-preview.md`          | Focused preview overlay: progressive image, prefetch, open/close motion, details panel                   |
+| 2    | `wt/22-vault-home`       | `22-vault-home.md`       | Your Vault home page: folder cards, recently added, empty state                                          |
+| 2    | `wt/23-trash`            | `23-trash.md`            | Trash page                                                                                               |
+| 2    | `wt/24-settings`         | `24-settings.md`         | Settings page and shortcuts                                                                              |
+| 2    | `wt/25-shell`            | `25-shell.md`            | Sidebar, Frame tree, window bar, menus, search, history, selection bar                                   |
 
 ## Ownership rule
 
@@ -59,6 +59,30 @@ FRAGMENT_APP_DATA_DIR=/tmp/fragment-qa-vault pnpm dev:desktop
 4. Vocabulary check: Frame = collection, Fragment = saved image, Vault = library. No Pin/Board.
 5. No cloud, analytics, AI, scraping, or new broad permissions. Local-first stays intact.
 6. PR opened with `gh pr create --base test-main --title "wt-NN: <summary>"`.
+
+## Dev perf flag
+
+The desktop frontend has a zero-cost performance flag for measuring interactions on an isolated
+Vault. Enable it from the webview console and reload:
+
+```js
+localStorage.setItem("fragment:perf", "1");
+```
+
+When the flag is on, `lib/perf.ts` installs `window.__fragmentPerf` and:
+
+- wraps every Tauri `invoke` to count calls and log `[perf] invoke <command> <ms>`;
+  `__fragmentPerf.invokes` is the counter and `__fragmentPerf.reset()` zeroes it, so an
+  interaction's cost is `reset()`, do the thing, read `invokes`;
+- runs a requestAnimationFrame sampler started with Ctrl+Option+Shift+P or
+  `__fragmentPerf.startFrames()`; `stopFrames()` (or the same shortcut) logs and returns p50, p95,
+  max frame interval and the number of intervals over 100 ms;
+- records `performance.mark` entries for module start, first snapshot received, first thumbnail
+  `load`, overlay mount and overlay image `load`, logging each as a duration (`[perf] first-snapshot
+312.4ms since module-start`, `[perf] overlay-image-load 84.1ms since overlay-mount`);
+  `__fragmentPerf.marks()` returns the raw timestamps.
+
+With the flag off every helper is a boolean check and `invoke` is the untouched Tauri function.
 
 ## Review and merge
 
