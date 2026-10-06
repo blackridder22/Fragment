@@ -25,7 +25,15 @@ use state::FragmentState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt().with_target(false).init();
+    // INFO by default; `RUST_LOG=fragment_desktop_lib=debug,fragment_core=debug`
+    // exposes the background-worker wake/idle trace without rebuilding.
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let state = FragmentState::new().expect("failed to initialize Fragment core");
 
@@ -40,23 +48,40 @@ pub fn run() {
             let _ = (webview, payload);
         })
         .on_window_event(|window, event| {
-            #[cfg(target_os = "macos")]
-            if matches!(
-                event,
-                tauri::WindowEvent::Focused(true)
-                    | tauri::WindowEvent::Resized(_)
-                    | tauri::WindowEvent::ThemeChanged(_)
-            ) {
-                if let Some(webview) = window.get_webview_window(window.label()) {
-                    window_chrome::refresh(webview.as_ref());
-                }
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                // Returning to the app is the usual moment browser captures become visible.
+                window
+                    .app_handle()
+                    .state::<FragmentState>()
+                    .palette_waker
+                    .notify("focus");
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (window, event);
+            #[cfg(target_os = "macos")]
+            match event {
+                // Focus and theme changes are rare and must realign the controls at once.
+                tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ThemeChanged(_) => {
+                    if let Some(webview) = window.get_webview_window(window.label()) {
+                        window_chrome::refresh(webview.as_ref());
+                    }
+                }
+                // Resize events arrive continuously during a drag; refresh once they settle.
+                tauri::WindowEvent::Resized(_) => {
+                    if let Some(webview) = window.get_webview_window(window.label()) {
+                        window_chrome::refresh_after_resize(webview);
+                    }
+                }
+                _ => {}
+            }
         })
         .setup(|app| {
             // Scope only the configured Vault, including isolated QA roots.
             app.asset_protocol_scope().allow_directory(app.state::<FragmentState>().core.paths().root(),true)?;
+            // Regenerate legacy PNG derivatives once first paint has had the machine to itself.
+            media_commands::start_derivative_regeneration(
+                app.handle().clone(),
+                &app.state::<FragmentState>(),
+                media_commands::DERIVATIVES_START_DELAY,
+            );
             if let Ok(resources)=app.path().resource_dir(){
                 let worker=resources.join("fragment-host");
                 if worker.is_file(){let _=fragment_core::svg_worker::configure_worker(worker);}
@@ -92,6 +117,8 @@ pub fn run() {
             get_fragment_media_info,
             ensure_svg_preview,
             cancel_svg_preview,
+            derivatives_status,
+            retry_failed_derivatives,
             ensure_default_frame,
             create_frame,
             list_frames,
@@ -144,7 +171,10 @@ pub fn run() {
         .expect("error while building Fragment")
         .run(|app,event|{
             if matches!(event,tauri::RunEvent::ExitRequested{..}) {
-                app.state::<FragmentState>().palette_stopped.store(true,std::sync::atomic::Ordering::Release);
+                let state = app.state::<FragmentState>();
+                state.background_stopped.store(true,std::sync::atomic::Ordering::Release);
+                state.palette_waker.notify("exit");
+                state.derivatives_waker.notify("exit");
                 fragment_core::svg_worker::shutdown_worker();
             }
         });
