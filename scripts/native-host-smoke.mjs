@@ -248,13 +248,11 @@ try {
   if (!existsSync(dbPath) || statSync(dbPath).size === 0) {
     throw new Error("Smoke capture did not create fragment.db");
   }
-  if (
-    originals.length === 0 ||
-    thumbnails.length === 0 ||
-    previews.length === 0
-  ) {
+  // Originals at or below 1600 px are their own preview, so `previews/` may
+  // legitimately stay empty; the thumbnail is always written.
+  if (originals.length === 0 || thumbnails.length === 0) {
     throw new Error(
-      "Smoke capture did not create original, thumbnail, and preview files",
+      "Smoke capture did not create original and thumbnail files",
     );
   }
 

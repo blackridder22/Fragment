@@ -24,6 +24,7 @@ export type Fragment = {
   thumbnailPath: string;
   previewPath?: string | null;
   mimeType?: string | null;
+  /** Displayed pixel size: EXIF orientation is already applied (raster only). */
   width?: number | null;
   height?: number | null;
   fileSize?: number | null;

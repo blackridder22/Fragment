@@ -559,9 +559,13 @@ pub async fn import_image(
     title_override: Option<String>,
 ) -> CommandResult<Fragment> {
     let core = state.core.clone();
+    let waker = state.palette_waker.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        core.import_image(frame_id, file_path, title_override)
-            .map_err(safe_error)
+        let fragment = core
+            .import_image(frame_id, file_path, title_override)
+            .map_err(safe_error)?;
+        waker.notify("import");
+        Ok(fragment)
     })
     .await
     .map_err(safe_error)?
@@ -598,6 +602,7 @@ pub async fn import_image_batch(
         .remove(&job_id);
     let core = state.core.clone();
     let cancelled_jobs = state.cancelled_import_jobs.clone();
+    let waker = state.palette_waker.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         for item in &items {
@@ -778,6 +783,9 @@ pub async fn import_image_batch(
         }
 
         cancelled_jobs.lock().map_err(safe_error)?.remove(&job_id);
+        if completed > 0 || linked > 0 {
+            waker.notify("import batch");
+        }
         let _ = on_event.send(ImportBatchEvent::Finished {
             job_id,
             completed,

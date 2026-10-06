@@ -30,6 +30,7 @@ pub struct Fragment {
     pub thumbnail_path: String,
     pub preview_path: Option<String>,
     pub mime_type: Option<String>,
+    /// Displayed pixel size: EXIF orientation is already applied (raster only).
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub file_size: Option<i64>,
