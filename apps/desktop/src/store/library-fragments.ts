@@ -564,67 +564,6 @@ export async function moveFragmentsToTrash(ids: string[]): Promise<boolean> {
   return true;
 }
 
-export async function restoreTrashedFragment(fragment: Fragment) {
-  if (isDemoFragment(fragment)) {
-    setState((current) => ({
-      previewTrashState: restorePreviewItems(current.previewTrashState, [
-        fragment.id,
-      ]),
-    }));
-    showToast("Restored Fragment", { tone: "success" });
-    return;
-  }
-  setState({ error: null });
-  await restoreFragments([fragment.id]);
-  removeFragmentsFromTrashPage(new Set([fragment.id]));
-  adjustFrameCounts({ [fragment.frameId]: 1 });
-  setState((current) => ({
-    coverFragments: [fragment, ...current.coverFragments],
-  }));
-  libraryLoader.invalidate("active");
-  showToast("Restored Fragment", { tone: "success" });
-}
-
-export async function reportTrashRestoreFailure(caught: unknown) {
-  await refreshSnapshot();
-  reportError(caught);
-  showToast("Restore failed · Try again", { tone: "error" });
-}
-
-export async function emptyTrashAction() {
-  const state = getState();
-  if (state.undoPending) {
-    showToast("Wait for Undo to finish");
-    return;
-  }
-  if (state.previewMode) {
-    setState((current) => ({
-      previewTrashState: purgePreviewTrash(current.previewTrashState),
-      focused: null,
-      undo: null,
-      toast: null,
-    }));
-    showToast("Trash emptied", { tone: "success" });
-    return;
-  }
-  try {
-    await emptyNativeTrash();
-  } catch (caught) {
-    reportError(caught);
-    throw caught;
-  }
-  setState((current) => ({
-    trashPage: { ...createPageState(), key: currentPageKey(current, "trash") },
-    trashedFrames: [],
-    trashTotal: 0,
-    focused: null,
-    error: null,
-    undo: null,
-    toast: null,
-  }));
-  showToast("Trash emptied", { tone: "success" });
-}
-
 export async function copyFragmentImageAction(fragment: Fragment) {
   if (!isTauriRuntime() || isDemoFragment(fragment)) return;
   try {

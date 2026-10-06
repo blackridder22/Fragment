@@ -112,6 +112,7 @@ export function createInitialLibraryState(
     knownTags: [],
     trashTotal: 0,
     trashedFrames: [],
+    trashedFramesLoaded: false,
 
     activePage: createPageState(),
     trashPage: createPageState(),

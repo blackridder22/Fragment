@@ -229,7 +229,7 @@ export function createLibraryLoader(
     store.setState({
       revision: response.revision,
       colorResultsChanged: reset ? false : state.colorResultsChanged,
-      ...(trashedFrames ? { trashedFrames } : {}),
+      ...(trashedFrames ? { trashedFrames, trashedFramesLoaded: true } : {}),
     });
   }
 

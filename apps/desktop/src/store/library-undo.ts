@@ -135,15 +135,26 @@ export async function undoLastAction() {
     return;
   }
   const successLabel =
-    undo.kind === "frame"
-      ? "Restored Frame"
-      : undo.kind === "linked"
-        ? `Removed ${pluralize(undo.ids.length, "linked Fragment")}`
-        : `Restored ${pluralize(undo.ids.length, "Fragment")}`;
+    undo.kind === "custom"
+      ? undo.doneLabel
+      : undo.kind === "frame"
+        ? "Restored Frame"
+        : undo.kind === "linked"
+          ? `Removed ${pluralize(undo.ids.length, "linked Fragment")}`
+          : `Restored ${pluralize(undo.ids.length, "Fragment")}`;
   setState({ undoPending: true, error: null });
-  if (toastId !== undefined) setToastPending(toastId, true, "Restoring…");
+  if (toastId !== undefined) {
+    setToastPending(
+      toastId,
+      true,
+      undo.kind === "custom" ? "Undoing…" : "Restoring…",
+    );
+  }
   try {
-    if (undo.kind === "fragments") {
+    if (undo.kind === "custom") {
+      // The Trash page's own actions patch the library themselves.
+      await undo.run();
+    } else if (undo.kind === "fragments") {
       await restoreFragments(undo.ids);
       applyFragmentsRestored(undo);
     } else if (undo.kind === "frame") {

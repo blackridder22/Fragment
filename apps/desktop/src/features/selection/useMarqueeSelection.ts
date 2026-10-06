@@ -35,6 +35,12 @@ type MarqueePress = {
 const MARQUEE_THRESHOLD = 5;
 const EDGE_ZONE = 48;
 const MAX_SCROLL_STEP = 18;
+/**
+ * Gallery cards opt in through their legacy class; any other list (such as
+ * Trash rows) opts in with `data-marquee-item` next to `data-fragment-id`.
+ */
+const MARQUEE_ITEM_SELECTOR =
+  ".fragment-card[data-fragment-id], [data-marquee-item][data-fragment-id]";
 
 export function useMarqueeSelection({
   matchingIds,
@@ -103,9 +109,7 @@ export function useMarqueeSelection({
 
     const matching = new Set(matchingIds);
     const cards = Array.from(
-      press.container.querySelectorAll<HTMLElement>(
-        ".fragment-card[data-fragment-id]",
-      ),
+      press.container.querySelectorAll<HTMLElement>(MARQUEE_ITEM_SELECTOR),
     )
       .map((element) => {
         const bounds = element.getBoundingClientRect();

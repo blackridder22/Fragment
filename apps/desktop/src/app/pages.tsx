@@ -1,40 +1,53 @@
 import { resolveAssetFallback } from "../store/library-assets";
+import type { Fragment } from "@fragment/shared";
 import {
   applyFragmentFilter,
   changeView,
   clearFilters,
+  deselectAll,
   handleFragmentCardSelect,
   openContextMenu,
   openFragmentPreview,
   refreshColorResults,
   refreshNativeHostStatus,
   resetPreferences,
+  selectAllMatching,
   selectFrame,
   setDeletePolicy,
   setSettings,
   setSourceFilter,
   setTheme,
   setTrashSort,
+  toggleFragmentSelection,
 } from "../store/library-actions";
-import {
-  emptyTrashAction,
-  reportTrashRestoreFailure,
-  restoreTrashedFragment,
-} from "../store/library-fragments";
-import { restoreTrashedFrame } from "../store/library-frames";
 import { libraryLoader } from "../store/library-loader";
 import {
   selectActiveCards,
   selectActiveTotal,
+  selectDisplayFrames,
   selectFolderCovers,
   selectFrameById,
   selectRecursiveCounts,
   selectSelectedIdSet,
   selectTrashCards,
-  selectTrashFragmentTotal,
+  selectTrashPageFragmentTotal,
+  selectTrashRetention,
   selectTrashedFrames,
   selectVaultFolders,
+  selectVaultTrashCounts,
 } from "../store/library-selectors";
+import {
+  deleteTrashedFragmentsNow,
+  deleteTrashedFramesNow,
+  emptyTrashAction,
+  listAllTrashedFragmentIds,
+  notifyFromTrash,
+  reportTrashActionFailure,
+  restoreTrashedFragments,
+  restoreTrashedFrames,
+  retrashFragments,
+  retrashFrames,
+} from "../store/library-trash";
 import { libraryStore, useLibraryStore } from "../store/library-store";
 import { revealVaultInFinder, isTauriRuntime } from "../lib/tauri";
 import { FramesPage } from "../v7/FramesPage";
@@ -61,6 +74,10 @@ function openFolder(frame: { id: string }) {
 
 function frameNameFor(frameId: string) {
   return selectFrameById(libraryStore.getState()).get(frameId)?.name ?? "Vault";
+}
+
+function toggleTrashSelection(fragment: Fragment) {
+  toggleFragmentSelection(fragment.id);
 }
 
 async function revealVault() {
@@ -155,6 +172,7 @@ function changeTrashColor(
 export function TrashPageContainer() {
   const items = useLibraryStore(selectTrashCards);
   const frames = useLibraryStore(selectTrashedFrames);
+  const activeFrames = useLibraryStore(selectDisplayFrames);
   const color = useLibraryStore((state) => state.fragmentFilter.color);
   const paletteIndex = useLibraryStore((state) => state.paletteIndex);
   const colorResultsChanged = useLibraryStore(
@@ -163,35 +181,51 @@ export function TrashPageContainer() {
   const previewMode = useLibraryStore((state) => state.previewMode);
   const hasMore = useLibraryStore((state) => state.trashPage.hasMore);
   const loading = useLibraryStore((state) => state.trashPage.loading);
-  const deletePolicy = useLibraryStore((state) => state.deletePolicy);
+  const loaded = useLibraryStore(
+    (state) => state.previewMode || state.trashedFramesLoaded,
+  );
+  const retention = useLibraryStore(selectTrashRetention);
   const sort = useLibraryStore((state) => state.trashSort);
-  const fragmentTotal = useLibraryStore(selectTrashFragmentTotal);
+  const fragmentTotal = useLibraryStore(selectTrashPageFragmentTotal);
+  const vaultTotals = useLibraryStore(selectVaultTrashCounts);
+  const selectedIds = useLibraryStore(selectSelectedIdSet);
   return (
     <TrashPage
+      activeFrames={activeFrames}
       color={color}
       colorResultsChanged={colorResultsChanged}
+      fragmentTotal={fragmentTotal}
       frameNameFor={frameNameFor}
       frames={frames}
       hasMore={!previewMode && hasMore}
       items={items}
+      loaded={loaded}
       loading={loading}
+      onActionError={reportTrashActionFailure}
       onAssetFallback={resolveAssetFallback}
+      onClearSelection={deselectAll}
       onColorChange={changeTrashColor}
+      onDeleteFragmentsNow={deleteTrashedFragmentsNow}
+      onDeleteFramesNow={deleteTrashedFramesNow}
       onEmptyTrash={emptyTrashAction}
+      onListAllFragmentIds={listAllTrashedFragmentIds}
       onLoadMore={previewMode ? undefined : loadMoreTrash}
+      onNotify={notifyFromTrash}
+      onOpen={openFragmentPreview}
+      onPointerDown={onCanvasPointerDown}
       onRefreshColors={refreshColorResults}
-      onRestoreError={reportTrashRestoreFailure}
-      onRestoreFragment={restoreTrashedFragment}
-      onRestoreFrame={restoreTrashedFrame}
+      onRestoreFragments={restoreTrashedFragments}
+      onRestoreFrames={restoreTrashedFrames}
+      onSelectAll={selectAllMatching}
       onSortChange={setTrashSort}
+      onToggleSelect={toggleTrashSelection}
+      onTrashFragments={retrashFragments}
+      onTrashFrames={retrashFrames}
       paletteIndex={paletteIndex}
-      retentionLabel={
-        deletePolicy === "forever"
-          ? "Deleted immediately"
-          : `Permanently removed after ${deletePolicy} days`
-      }
+      retention={retention}
+      selectedIds={selectedIds}
       sort={sort}
-      total={fragmentTotal + frames.length}
+      vaultTotals={vaultTotals}
     />
   );
 }

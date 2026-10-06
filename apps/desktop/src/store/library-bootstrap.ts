@@ -6,6 +6,7 @@ import {
   readSnapshotMetadata,
 } from "../features/library/library-state";
 import { normalizeTags } from "../features/tags/tag-editor-model";
+import { observeTrashCounts } from "../features/trash/trash-session";
 import { perfMarkOnce } from "../lib/perf";
 import {
   getLibraryRevision,
@@ -32,6 +33,7 @@ import {
   selectSelectableIds,
   selectSelectionScopeKey,
   selectThemeMode,
+  selectTrashFragmentTotal,
 } from "./library-selectors";
 import {
   BROWSING_MODE_STORAGE_KEY,
@@ -138,6 +140,38 @@ async function loadSnapshot(throwOnError: boolean) {
   }
 }
 
+/**
+ * Records the backend revision after one of our own writes, so the next focus
+ * check does not mistake it for an outside change and refresh everything.
+ */
+export async function rememberLibraryRevision() {
+  if (!isTauriRuntime()) return;
+  try {
+    setState({ revision: await getLibraryRevision() });
+  } catch {
+    // The focus check reconciles with a full refresh when the read fails.
+  }
+}
+
+/**
+ * Feeds the Trash page's one-time pulse. The snapshot only counts Fragments;
+ * trashed Frames are known once the Trash page listed them, so until then
+ * they are reported as unknown rather than as zero.
+ */
+function observeTrash(state: LibraryState) {
+  observeTrashCounts(
+    {
+      fragments: selectTrashFragmentTotal(state),
+      frames: state.previewMode
+        ? 0
+        : state.trashedFramesLoaded
+          ? state.trashedFrames.length
+          : null,
+    },
+    state.booted,
+  );
+}
+
 function applyDocumentState(state: LibraryState) {
   if (typeof document === "undefined") return;
   const mode = selectThemeMode(state);
@@ -165,10 +199,21 @@ export function subscribeLibrarySideEffects() {
   let lastFocusedId: string | null = null;
   let lastFrameId: string | null = null;
   applyDocumentState(previous);
+  observeTrash(previous);
   return libraryStore.subscribe(() => {
     const next = getState();
     const before = previous;
     previous = next;
+
+    if (
+      next.booted !== before.booted ||
+      next.trashTotal !== before.trashTotal ||
+      next.trashedFrames !== before.trashedFrames ||
+      next.trashedFramesLoaded !== before.trashedFramesLoaded ||
+      next.previewTrashState !== before.previewTrashState
+    ) {
+      observeTrash(next);
+    }
 
     if (next.theme !== before.theme)
       writeStorage(THEME_STORAGE_KEY, next.theme);

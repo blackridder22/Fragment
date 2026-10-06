@@ -94,7 +94,13 @@ export type UndoEntry =
       frames: Frame[];
       counts: Record<string, number>;
     }
-  | { kind: "linked"; ids: string[] };
+  | { kind: "linked"; ids: string[] }
+  | {
+      /** Reverts an action the Trash page already applied locally (for example re-trashing a restore). */
+      kind: "custom";
+      run: () => Promise<void>;
+      doneLabel: string;
+    };
 
 export type LibraryState = {
   booted: boolean;
@@ -111,6 +117,8 @@ export type LibraryState = {
   knownTags: string[];
   trashTotal: number;
   trashedFrames: Frame[];
+  /** False until the Trash page listed its Frames once; the snapshot only counts Fragments. */
+  trashedFramesLoaded: boolean;
 
   activePage: PageState;
   trashPage: PageState;

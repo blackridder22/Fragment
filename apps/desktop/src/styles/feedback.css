@@ -111,3 +111,16 @@
   color: var(--v7-danger);
   background: color-mix(in srgb, var(--v7-danger) 16%, transparent);
 }
+
+/* Optional detail block (such as a resolved Frame name) and the error shown
+   after a failed attempt, while the dialog stays open for a retry. */
+.v7-app .fragment-confirm-dialog .fragment-confirm-detail {
+  margin: 12px 0 0;
+}
+
+.v7-app .fragment-confirm-dialog .fragment-confirm-error {
+  color: var(--v7-danger);
+  font-size: 12px;
+  line-height: 18px;
+  margin: 12px 0 0;
+}

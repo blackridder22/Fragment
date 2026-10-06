@@ -2,6 +2,7 @@ import type { Fragment, Frame } from "@fragment/shared";
 import { normalizeFragmentFilter } from "../features/filters/filter-model";
 import { aggregateFrameCounts } from "../features/frames/frame-tree";
 import { resolveSelectedIds } from "../features/selection/selection-model";
+import { retentionFromDeletePolicy } from "../features/trash/retention";
 import { createAssetSourceCache } from "../lib/asset-sources";
 import type { AssetSource } from "../lib/assets";
 import { demoFrames } from "../lib/demo-vault";
@@ -117,6 +118,37 @@ export const selectTrashedFrames = createSelector(
 
 export const selectTrashItemTotal = (state: LibraryState) =>
   selectTrashFragmentTotal(state) + selectTrashedFrames(state).length;
+
+/**
+ * Trashed Fragments matching the Trash page's current filters: the loaded
+ * page's total once it exists, the unfiltered snapshot count before that.
+ */
+export const selectTrashPageFragmentTotal = (state: LibraryState) =>
+  state.previewMode
+    ? selectDemoTrashedFragments(state).length
+    : state.trashPage.key !== null
+      ? state.trashPage.total
+      : state.trashTotal;
+
+export type VaultTrashCounts = { fragments: number; frames: number };
+
+/** Everything in the Trash regardless of filters: what Empty Trash removes. */
+export const selectVaultTrashCounts = createSelector(
+  [
+    selectTrashFragmentTotal,
+    (state: LibraryState) => state.previewMode,
+    (state: LibraryState) => state.trashedFrames.length,
+  ],
+  (fragments, previewMode, frames): VaultTrashCounts => ({
+    fragments,
+    frames: previewMode ? 0 : frames,
+  }),
+);
+
+export const selectTrashRetention = createSelector(
+  [(state: LibraryState) => state.deletePolicy],
+  (deletePolicy) => retentionFromDeletePolicy(deletePolicy),
+);
 
 export const selectDirectCounts = createSelector(
   [

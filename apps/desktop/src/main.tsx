@@ -9,6 +9,7 @@ import "./styles/feedback.css";
 import "./styles/v7-shell.css";
 import "./styles/v7-gallery.css";
 import "./styles/v7-settings-trash.css";
+import "./styles/v7-trash.css";
 import "./styles/v7-preview.css";
 import "./styles/v7-modal.css";
 import "./styles/v7-theme.css";

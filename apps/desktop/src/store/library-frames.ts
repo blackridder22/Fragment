@@ -241,18 +241,6 @@ export async function moveFrameToTrash(frameId: string): Promise<boolean> {
   return true;
 }
 
-/** Restores a Frame from the Trash page; counts come back with a snapshot refresh. */
-export async function restoreTrashedFrame(frame: Frame) {
-  if (frame.id.startsWith("demo-")) return;
-  await restoreFrame(frame.id);
-  setState((current) => ({
-    trashedFrames: current.trashedFrames.filter((item) => item.id !== frame.id),
-  }));
-  await refreshSnapshot(true);
-  libraryLoader.invalidate("trash");
-  showToast(`Restored ${frame.name}`, { tone: "success" });
-}
-
 export async function saveSmartFrame(name: string, filter: FragmentFilter) {
   const state = getState();
   const saved = filterWithLibraryControls(

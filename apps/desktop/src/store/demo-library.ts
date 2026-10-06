@@ -2,6 +2,11 @@ import type { Fragment, Frame } from "@fragment/shared";
 import { demoFragments, demoFrames } from "../lib/demo-vault";
 import { previewIdsAtLocation } from "../features/trash/preview-trash-state";
 import { descendantFrameIds } from "../features/frames/frame-tree";
+import {
+  estimateDeleteAfter,
+  retentionFromDeletePolicy,
+} from "../features/trash/retention";
+import { sortByDeletedAt } from "../features/trash/trash-model";
 import { createSelector } from "./create-store";
 import type { LibraryState, SortMode, SourceFilter } from "./library-types";
 
@@ -82,22 +87,38 @@ export const selectDemoActiveFragments = createSelector(
   },
 );
 
+/**
+ * Demo rows carry no retention fields; they are stamped the way the backend
+ * would at the time they land in the preview Trash, so the page shows the
+ * same "Deletes in N days" label, and sorted the way the server sorts.
+ */
 export const selectDemoTrashedFragments = createSelector(
   [
     (state: LibraryState) => state.previewTrashState,
     (state: LibraryState) => state.previewFrameAssignments,
     (state: LibraryState) => state.previewTitleOverrides,
+    (state: LibraryState) => state.deletePolicy,
+    (state: LibraryState) => state.trashSort,
   ],
-  (trashState, assignments, titles) => {
+  (trashState, assignments, titles, deletePolicy, trashSort) => {
     const byId = new Map(
       demoFragments.map((fragment) => [
         fragment.id,
         withOverrides(fragment, assignments, titles),
       ]),
     );
-    return previewIdsAtLocation(demoFragmentIds, trashState, "trashed")
+    const trashedAt = new Date().toISOString();
+    const retention = retentionFromDeletePolicy(deletePolicy);
+    const trashed = previewIdsAtLocation(demoFragmentIds, trashState, "trashed")
       .map((id) => byId.get(id))
-      .filter((fragment): fragment is Fragment => Boolean(fragment));
+      .filter((fragment): fragment is Fragment => Boolean(fragment))
+      .map((fragment) => ({
+        ...fragment,
+        deletedAt: fragment.deletedAt ?? trashedAt,
+        deleteAfter:
+          fragment.deleteAfter ?? estimateDeleteAfter(trashedAt, retention),
+      }));
+    return sortByDeletedAt(trashed, trashSort);
   },
 );
 
