@@ -8,6 +8,7 @@ import "./styles/overlays.css";
 import "./styles/feedback.css";
 import "./styles/v7-shell.css";
 import "./styles/v7-gallery.css";
+import "./styles/v7-vault.css";
 import "./styles/v7-settings-trash.css";
 import "./styles/v7-preview.css";
 import "./styles/v7-modal.css";

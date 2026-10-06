@@ -49,6 +49,7 @@ import type {
   DeletePolicy,
   LibraryState,
   LibraryView,
+  SettingsSection,
   SortMode,
   SourceFilter,
   ThemePreference,
@@ -86,6 +87,16 @@ export function changeView(view: LibraryView) {
     if (state.selectedSmartFrameId) Object.assign(patch, resetFilters());
   }
   setState(patch);
+}
+
+/** Opens the Settings page on a given section (e.g. Capture Mode setup). */
+export function openSettings(section: SettingsSection) {
+  setState({ settingsSection: section });
+  changeView("settings");
+}
+
+export function setSettingsSection(section: SettingsSection) {
+  setState({ settingsSection: section });
 }
 
 export function selectFrame(frameId: string | null) {

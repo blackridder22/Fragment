@@ -53,6 +53,8 @@ type V7AssetImageProps = {
 type V7FrameCardStyle = CSSProperties & {
   "--v7-card-height"?: string;
   "--v7-card-weight"?: number;
+  "--v7-recent-ratio"?: number;
+  "--v7-stagger-index"?: number;
 };
 
 export type V7FrameCardProps = {
@@ -64,6 +66,10 @@ export type V7FrameCardProps = {
   height?: number;
   /** Flex weight for the home page rows. */
   weight?: number;
+  /** Aspect ratio in a justified "Recently added" row (width / height). */
+  ratio?: number;
+  /** First-paint stagger slot; omitted after the intro window. */
+  stagger?: number;
   onAssetFallback?: V7AssetFallback;
   onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
   onOpen: (fragment: Fragment) => void;
@@ -241,6 +247,8 @@ export const V7FrameCard = memo(function V7FrameCard({
   fragment,
   height,
   weight,
+  ratio,
+  stagger,
   onAssetFallback,
   onContextMenu,
   onOpen,
@@ -250,12 +258,21 @@ export const V7FrameCard = memo(function V7FrameCard({
 }: V7FrameCardProps) {
   const title = titleFor(fragment);
   const style = useMemo<V7FrameCardStyle | undefined>(() => {
-    if (height === undefined && weight === undefined) return undefined;
+    if (
+      height === undefined &&
+      weight === undefined &&
+      ratio === undefined &&
+      stagger === undefined
+    ) {
+      return undefined;
+    }
     const next: V7FrameCardStyle = {};
     if (height !== undefined) next["--v7-card-height"] = `${height}px`;
     if (weight !== undefined) next["--v7-card-weight"] = weight;
+    if (ratio !== undefined) next["--v7-recent-ratio"] = ratio;
+    if (stagger !== undefined) next["--v7-stagger-index"] = stagger;
     return next;
-  }, [height, weight]);
+  }, [height, weight, ratio, stagger]);
 
   return (
     <article

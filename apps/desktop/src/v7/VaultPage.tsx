@@ -1,5 +1,19 @@
-import type { MouseEvent } from "react";
-import { ArrowRight } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+} from "react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  FolderOpen,
+  Images,
+  Inbox,
+  Settings,
+} from "lucide-react";
 import type { Fragment, Frame } from "@fragment/shared";
 import type { BrowsingDensity } from "../store/library-types";
 import {
@@ -10,51 +24,58 @@ import {
   type GalleryCard,
   type V7AssetFallback,
 } from "./FrameGallery";
-import { PaginationFooter } from "./PaginationFooter";
+import {
+  FOLDER_CARD_LIMIT,
+  FOLDER_PREVIEW_LIMIT,
+  INTRO_WINDOW_MS,
+  RECENT_ROW_TARGET,
+  fragmentCountLabel,
+  isBrandNewVault,
+  isSystemFrame,
+  justifiedRows,
+  staggerIndex,
+  topLevelFrames,
+  visibleFolderFrames,
+} from "./vault-home";
 
 export type VaultPageProps = {
   density?: BrowsingDensity;
-  /** Top-level Frames shown as folder cards. */
-  folders: Frame[];
-  /** Up to three collage items per Frame id. */
+  /** Drop target currently under a pointer drag, e.g. `frame-tree:<id>`. */
+  dropTarget?: string | null;
+  /** Collage cards per top-level Frame id, precomputed by the store. */
   folderCovers: ReadonlyMap<string, GalleryCard[]>;
+  /** Top-level Frames, already narrowed by the search query. */
+  folders: Frame[];
+  /** Recursive Fragment totals per Frame from the store. */
   frameCounts: ReadonlyMap<string, number>;
-  /** Recently added Fragments, precomputed by the store. */
+  /** Newest-first cards from the whole Vault, bounded by the store. */
   items: GalleryCard[];
-  hasMore?: boolean;
-  loading?: boolean;
+  /** False until the first snapshot arrived; keeps the empty state from flashing. */
+  ready?: boolean;
+  searchQuery?: string;
   selectedIds: ReadonlySet<string>;
-  total?: number;
+  systemFrameId?: string | null;
   onAssetFallback?: V7AssetFallback;
   onBrowseAll: () => void;
   onContextMenu: (fragment: Fragment, event: MouseEvent<HTMLElement>) => void;
+  onImport?: () => void;
   onOpen: (fragment: Fragment) => void;
   onOpenFolder: (frame: Frame) => void;
-  onLoadMore?: () => void;
+  onOpenSettings?: () => void;
   onPointerDown?: FrameCanvasProps["onPointerDown"];
   onSelect: (fragment: Fragment, event: MouseEvent<HTMLButtonElement>) => void;
 };
 
-const FIRST_ROW_WEIGHTS = [1.25, 0.8, 1.35] as const;
-const SECOND_ROW_WEIGHTS = [1.1, 0.75, 1.2, 0.95] as const;
+type StaggerStyle = CSSProperties & {
+  "--v7-stagger-index"?: number;
+};
+
+type RecentRowStyle = CSSProperties & {
+  "--v7-recent-row-count": number;
+  "--v7-recent-row-sum": number;
+};
+
 const EMPTY_COVERS: GalleryCard[] = [];
-
-function vaultRows(items: GalleryCard[], paginated: boolean) {
-  if (!paginated) {
-    return [items.slice(0, 3), items.slice(3, 7)].filter(
-      (row) => row.length > 0,
-    );
-  }
-
-  const rows: GalleryCard[][] = [];
-  let offset = 0;
-  while (offset < items.length) {
-    const rowSize = rows.length % 2 === 0 ? 3 : 4;
-    rows.push(items.slice(offset, offset + rowSize));
-    offset += rowSize;
-  }
-  return rows;
-}
 
 function SectionAction({
   children,
@@ -100,28 +121,190 @@ function CollageTile({
   );
 }
 
+type FolderCardProps = {
+  count: number;
+  covers: GalleryCard[];
+  enterClass: string;
+  frame: Frame;
+  dropArmed: boolean;
+  index: number;
+  isSystem: boolean;
+  onAssetFallback?: V7AssetFallback;
+  onOpen: (frame: Frame) => void;
+};
+
+function FolderCard({
+  count,
+  covers,
+  enterClass,
+  frame,
+  dropArmed,
+  index,
+  isSystem,
+  onAssetFallback,
+  onOpen,
+}: FolderCardProps) {
+  const label = fragmentCountLabel(count);
+
+  return (
+    <button
+      aria-label={`Open ${frame.name}, ${label}`}
+      className={`v7-folder-card ${enterClass}`.trim()}
+      data-drop-state={dropArmed ? "armed" : "idle"}
+      data-drop-target={`frame-tree:${frame.id}`}
+      data-system={isSystem || undefined}
+      onClick={() => onOpen(frame)}
+      style={{ "--v7-stagger-index": staggerIndex(index) } as StaggerStyle}
+      type="button"
+    >
+      <span className="v7-folder-collage" aria-hidden="true">
+        <CollageTile
+          card={covers[0]}
+          className="v7-folder-tile v7-folder-tile-main"
+          onAssetFallback={onAssetFallback}
+          tone={0}
+        />
+        <span className="v7-folder-tile-stack">
+          {Array.from({ length: FOLDER_PREVIEW_LIMIT - 1 }, (_, slot) => (
+            <CollageTile
+              card={covers[slot + 1]}
+              className="v7-folder-tile"
+              key={slot}
+              onAssetFallback={onAssetFallback}
+              tone={slot + 1}
+            />
+          ))}
+        </span>
+      </span>
+
+      <span className="v7-folder-card-meta">
+        <span className="v7-folder-card-name">
+          {isSystem ? (
+            <Inbox aria-hidden="true" size={13} strokeWidth={1.9} />
+          ) : null}
+          <strong>{frame.name}</strong>
+          {isSystem ? (
+            <span className="v7-folder-system-badge">System</span>
+          ) : null}
+        </span>
+        <span className="v7-folder-card-count">{label}</span>
+      </span>
+    </button>
+  );
+}
+
+function VaultEmptyState({
+  onImport,
+  onOpenSettings,
+}: {
+  onImport?: () => void;
+  onOpenSettings?: () => void;
+}) {
+  return (
+    <div className="v7-vault-empty" role="status">
+      <div className="v7-vault-empty-art" aria-hidden="true">
+        <span className="v7-vault-empty-icon">
+          <FolderOpen size={22} strokeWidth={1.6} />
+        </span>
+        <span className="v7-vault-empty-icon">
+          <Images size={22} strokeWidth={1.6} />
+        </span>
+      </div>
+      <h2>Your Vault is empty</h2>
+      <p>
+        <strong>Frames</strong> are the collections you create.{" "}
+        <strong>Fragments</strong> are the images you save into them, each kept
+        with its source. Import a few images to start, or save them from your
+        browser with Capture Mode.
+      </p>
+      <div className="v7-vault-empty-actions">
+        <button
+          className="v7-vault-empty-primary"
+          disabled={!onImport}
+          onClick={onImport}
+          type="button"
+        >
+          <Images aria-hidden="true" size={15} strokeWidth={1.9} />
+          <span>Import Fragments</span>
+        </button>
+        <button
+          className="v7-vault-empty-secondary"
+          disabled={!onOpenSettings}
+          onClick={onOpenSettings}
+          type="button"
+        >
+          <Settings aria-hidden="true" size={15} strokeWidth={1.9} />
+          <span>Set up Capture Mode</span>
+        </button>
+      </div>
+      <p className="v7-vault-empty-hint">
+        Capture Mode lives in Settings under Capture: install the browser
+        extension there, then save any image on a page straight into a Frame.
+      </p>
+    </div>
+  );
+}
+
 export function VaultPage({
   density = "comfortable",
-  folders,
+  dropTarget = null,
   folderCovers,
+  folders,
   frameCounts,
   items,
-  hasMore = false,
-  loading = false,
+  ready = true,
+  searchQuery = "",
   selectedIds,
-  total,
+  systemFrameId = null,
   onAssetFallback,
   onBrowseAll,
   onContextMenu,
+  onImport,
   onOpen,
   onOpenFolder,
-  onLoadMore,
+  onOpenSettings,
   onPointerDown,
   onSelect,
 }: VaultPageProps) {
-  const visibleFolders = folders.slice(0, 4);
-  const rows = vaultRows(items, Boolean(onLoadMore));
-  const visibleCount = rows.reduce((count, row) => count + row.length, 0);
+  const [showAllFrames, setShowAllFrames] = useState(false);
+  const [introDone, setIntroDone] = useState(false);
+
+  const orderedFolders = useMemo(
+    () => topLevelFrames(folders, systemFrameId),
+    [folders, systemFrameId],
+  );
+  const { visible: visibleFolders, hiddenCount } = useMemo(
+    () => visibleFolderFrames(orderedFolders, showAllFrames, FOLDER_CARD_LIMIT),
+    [orderedFolders, showAllFrames],
+  );
+  const recent = useMemo(() => items.map((card) => card.fragment), [items]);
+  // Each row carries the index of its first card so cards and rows line up.
+  const rows = useMemo(() => {
+    let start = 0;
+    return justifiedRows(recent, RECENT_ROW_TARGET[density]).map((row) => {
+      const withStart = { ...row, start };
+      start += row.items.length;
+      return withStart;
+    });
+  }, [recent, density]);
+  const hasQuery = searchQuery.trim().length > 0;
+  const brandNew = isBrandNewVault({
+    ready,
+    frames: orderedFolders,
+    fragments: recent,
+    systemFrameId,
+    searchQuery,
+  });
+  const hasItems = visibleFolders.length > 0 || recent.length > 0;
+
+  useEffect(() => {
+    if (introDone || !hasItems) return;
+    const timer = window.setTimeout(() => setIntroDone(true), INTRO_WINDOW_MS);
+    return () => window.clearTimeout(timer);
+  }, [hasItems, introDone]);
+
+  // Only the first paint staggers; data refreshes render without motion.
+  const enterClass = introDone ? "" : "v7-vault-enter";
 
   return (
     <FrameCanvas
@@ -129,110 +312,159 @@ export function VaultPage({
       density={density}
       onPointerDown={onPointerDown}
     >
-      <section className="v7-vault-fragments" aria-labelledby="v7-frames-title">
-        <header className="v7-section-header">
-          <h2 id="v7-frames-title">Frames</h2>
-          <SectionAction onClick={onBrowseAll}>View all</SectionAction>
-        </header>
+      {brandNew ? (
+        <VaultEmptyState onImport={onImport} onOpenSettings={onOpenSettings} />
+      ) : (
+        <>
+          <section
+            className="v7-vault-frames"
+            aria-labelledby="v7-vault-frames-title"
+          >
+            <header className="v7-section-header">
+              <h2 id="v7-vault-frames-title">Frames</h2>
+              {orderedFolders.length > 0 ? (
+                <span className="v7-section-count">
+                  {orderedFolders.length.toLocaleString()}{" "}
+                  {orderedFolders.length === 1 ? "Frame" : "Frames"}
+                </span>
+              ) : null}
+            </header>
 
-        <div className="v7-folder-card-row">
-          {visibleFolders.map((frame) => {
-            const covers = folderCovers.get(frame.id) ?? EMPTY_COVERS;
-            const count = frameCounts.get(frame.id) ?? 0;
+            {visibleFolders.length > 0 ? (
+              <div className="v7-folder-grid">
+                {visibleFolders.map((frame, index) => (
+                  <FolderCard
+                    count={frameCounts.get(frame.id) ?? 0}
+                    covers={folderCovers.get(frame.id) ?? EMPTY_COVERS}
+                    dropArmed={dropTarget === `frame-tree:${frame.id}`}
+                    enterClass={enterClass}
+                    frame={frame}
+                    index={index}
+                    isSystem={isSystemFrame(frame, systemFrameId)}
+                    key={frame.id}
+                    onAssetFallback={onAssetFallback}
+                    onOpen={onOpenFolder}
+                  />
+                ))}
+              </div>
+            ) : ready && hasQuery ? (
+              <div className="v7-vault-note" role="status">
+                No Frames match “{searchQuery.trim()}”.
+              </div>
+            ) : null}
 
-            return (
+            {hiddenCount > 0 ? (
               <button
-                aria-label={`Open ${frame.name}, ${count.toLocaleString()} ${count === 1 ? "Fragment" : "Fragments"}`}
-                className="v7-folder-card"
-                key={frame.id}
-                onClick={() => onOpenFolder(frame)}
+                aria-expanded={false}
+                className="v7-vault-expander"
+                onClick={() => setShowAllFrames(true)}
                 type="button"
               >
-                <span className="v7-folder-collage" aria-hidden="true">
-                  <CollageTile
-                    card={covers[0]}
-                    className="v7-folder-tile v7-folder-tile-main"
-                    onAssetFallback={onAssetFallback}
-                    tone={0}
-                  />
-                  <span className="v7-folder-tile-stack">
-                    {[1, 2].map((slot) => (
-                      <CollageTile
-                        card={covers[slot]}
-                        className="v7-folder-tile"
-                        key={slot}
-                        onAssetFallback={onAssetFallback}
-                        tone={slot + 1}
-                      />
-                    ))}
-                  </span>
+                <span>Show all Frames</span>
+                <span className="v7-vault-expander-count">
+                  {hiddenCount.toLocaleString()} more
                 </span>
-
-                <span className="v7-folder-card-meta">
-                  <strong>{frame.name}</strong>
-                  <span>
-                    {count.toLocaleString()}{" "}
-                    {count === 1 ? "Fragment" : "Fragments"}
-                  </span>
-                </span>
+                <ChevronDown aria-hidden="true" size={14} strokeWidth={1.8} />
               </button>
-            );
-          })}
-        </div>
-      </section>
+            ) : showAllFrames && orderedFolders.length > FOLDER_CARD_LIMIT ? (
+              <button
+                aria-expanded
+                className="v7-vault-expander"
+                onClick={() => setShowAllFrames(false)}
+                type="button"
+              >
+                <span>Show fewer Frames</span>
+                <ChevronUp aria-hidden="true" size={14} strokeWidth={1.8} />
+              </button>
+            ) : null}
+          </section>
 
-      <section className="v7-vault-recent" aria-labelledby="v7-recent-title">
-        <header className="v7-recent-header">
-          <span className="v7-recent-heading-copy">
-            <h2 id="v7-recent-title">Recently added</h2>
-            <span>Fragments from across your Vault</span>
-          </span>
-          <SectionAction onClick={onBrowseAll}>Browse all</SectionAction>
-        </header>
+          <section
+            className="v7-vault-recent"
+            aria-labelledby="v7-recent-title"
+          >
+            <header className="v7-recent-header">
+              <span className="v7-recent-heading-copy">
+                <h2 id="v7-recent-title">
+                  {hasQuery ? "Matching Fragments" : "Recently added"}
+                </h2>
+                <span>
+                  {hasQuery
+                    ? `Fragments matching “${searchQuery.trim()}” across your Vault`
+                    : "Fragments from across your Vault"}
+                </span>
+              </span>
+              <SectionAction onClick={onBrowseAll}>Browse all</SectionAction>
+            </header>
 
-        {rows.length > 0 ? (
-          <div className="v7-vault-frame-gallery">
-            {rows.map((row, rowIndex) => {
-              const weights =
-                rowIndex % 2 === 0 ? FIRST_ROW_WEIGHTS : SECOND_ROW_WEIGHTS;
-              return (
-                <div
-                  className="v7-vault-frame-row"
-                  key={row[0]?.fragment.id ?? rowIndex}
-                >
-                  {row.map((card, index) => (
-                    <V7FrameCard
-                      assetSources={card.assetSources}
-                      folderName={card.folderName}
-                      fragment={card.fragment}
-                      key={card.fragment.id}
-                      onAssetFallback={onAssetFallback}
-                      onContextMenu={onContextMenu}
-                      onOpen={onOpen}
-                      onSelect={onSelect}
-                      selected={selectedIds.has(card.fragment.id)}
-                      variant="vault"
-                      weight={weights[index] ?? 1}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="v7-gallery-empty" role="status">
-            <strong>No Fragments in your Vault yet</strong>
-            <span>Import an image to start your visual library.</span>
-          </div>
-        )}
-        <PaginationFooter
-          hasMore={hasMore}
-          loadedCount={visibleCount}
-          loading={loading}
-          onLoadMore={onLoadMore}
-          totalCount={total}
-        />
-      </section>
+            {rows.length > 0 ? (
+              <div className="v7-vault-recent-rows">
+                {rows.map((row, rowIndex) => (
+                  <div
+                    className="v7-vault-recent-row"
+                    key={row.items[0]?.fragment.id ?? rowIndex}
+                    style={
+                      {
+                        "--v7-recent-row-count": row.items.length,
+                        "--v7-recent-row-sum": row.ratioSum,
+                      } as RecentRowStyle
+                    }
+                  >
+                    {row.items.map(({ fragment, ratio }, index) => {
+                      const card = items[row.start + index];
+                      if (!card) return null;
+                      return (
+                        <V7FrameCard
+                          assetSources={card.assetSources}
+                          className={`v7-vault-recent-card ${enterClass}`.trim()}
+                          folderName={card.folderName}
+                          fragment={fragment}
+                          key={fragment.id}
+                          onAssetFallback={onAssetFallback}
+                          onContextMenu={onContextMenu}
+                          onOpen={onOpen}
+                          onSelect={onSelect}
+                          ratio={ratio}
+                          selected={selectedIds.has(fragment.id)}
+                          stagger={
+                            introDone
+                              ? undefined
+                              : staggerIndex(row.start + index)
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            ) : ready ? (
+              <div
+                className="v7-vault-note v7-vault-recent-empty"
+                role="status"
+              >
+                <strong>
+                  {hasQuery ? "No matching Fragments" : "No Fragments yet"}
+                </strong>
+                <span>
+                  {hasQuery
+                    ? "Try another search, or browse all Fragments."
+                    : "Import images or save them from Capture Mode to see them here."}
+                </span>
+                {!hasQuery && onImport ? (
+                  <button
+                    className="v7-vault-empty-secondary"
+                    onClick={onImport}
+                    type="button"
+                  >
+                    <Images aria-hidden="true" size={15} strokeWidth={1.9} />
+                    <span>Import Fragments</span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        </>
+      )}
     </FrameCanvas>
   );
 }

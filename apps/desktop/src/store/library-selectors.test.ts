@@ -10,6 +10,7 @@ import {
   selectActiveCards,
   selectFocusedFragment,
   selectFolderCovers,
+  selectRecentCards,
   selectRecursiveCounts,
   selectShellTitles,
   selectVaultFragmentTotal,
@@ -149,6 +150,33 @@ describe("counts and covers", () => {
     ]);
     expect(byFrame.get("posters")?.map((card) => card.fragment.id)).toEqual([
       "p1",
+    ]);
+  });
+});
+
+describe("recently added", () => {
+  it("reads the newest-first snapshot page, not the sorted gallery page", () => {
+    const current = withItems(
+      [fragment("largest", "posters"), fragment("a", "inbox")],
+      {
+        sortMode: "largest",
+        coverFragments: ["n1", "n2", "n1"].map((id) => fragment(id, "inbox")),
+      },
+    );
+    expect(selectRecentCards(current).map((card) => card.fragment.id)).toEqual([
+      "n1",
+      "n2",
+    ]);
+    expect(selectRecentCards(current)).toBe(selectRecentCards(current));
+  });
+
+  it("shows the matching page while a search is typed", () => {
+    const current = withItems([fragment("match", "posters")], {
+      query: "mat",
+      coverFragments: [fragment("n1", "inbox")],
+    });
+    expect(selectRecentCards(current).map((card) => card.fragment.id)).toEqual([
+      "match",
     ]);
   });
 });

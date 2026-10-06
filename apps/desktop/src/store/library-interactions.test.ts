@@ -85,6 +85,10 @@ vi.mock("../lib/tauri", () => {
       record("list_trashed_frames");
       return [];
     },
+    listFramePreviews: async () => {
+      record("list_frame_previews");
+      return [{ frameId: "posters", fragments: ROOT_ITEMS.slice(1) }];
+    },
     getFragmentTags: async () => {
       record("get_fragment_tags");
       return ["poster"];
@@ -177,6 +181,9 @@ describe("invoke counts per interaction", () => {
     expect(count("list_smart_frames")).toBe(1);
     expect(count("list_tags")).toBe(1);
     expect(count("list_fragment_page")).toBe(0);
+    // The home page's one extra call per revision: collage previews.
+    expect(count("list_frame_previews")).toBe(1);
+    expect(libraryStore.getState().framePreviewsRevision).toBe("r1");
     expect(libraryStore.getState().activePage.items).toHaveLength(3);
     expect(selectActiveCards(libraryStore.getState())).toHaveLength(3);
   });
@@ -186,6 +193,9 @@ describe("invoke counts per interaction", () => {
     changeView("frames");
     await flush();
     expect(count("list_fragment_page")).toBe(0);
+    changeView("home");
+    await flush();
+    expect(count("list_frame_previews")).toBe(0);
     changeView("trash");
     await flush();
     expect(count("list_fragment_page")).toBe(1);

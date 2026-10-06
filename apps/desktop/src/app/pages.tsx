@@ -6,12 +6,14 @@ import {
   handleFragmentCardSelect,
   openContextMenu,
   openFragmentPreview,
+  openSettings,
   refreshColorResults,
   refreshNativeHostStatus,
   resetPreferences,
   selectFrame,
   setDeletePolicy,
   setSettings,
+  setSettingsSection,
   setSourceFilter,
   setTheme,
   setTrashSort,
@@ -22,12 +24,14 @@ import {
   restoreTrashedFragment,
 } from "../store/library-fragments";
 import { restoreTrashedFrame } from "../store/library-frames";
+import { chooseImages } from "../store/library-import";
 import { libraryLoader } from "../store/library-loader";
 import {
   selectActiveCards,
   selectActiveTotal,
   selectFolderCovers,
   selectFrameById,
+  selectRecentCards,
   selectRecursiveCounts,
   selectSelectedIdSet,
   selectTrashCards,
@@ -55,6 +59,14 @@ function browseAll() {
   changeView("frames");
 }
 
+function openImport() {
+  void chooseImages();
+}
+
+function openCaptureSettings() {
+  openSettings("capture");
+}
+
 function openFolder(frame: { id: string }) {
   selectFrame(frame.id);
 }
@@ -69,35 +81,37 @@ async function revealVault() {
 }
 
 export function VaultPageContainer() {
-  const items = useLibraryStore(selectActiveCards);
+  const items = useLibraryStore(selectRecentCards);
   const folders = useLibraryStore(selectVaultFolders);
   const folderCovers = useLibraryStore(selectFolderCovers);
   const frameCounts = useLibraryStore(selectRecursiveCounts);
   const density = useLibraryStore((state) => state.browsingMode.density);
-  const previewMode = useLibraryStore((state) => state.previewMode);
-  const hasMore = useLibraryStore((state) => state.activePage.hasMore);
-  const loading = useLibraryStore((state) => state.activePage.loading);
+  const dropTarget = useLibraryStore((state) => state.frameDropTarget);
+  const ready = useLibraryStore((state) => state.booted);
+  const searchQuery = useLibraryStore((state) => state.query);
   const selectedIds = useLibraryStore(selectSelectedIdSet);
-  const total = useLibraryStore(selectActiveTotal);
+  const systemFrameId = useLibraryStore((state) => state.defaultFrameId);
   return (
     <VaultPage
       density={density}
+      dropTarget={dropTarget}
       folderCovers={folderCovers}
       folders={folders}
       frameCounts={frameCounts}
-      hasMore={!previewMode && hasMore}
       items={items}
-      loading={loading}
       onAssetFallback={resolveAssetFallback}
       onBrowseAll={browseAll}
       onContextMenu={openContextMenu}
-      onLoadMore={previewMode ? undefined : loadMoreActive}
+      onImport={openImport}
       onOpen={openFragmentPreview}
       onOpenFolder={openFolder}
+      onOpenSettings={openCaptureSettings}
       onPointerDown={onCanvasPointerDown}
       onSelect={handleFragmentCardSelect}
+      ready={ready}
+      searchQuery={searchQuery}
       selectedIds={selectedIds}
-      total={total}
+      systemFrameId={systemFrameId}
     />
   );
 }
@@ -203,9 +217,12 @@ export function SettingsPageContainer() {
   const settings = useLibraryStore((state) => state.settings);
   const theme = useLibraryStore((state) => state.theme);
   const assetRoot = useLibraryStore((state) => state.assetRoot);
+  const section = useLibraryStore((state) => state.settingsSection);
   return (
     <SettingsPage
       deletePolicy={deletePolicy}
+      section={section}
+      onSectionChange={setSettingsSection}
       nativeHostStatus={nativeHostStatus}
       onDeletePolicyChange={setDeletePolicy}
       onRefreshNativeHostStatus={refreshNativeHostStatus}

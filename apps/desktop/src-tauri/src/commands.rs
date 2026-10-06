@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use arboard::{Clipboard, ImageData};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use fragment_core::models::FramePreview;
 use fragment_core::{
     CoreError, Fragment, FragmentFilter, Frame, ImportOutcome, PurgeReport, SmartFrame,
 };
@@ -21,6 +22,7 @@ use crate::state::FragmentState;
 type CommandResult<T> = Result<T, String>;
 const MAX_ASSET_DATA_URL_BYTES: u64 = 20 * 1024 * 1024;
 const DEFAULT_FRAGMENT_PAGE_SIZE: usize = 60;
+const DEFAULT_FRAME_PREVIEW_ITEMS: usize = 3;
 const MAX_FRAGMENT_PAGE_SIZE: usize = 200;
 const MAX_IMPORT_BATCH_SIZE: usize = 500;
 const MAX_SELECTION_BATCH_SIZE: usize = 50_000;
@@ -281,6 +283,21 @@ pub async fn list_fragment_ids(
             expected_palette_revision,
         )
         .map_err(safe_error)
+    })
+    .await
+    .map_err(safe_error)?
+}
+
+/// Read-only: the latest active Fragments per top-level Frame for the Vault home collages.
+#[tauri::command]
+pub async fn list_frame_previews(
+    state: State<'_, FragmentState>,
+    limit_per_frame: Option<u32>,
+) -> CommandResult<Vec<FramePreview>> {
+    let core = state.core.clone();
+    let limit = limit_per_frame.map_or(DEFAULT_FRAME_PREVIEW_ITEMS, |value| value as usize);
+    tauri::async_runtime::spawn_blocking(move || {
+        core.list_frame_previews(limit).map_err(safe_error)
     })
     .await
     .map_err(safe_error)?

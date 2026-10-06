@@ -180,6 +180,24 @@ User capture action -> content overlay -> service worker -> native host
   -> fragment-core -> one asset + one or more memberships -> overlay result
 ```
 
+Vault home (desktop):
+
+```txt
+load_library_snapshot (shared) -> frames, counts, newest page
+list_frame_previews            -> three latest active Fragments per top-level Frame,
+                                  nested Frames included, one tile per asset,
+                                  one call per library revision
+```
+
+The home page reads only those two results: folder collages come from
+`list_frame_previews` so a Frame whose Fragments fall outside the first page still
+shows real tiles, and "Recently added" is a bounded slice of the snapshot page.
+Nothing on the home page paginates. The previews live in the store
+(`store/library-previews.ts`): they are fetched once per `revision` while the home
+page is visible, patched locally by the same writes that patch the snapshot page
+(trash, undo, restore, move, link, import), dropped when a fetch fails, and read
+through `selectFolderCovers`, which falls back to the snapshot page per Frame.
+
 Production capture uses Native Messaging. On macOS, the desktop app makes a
 best-effort startup attempt to create or repair Chrome's native-host manifest
 so it points to the bundled `fragment-host` and permits the packaged extension

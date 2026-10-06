@@ -30,6 +30,7 @@ import {
 import { refreshSnapshot } from "./library-bootstrap";
 import { confirmAction, reportError, showToast } from "./library-feedback";
 import { libraryLoader } from "./library-loader";
+import { pruneFramePreviewsByFrame } from "./library-previews";
 import {
   isProtectedFrame,
   pluralize,
@@ -206,6 +207,7 @@ export async function moveFrameToTrash(frameId: string): Promise<boolean> {
       coverFragments: current.coverFragments.filter(
         (fragment) => !removedIds.has(fragment.frameId),
       ),
+      ...pruneFramePreviewsByFrame(current, removedIds),
       activePage: {
         ...current.activePage,
         items,

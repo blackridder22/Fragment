@@ -201,6 +201,17 @@ export async function listFragmentIds(options: {
   });
 }
 
+export type FramePreview = {
+  frameId: string;
+  fragments: Fragment[];
+};
+
+export async function listFramePreviews(
+  limitPerFrame = 3,
+): Promise<FramePreview[]> {
+  return invoke("list_frame_previews", { limitPerFrame });
+}
+
 export async function listSmartFrames(): Promise<SmartFrame[]> {
   return invoke("list_smart_frames");
 }

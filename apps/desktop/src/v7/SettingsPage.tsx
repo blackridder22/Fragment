@@ -5,6 +5,7 @@ import { SHORTCUT_DEFINITIONS } from "../features/shortcuts/shortcut-model";
 import type {
   DeletePolicy,
   NativeHostStatus,
+  SettingsSection,
   ThemePreference,
 } from "../store/library-types";
 import {
@@ -30,15 +31,9 @@ import {
 export type {
   DeletePolicy,
   NativeHostStatus,
+  SettingsSection,
   ThemePreference,
 } from "../store/library-types";
-
-type SettingsSection =
-  | "general"
-  | "appearance"
-  | "capture"
-  | "storage"
-  | "shortcuts";
 type MaybePromise = void | Promise<void>;
 
 const DEFAULT_NATIVE_HOST_STATUS: NativeHostStatus = Object.freeze({
@@ -48,6 +43,9 @@ const DEFAULT_NATIVE_HOST_STATUS: NativeHostStatus = Object.freeze({
 });
 
 export type SettingsPageProps = {
+  /** Controlled section; uncontrolled (starting at General) when omitted. */
+  section?: SettingsSection;
+  onSectionChange?: (section: SettingsSection) => void;
   paletteIndex?: PaletteIndexStatus | null;
   theme: ThemePreference;
   deletePolicy: DeletePolicy;
@@ -94,6 +92,8 @@ const DELETE_POLICY_OPTIONS: Array<{
 ];
 
 export function SettingsPage({
+  section: controlledSection,
+  onSectionChange,
   paletteIndex,
   theme,
   deletePolicy,
@@ -107,7 +107,12 @@ export function SettingsPage({
   onRevealVault,
   onResetToDefaults,
 }: SettingsPageProps) {
-  const [section, setSection] = useState<SettingsSection>("general");
+  const [localSection, setLocalSection] = useState<SettingsSection>("general");
+  const section = controlledSection ?? localSection;
+  const setSection = (next: SettingsSection) => {
+    setLocalSection(next);
+    onSectionChange?.(next);
+  };
   const [storedSettings, setStoredSettings] = useState(readV7SettingsState);
   const [resetting, setResetting] = useState(false);
   const currentSettings = settings ?? storedSettings;

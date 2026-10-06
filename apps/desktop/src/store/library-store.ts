@@ -108,6 +108,8 @@ export function createInitialLibraryState(
     frames: [],
     frameCounts: {},
     coverFragments: [],
+    framePreviews: null,
+    framePreviewsRevision: null,
     smartFrames: [],
     knownTags: [],
     trashTotal: 0,
@@ -157,6 +159,7 @@ export function createInitialLibraryState(
           description: "Native capture is unavailable in browser preview.",
         }
       : { state: "checking", label: "Checking…" },
+    settingsSection: "general",
 
     pendingImports: [],
 

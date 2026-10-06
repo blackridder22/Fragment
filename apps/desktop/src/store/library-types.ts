@@ -24,6 +24,15 @@ export type ThemeMode = Exclude<ThemePreference, "system">;
 export type DeletePolicy = "forever" | "7" | "14" | "24" | "31";
 export type TagLoadStatus = "loading" | "ready" | "error";
 export type TrashDropState = "idle" | "armed" | "success";
+export type SettingsSection =
+  | "general"
+  | "appearance"
+  | "capture"
+  | "storage"
+  | "shortcuts";
+
+/** Latest active Fragments per top-level Frame id, from `list_frame_previews`. */
+export type FramePreviews = Readonly<Record<string, readonly Fragment[]>>;
 
 export type NativeHostStatus = Readonly<{
   state: "ready" | "checking" | "unavailable" | "error" | "unknown";
@@ -105,8 +114,12 @@ export type LibraryState = {
 
   frames: Frame[];
   frameCounts: Record<string, number>;
-  /** Snapshot Fragments used for folder collages on the home page. */
+  /** Newest-first snapshot Fragments: "Recently added" and the collage fallback. */
   coverFragments: Fragment[];
+  /** Collage previews per top-level Frame; `null` until fetched or after a failed fetch. */
+  framePreviews: FramePreviews | null;
+  /** `revision` the previews were fetched for; `null` while none are loaded. */
+  framePreviewsRevision: string | null;
   smartFrames: SmartFrame[];
   knownTags: string[];
   trashTotal: number;
@@ -142,6 +155,8 @@ export type LibraryState = {
   settings: V7SettingsState;
   browsingMode: BrowsingMode;
   nativeHostStatus: NativeHostStatus;
+  /** Settings section shown when the Settings page opens. */
+  settingsSection: SettingsSection;
 
   pendingImports: ImportQueueItem[];
 

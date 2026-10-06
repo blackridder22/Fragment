@@ -34,6 +34,11 @@ import { refreshSnapshot } from "./library-bootstrap";
 import { confirmAction, reportError, showToast } from "./library-feedback";
 import { currentPageKey, libraryLoader } from "./library-loader";
 import {
+  insertFramePreviewFragments,
+  pruneFramePreviews,
+  replaceFramePreviewFragment,
+} from "./library-previews";
+import {
   pluralize,
   selectDeleteRetentionDays,
   selectDisplayFrames,
@@ -78,6 +83,7 @@ export function patchFragmentEverywhere(updated: Fragment) {
       items: state.trashPage.items.map(replace),
     },
     coverFragments: state.coverFragments.map(replace),
+    ...replaceFramePreviewFragment(state, updated),
     focused:
       state.focused?.fragment.id === updated.id
         ? { ...state.focused, fragment: updated }
@@ -106,6 +112,7 @@ export function removeFragmentsFromActivePage(ids: ReadonlySet<string>) {
       coverFragments: state.coverFragments.filter(
         (fragment) => !ids.has(fragment.id),
       ),
+      ...pruneFramePreviews(state, ids),
     };
   });
   return removed;
@@ -454,6 +461,7 @@ export async function linkFragmentsToFrame(ids: string[], frameId: string) {
     adjustFrameCounts({ [frameId]: linked.length });
     setState((current) => ({
       coverFragments: [...linked, ...current.coverFragments],
+      ...insertFramePreviewFragments(current, linked),
     }));
     const current = getState();
     if (activeScopeIncludes(current, frameId)) {
@@ -580,6 +588,7 @@ export async function restoreTrashedFragment(fragment: Fragment) {
   adjustFrameCounts({ [fragment.frameId]: 1 });
   setState((current) => ({
     coverFragments: [fragment, ...current.coverFragments],
+    ...insertFramePreviewFragments(current, [fragment]),
   }));
   libraryLoader.invalidate("active");
   showToast("Restored Fragment", { tone: "success" });
