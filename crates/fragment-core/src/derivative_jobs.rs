@@ -17,6 +17,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
+    app_paths::AppPaths,
     fragments::enqueue_deferred_cleanup_paths,
     media::{read_asset, AssetFormat},
     storage::write_atomic,
@@ -30,6 +31,8 @@ use crate::{
 const MAX_ATTEMPTS: i64 = 3;
 const LEASE_SECONDS: i64 = 120;
 const MAX_BATCH: usize = 25;
+/// Vault-relative directory for per-lease staging files.
+const STAGING_DIR: &str = "temp/derivatives";
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -53,10 +56,15 @@ pub struct DerivativesBatch {
 /// Paths the worker produced for one asset, relative to the Vault root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NewDerivatives {
+    /// Final path the asset row will point at.
     pub thumbnail_path: String,
+    /// Final path, or the original when no preview file is needed.
     pub preview_path: Option<String>,
-    /// Files this run created; removed again if publication is refused.
-    pub written: Vec<String>,
+    /// `(staging file, final path)` pairs. Staging names carry the lease token,
+    /// so a worker whose lease expired can never delete or overwrite a file that
+    /// another holder committed; files move into place inside the publishing
+    /// transaction and are removed if publication is refused.
+    pub staged: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,24 +156,50 @@ impl FragmentCore {
             return Ok(None);
         };
         let produced = self.produce_derivatives(&leased);
-        match produced {
-            Ok(new) => {
-                let published = self.publish_derivatives(&leased.id, &leased.token, &new)?;
-                if published {
-                    // The replaced files stay on disk until the next launch sweeps them;
-                    // the live UI may still reference their paths.
-                    Ok(Some(true))
-                } else {
-                    self.remove_written(&new.written);
-                    Ok(None)
-                }
-            }
+        let new = match produced {
+            Ok(new) => new,
             Err(error) => {
                 tracing::warn!(asset = %leased.id, attempts = leased.attempts, %error, "derivative regeneration failed");
+                self.fail_lease(&leased, &error)?;
+                return Ok(Some(false));
+            }
+        };
+        match self.publish_derivatives(&leased.id, &leased.token, &new) {
+            // The replaced files stay on disk until the next launch sweeps them;
+            // the live UI may still reference their paths.
+            Ok(true) => Ok(Some(true)),
+            Ok(false) => {
+                self.remove_staged(&new);
+                Ok(None)
+            }
+            Err(error) => {
+                tracing::warn!(asset = %leased.id, attempts = leased.attempts, %error, "derivative publication failed");
+                self.remove_staged(&new);
                 self.fail_lease(&leased, &error)?;
                 Ok(Some(false))
             }
         }
+    }
+
+    /// Removes staging files left behind by a crashed regeneration. Desktop-only,
+    /// at launch, before the worker starts: no lease from this process exists yet
+    /// and leases from an earlier process are dead with it.
+    pub fn clear_derivative_staging(&self) -> CoreResult<u64> {
+        let dir = self.paths().resolve_relative_path(STAGING_DIR)?;
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let mut removed = 0;
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_file() {
+                fs::remove_file(&path)?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     fn lease_asset(&self, id: &str) -> CoreResult<Option<LeasedAsset>> {
@@ -243,27 +277,42 @@ impl FragmentCore {
                 return Ok(NewDerivatives {
                     thumbnail_path: leased.thumbnail_path.clone(),
                     preview_path: leased.preview_path.clone(),
-                    written: Vec::new(),
+                    staged: Vec::new(),
                 });
             }
         };
         let image = decode_image(&bytes)?;
-        let thumbnail_abs = self
-            .paths()
-            .thumbnails_dir()
-            .join(format!("{}.{DERIVATIVE_EXTENSION}", leased.id));
-        let thumbnail_path = self.paths().to_relative_string(&thumbnail_abs)?;
-        let mut written = Vec::new();
-        write_atomic(&thumbnail_abs, &encode_thumbnail(&thumbnail_image(&image))?)?;
-        written.push(thumbnail_path.clone());
-        let preview_path = if needs_preview(raster, image.width(), image.height()) {
-            let preview_abs = self
+        let stage = |tier: &str| -> CoreResult<String> {
+            Ok(format!(
+                "{STAGING_DIR}/{}.{}.{tier}.{DERIVATIVE_EXTENSION}",
+                leased.id, leased.token
+            ))
+        };
+        let thumbnail_path = self.paths().to_relative_string(
+            &self
                 .paths()
-                .previews_dir()
-                .join(format!("{}.{DERIVATIVE_EXTENSION}", leased.id));
-            let relative = self.paths().to_relative_string(&preview_abs)?;
-            write_atomic(&preview_abs, &encode_preview(&preview_image(&image))?)?;
-            written.push(relative.clone());
+                .thumbnails_dir()
+                .join(format!("{}.{DERIVATIVE_EXTENSION}", leased.id)),
+        )?;
+        let staged_thumbnail = stage("thumb")?;
+        write_atomic(
+            &self.paths().resolve_relative_path(&staged_thumbnail)?,
+            &encode_thumbnail(&thumbnail_image(&image))?,
+        )?;
+        let mut staged = vec![(staged_thumbnail, thumbnail_path.clone())];
+        let preview_path = if needs_preview(raster, image.width(), image.height()) {
+            let relative = self.paths().to_relative_string(
+                &self
+                    .paths()
+                    .previews_dir()
+                    .join(format!("{}.{DERIVATIVE_EXTENSION}", leased.id)),
+            )?;
+            let staged_preview = stage("preview")?;
+            write_atomic(
+                &self.paths().resolve_relative_path(&staged_preview)?,
+                &encode_preview(&preview_image(&image))?,
+            )?;
+            staged.push((staged_preview, relative.clone()));
             Some(relative)
         } else {
             Some(leased.original_path.clone())
@@ -271,14 +320,15 @@ impl FragmentCore {
         Ok(NewDerivatives {
             thumbnail_path,
             preview_path,
-            written,
+            staged,
         })
     }
 
-    /// Commits new paths and version, queues the replaced files for deletion at
-    /// the next launch, and releases the lease, all in one transaction. Returns
-    /// `false` (and changes nothing) when the lease was lost or the asset was
-    /// deleted or replaced.
+    /// Verifies the lease, moves the staged files into their final place, commits
+    /// new paths and version, queues the replaced files for deletion at the next
+    /// launch, and releases the lease, all in one transaction. Returns `false`
+    /// (and changes nothing on disk or in the database) when the lease was lost
+    /// or the asset was deleted or replaced.
     pub(crate) fn publish_derivatives(
         &self,
         asset_id: &str,
@@ -287,7 +337,7 @@ impl FragmentCore {
     ) -> CoreResult<bool> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let published = publish_in_tx(&tx, asset_id, token, new)?;
+        let published = publish_in_tx(&tx, self.paths(), asset_id, token, new)?;
         if published {
             tx.commit()?;
         }
@@ -316,9 +366,11 @@ impl FragmentCore {
         Ok(())
     }
 
-    fn remove_written(&self, written: &[String]) {
-        for relative in written {
-            if let Ok(path) = self.paths().resolve_relative_path(relative) {
+    /// Removes this lease's staging files only. Final paths are never touched
+    /// here: another holder may have committed them meanwhile.
+    fn remove_staged(&self, new: &NewDerivatives) {
+        for (staged, _) in &new.staged {
+            if let Ok(path) = self.paths().resolve_relative_path(staged) {
                 let _ = fs::remove_file(path);
             }
         }
@@ -327,6 +379,7 @@ impl FragmentCore {
 
 fn publish_in_tx(
     tx: &Connection,
+    paths: &AppPaths,
     asset_id: &str,
     token: &str,
     new: &NewDerivatives,
@@ -350,6 +403,15 @@ fn publish_in_tx(
     else {
         return Ok(false);
     };
+    // Only the current lease holder gets here, so the rename cannot clobber a
+    // file that a competing worker committed. The write lock is held until commit.
+    for (staged, final_path) in &new.staged {
+        let target = paths.resolve_relative_path(final_path)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(paths.resolve_relative_path(staged)?, target)?;
+    }
     let now = Utc::now().to_rfc3339();
     tx.execute(
         "UPDATE assets SET thumbnail_path = ?1, preview_path = ?2, derivatives_version = ?3,
@@ -771,7 +833,24 @@ mod tests {
         let asset_id = legacy.asset_id.clone().unwrap();
         let leased = core.lease_asset(&asset_id).unwrap().expect("lease");
         let new = core.produce_derivatives(&leased).unwrap();
-        assert_eq!(new.written.len(), 2);
+        assert_eq!(new.staged.len(), 2);
+        for (staged, _) in &new.staged {
+            assert!(staged.starts_with("temp/derivatives/") && staged.contains(&leased.token));
+            assert!(core
+                .paths()
+                .resolve_relative_path(staged)
+                .unwrap()
+                .is_file());
+        }
+        // legacy_vault removed the import-time WebP thumbnail; staging must not recreate it.
+        assert!(
+            !core
+                .paths()
+                .resolve_relative_path(&new.thumbnail_path)
+                .unwrap()
+                .exists(),
+            "nothing is written to the final path before publication"
+        );
         // A stale token must not publish or queue deletions.
         assert!(!core
             .publish_derivatives(&asset_id, "stale-token", &new)
@@ -806,14 +885,15 @@ mod tests {
         assert!(!core
             .publish_derivatives(&asset_id, &leased.token, &new)
             .unwrap());
-        core.remove_written(&new.written);
-        for relative in &new.written {
-            assert!(!core
-                .paths()
-                .resolve_relative_path(relative)
-                .unwrap()
-                .exists());
+        core.remove_staged(&new);
+        for (staged, _) in &new.staged {
+            assert!(!core.paths().resolve_relative_path(staged).unwrap().exists());
         }
+        assert!(!core
+            .paths()
+            .resolve_relative_path(&new.thumbnail_path)
+            .unwrap()
+            .exists());
         assert!(core
             .paths()
             .resolve_relative_path(&legacy.thumbnail_path)
@@ -840,14 +920,50 @@ mod tests {
             .expect("expired lease is reclaimed");
         assert_ne!(first.token, second.token);
         assert_eq!(second.attempts, 2);
-        // The first worker's publication now fails; the second succeeds.
-        let new = core.produce_derivatives(&second).unwrap();
-        assert!(!core
-            .publish_derivatives(&asset_id, &first.token, &new)
-            .unwrap());
+        // Both workers finish encoding. The second publishes first; the first is
+        // refused and must not take the second's committed files down with it.
+        let stale = core.produce_derivatives(&first).unwrap();
+        let fresh = core.produce_derivatives(&second).unwrap();
+        assert_ne!(stale.staged, fresh.staged, "staging names are per lease");
+        assert_eq!(stale.thumbnail_path, fresh.thumbnail_path);
         assert!(core
-            .publish_derivatives(&asset_id, &second.token, &new)
+            .publish_derivatives(&asset_id, &second.token, &fresh)
             .unwrap());
+        assert!(!core
+            .publish_derivatives(&asset_id, &first.token, &stale)
+            .unwrap());
+        core.remove_staged(&stale);
+        let updated = core.get_fragment(legacy.id).unwrap();
+        assert_eq!(updated.thumbnail_path, fresh.thumbnail_path);
+        for relative in [
+            &updated.thumbnail_path,
+            updated.preview_path.as_ref().unwrap(),
+        ] {
+            let path = core.paths().resolve_relative_path(relative).unwrap();
+            assert!(
+                path.is_file(),
+                "{relative} committed by the live lease survives"
+            );
+            image::load_from_memory(&std::fs::read(path).unwrap()).expect("decodes");
+        }
+        for (staged, _) in stale.staged.iter().chain(&fresh.staged) {
+            assert!(!core.paths().resolve_relative_path(staged).unwrap().exists());
+        }
+        assert_eq!(core.clear_derivative_staging().unwrap(), 0);
+    }
+
+    #[test]
+    fn launch_clears_staging_files_left_by_a_crashed_worker() {
+        let (_temp, core, legacy) = legacy_vault(2000, 1000);
+        let asset_id = legacy.asset_id.clone().unwrap();
+        let leased = core.lease_asset(&asset_id).unwrap().expect("lease");
+        let new = core.produce_derivatives(&leased).unwrap();
+        // The process dies here: staged files exist, nothing is published.
+        assert_eq!(core.clear_derivative_staging().unwrap(), 2);
+        for (staged, _) in &new.staged {
+            assert!(!core.paths().resolve_relative_path(staged).unwrap().exists());
+        }
+        assert_eq!(core.clear_derivative_staging().unwrap(), 0);
     }
 
     #[test]

@@ -122,10 +122,15 @@ decoding and re-encoding every tier in the parent for little gain.
 written with: 1 = PNG, 2 = WebP with the skip rule. `derivative_jobs.rs` runs
 one background worker, started by the desktop shell about 3 s after launch, that
 leases assets below the current version (active Fragments first, Trash last),
-decodes the original outside the SQLite lock, writes the new files atomically,
-then updates paths and version for the asset and its memberships, queues the
-old files in `pending_file_deletions` with `deferred_until_relaunch = 1`
-(migration 0007), and commits, all in one transaction. The old files are not
+decodes the original outside the SQLite lock, writes the new files atomically
+to `temp/derivatives/<asset>.<lease token>.<tier>.webp`, then, inside one
+transaction that first re-checks the lease, renames them into `thumbnails/`
+and `previews/`, updates paths and version for the asset and its memberships,
+queues the old files in `pending_file_deletions` with `deferred_until_relaunch = 1`
+(migration 0007), and commits. A worker whose lease expired is refused at that
+re-check and removes only its own staging files, so it can never delete or
+overwrite what the live lease holder committed; the desktop shell clears
+leftover staging files at launch. The old files are not
 removed by the process that replaced them: the WebView only refetches paths on
 focus, so a card or preview could still be showing them. The desktop shell
 sweeps the deferred rows at its next launch (`sweep_deferred_file_deletions`,

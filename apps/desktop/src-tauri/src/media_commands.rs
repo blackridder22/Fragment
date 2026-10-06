@@ -197,6 +197,12 @@ pub fn start_derivative_regeneration(
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "deferred derivative cleanup failed"),
             }
+            // Staging files of a worker that died with an earlier process.
+            match core.clear_derivative_staging() {
+                Ok(0) => {}
+                Ok(removed) => tracing::info!(removed, "cleared derivative staging files"),
+                Err(error) => tracing::warn!(%error, "derivative staging cleanup failed"),
+            }
             let deadline = std::time::Instant::now() + delay;
             while std::time::Instant::now() < deadline {
                 if stopped.load(Ordering::Acquire) {
