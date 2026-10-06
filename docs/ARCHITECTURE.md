@@ -108,9 +108,17 @@ median 273 KB (p90 439 KB) and previews median 1.3 MB (p90 2.3 MB), so one
 the originals. Re-encoding 12 real thumbnails gave PNG 2.99 MB -> WebP q82
 0.37 MB (8.2x); one 1600x702 preview went 1.39 MB -> 175 KB.
 
-No preview file is written when the original's longest edge is <= 1600 px and
-the format is browser-displayable (JPEG, PNG, WebP, GIF). `preview_path` then
-equals `original_path`; the desktop asset candidate chain deduplicates the two.
+Decoding applies the EXIF orientation (`decode_oriented`), so thumbnails,
+previews and the stored `width`/`height` describe the image as WebKit displays
+the original.
+
+No preview file is written when the original's longest edge is <= 1600 px, the
+format is browser-displayable (JPEG, PNG, WebP, GIF) and the file carries no
+EXIF orientation. `preview_path` then equals `original_path`; the desktop asset
+candidate chain deduplicates the two. A rotated or flipped original always gets
+a generated, oriented preview (not upscaled), because WebKit would apply the
+orientation to the original while the thumbnail is built from oriented pixels,
+and the two must agree.
 
 SVG tiers (`svg.rs`, `previews.rs`) stay PNG. tiny-skia emits exact
 straight-alpha PNG, vector art is mostly flat colour where PNG is already

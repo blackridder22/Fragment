@@ -17,8 +17,8 @@ use crate::models::{FileCleanupReport, Fragment, FragmentFilter, PurgeReport};
 use crate::palette::PaletteColor;
 use crate::storage::{safe_existing_file, write_atomic};
 use crate::thumbnails::{
-    decode_image, dimensions, encode_preview, encode_thumbnail, needs_preview, preview_image,
-    thumbnail_image, CURRENT_DERIVATIVES_VERSION, DERIVATIVE_EXTENSION,
+    decode_image, decode_oriented, dimensions, encode_preview, encode_thumbnail, needs_preview,
+    preview_image, thumbnail_image, CURRENT_DERIVATIVES_VERSION, DERIVATIVE_EXTENSION,
 };
 
 const MAX_FRAGMENT_TITLE_CHARS: usize = 120;
@@ -1637,13 +1637,16 @@ impl FragmentCore {
         let prepare = (|| -> CoreResult<()> {
             let thumbnail = match asset.format {
                 AssetFormat::Raster(format) => {
-                    let image = decode_image(&asset.bytes)?;
+                    // Oriented pixels: width/height and every derivative describe
+                    // the image as WebKit displays the original.
+                    let decoded = decode_oriented(&asset.bytes)?;
+                    let image = decoded.image;
                     let (width, height) = dimensions(&image);
                     stored.width = Some(width);
                     stored.height = Some(height);
                     let thumb = thumbnail_image(&image);
                     write_atomic(&thumbnail_abs, &encode_thumbnail(&thumb)?)?;
-                    if needs_preview(format, image.width(), image.height()) {
+                    if needs_preview(format, image.width(), image.height(), decoded.orientation) {
                         write_atomic(&preview_abs, &encode_preview(&preview_image(&image))?)?;
                     } else {
                         // Small displayable originals are their own preview; no file is written.

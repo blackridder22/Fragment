@@ -22,7 +22,7 @@ use crate::{
     media::{read_asset, AssetFormat},
     storage::write_atomic,
     thumbnails::{
-        decode_image, encode_preview, encode_thumbnail, needs_preview, preview_image,
+        decode_oriented, encode_preview, encode_thumbnail, needs_preview, preview_image,
         thumbnail_image, CURRENT_DERIVATIVES_VERSION, DERIVATIVE_EXTENSION,
     },
     CoreError, CoreResult, FragmentCore,
@@ -297,7 +297,8 @@ impl FragmentCore {
                 });
             }
         };
-        let image = decode_image(&bytes)?;
+        let decoded = decode_oriented(&bytes)?;
+        let image = decoded.image;
         let stage = |tier: &str| -> CoreResult<String> {
             Ok(format!(
                 "{STAGING_DIR}/{}.{}.{tier}.{DERIVATIVE_EXTENSION}",
@@ -316,23 +317,24 @@ impl FragmentCore {
             &encode_thumbnail(&thumbnail_image(&image))?,
         )?;
         let mut staged = vec![(staged_thumbnail, thumbnail_path.clone())];
-        let preview_path = if needs_preview(raster, image.width(), image.height()) {
-            let relative = self.paths().to_relative_string(
-                &self
-                    .paths()
-                    .previews_dir()
-                    .join(format!("{}.{DERIVATIVE_EXTENSION}", leased.id)),
-            )?;
-            let staged_preview = stage("preview")?;
-            write_atomic(
-                &self.paths().resolve_relative_path(&staged_preview)?,
-                &encode_preview(&preview_image(&image))?,
-            )?;
-            staged.push((staged_preview, relative.clone()));
-            Some(relative)
-        } else {
-            Some(leased.original_path.clone())
-        };
+        let preview_path =
+            if needs_preview(raster, image.width(), image.height(), decoded.orientation) {
+                let relative = self.paths().to_relative_string(
+                    &self
+                        .paths()
+                        .previews_dir()
+                        .join(format!("{}.{DERIVATIVE_EXTENSION}", leased.id)),
+                )?;
+                let staged_preview = stage("preview")?;
+                write_atomic(
+                    &self.paths().resolve_relative_path(&staged_preview)?,
+                    &encode_preview(&preview_image(&image))?,
+                )?;
+                staged.push((staged_preview, relative.clone()));
+                Some(relative)
+            } else {
+                Some(leased.original_path.clone())
+            };
         Ok(NewDerivatives {
             thumbnail_path,
             preview_path,
@@ -498,11 +500,20 @@ mod tests {
         cursor.into_inner()
     }
 
-    /// Imports an image, then rewrites it to look like a v1 Vault entry with PNG derivatives.
+    /// Imports a PNG, then rewrites it to look like a v1 Vault entry with PNG derivatives.
     fn legacy_vault(width: u32, height: u32) -> (tempfile::TempDir, FragmentCore, crate::Fragment) {
+        legacy_vault_from("source.png", png_bytes(width, height))
+    }
+
+    /// Imports `bytes`, then rewrites the entry to look like a v1 Vault entry whose
+    /// PNG derivatives were generated from the raw (unoriented) pixels.
+    fn legacy_vault_from(
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> (tempfile::TempDir, FragmentCore, crate::Fragment) {
         let temp = tempfile::tempdir().expect("tempdir");
-        let source = temp.path().join("source.png");
-        std::fs::write(&source, png_bytes(width, height)).expect("source");
+        let source = temp.path().join(name);
+        std::fs::write(&source, bytes).expect("source");
         let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
         let fragment = core
             .import_image(None, source.to_string_lossy().into_owned(), None)
@@ -526,12 +537,19 @@ mod tests {
             )
             .expect("write legacy");
         }
-        std::fs::remove_file(
-            core.paths()
-                .resolve_relative_path(&fragment.thumbnail_path)
-                .expect("resolve"),
-        )
-        .expect("remove webp thumbnail");
+        for relative in std::iter::once(&fragment.thumbnail_path).chain(
+            fragment
+                .preview_path
+                .iter()
+                .filter(|path| path.ends_with(".webp")),
+        ) {
+            std::fs::remove_file(
+                core.paths()
+                    .resolve_relative_path(relative)
+                    .expect("resolve"),
+            )
+            .expect("remove webp derivative");
+        }
         {
             let conn = core.conn().expect("conn");
             conn.execute(
@@ -743,6 +761,33 @@ mod tests {
             .resolve_relative_path(&updated.original_path)
             .unwrap()
             .is_file());
+    }
+
+    #[test]
+    fn regeneration_orients_rotated_jpegs_and_forces_their_preview() {
+        use crate::thumbnails::test_support::{is_blue, is_red, jpeg_with_orientation};
+        let (_temp, core, legacy) =
+            legacy_vault_from("phone.jpg", jpeg_with_orientation(120, 60, 6));
+        assert_eq!(run_batch(&core).completed.len(), 1);
+        let updated = core.get_fragment(legacy.id).expect("fragment");
+        let preview_path = updated.preview_path.as_deref().expect("preview");
+        assert_ne!(preview_path, updated.original_path, "rotated: no skip");
+        assert!(preview_path.ends_with(".webp"));
+        for relative in [&updated.thumbnail_path, preview_path] {
+            let bytes =
+                std::fs::read(core.paths().resolve_relative_path(relative).unwrap()).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap().to_rgb8();
+            let (w, h) = image.dimensions();
+            assert!(h > w, "{relative} is portrait after orientation");
+            assert!(
+                is_red(&image.get_pixel(w / 2, h / 10).0),
+                "{relative}: red on top"
+            );
+            assert!(
+                is_blue(&image.get_pixel(w / 2, h - h / 10).0),
+                "{relative}: blue below"
+            );
+        }
     }
 
     #[test]

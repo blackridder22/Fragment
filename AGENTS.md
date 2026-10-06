@@ -405,8 +405,12 @@ Rules:
   1600x702 PNG preview 1.39 MB -> 175 KB. WKWebView on macOS 11+ decodes WebP natively.
 - PNG is used only for SVG-rendered tiers (`svg.rs`, `previews.rs`), where tiny-skia's exact
   straight-alpha output matters more than bytes, and as the fallback if libwebp cannot be built.
-- No preview file is written when the original's longest edge is <= 1600 px and its format is
-  browser-displayable (JPEG, PNG, WebP, GIF); `preview_path` then equals `original_path`.
+- Decoding applies the EXIF orientation: thumbnails, previews and the stored width/height
+  describe the image as WebKit displays the original.
+- No preview file is written when the original's longest edge is <= 1600 px, its format is
+  browser-displayable (JPEG, PNG, WebP, GIF) and it carries no EXIF orientation;
+  `preview_path` then equals `original_path`. A rotated or flipped original always gets a
+  generated preview so grid and preview agree.
 - `assets.derivatives_version` records the policy an asset was written with (1 = PNG,
   2 = WebP + skip rule). Older rows are regenerated in the background (`derivative_jobs.rs`);
   the replaced files are queued as deferred and deleted at the next desktop launch, never by

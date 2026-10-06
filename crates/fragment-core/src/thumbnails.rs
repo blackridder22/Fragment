@@ -1,10 +1,14 @@
 //! Raster derivatives. Thumbnails and previews are lossy WebP with a lossless
 //! alpha plane; originals are never re-encoded. SVG tiers stay PNG (see
-//! `svg.rs` and `previews.rs`).
+//! `svg.rs` and `previews.rs`). Decoding applies the EXIF orientation, so
+//! every derivative and every stored width/height describe the image as
+//! WebKit displays the original.
+use std::io::Cursor;
 use std::path::Path;
 
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageFormat};
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
 use crate::errors::{CoreError, CoreResult};
 use crate::storage::write_atomic;
@@ -34,13 +38,45 @@ pub fn is_browser_displayable(format: ImageFormat) -> bool {
 }
 
 /// A preview file is only worth writing when it would be smaller in pixels than
-/// the original or when WebKit cannot display the original format.
-pub fn needs_preview(format: ImageFormat, width: u32, height: u32) -> bool {
-    !is_browser_displayable(format) || width.max(height) > PREVIEW_MAX_EDGE
+/// the original, when WebKit cannot display the original format, or when the
+/// original carries an EXIF orientation. WebKit applies that orientation when it
+/// renders the original, while the thumbnail is generated from oriented pixels;
+/// letting the original stand in for its preview is only safe when both agree,
+/// so a rotated or flipped original always gets a generated, oriented preview.
+/// `width`/`height` are the oriented (displayed) dimensions.
+pub fn needs_preview(
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+    orientation: Orientation,
+) -> bool {
+    !is_browser_displayable(format)
+        || orientation != Orientation::NoTransforms
+        || width.max(height) > PREVIEW_MAX_EDGE
 }
 
+/// Decoded pixels with the EXIF orientation already applied.
+pub struct DecodedImage {
+    pub image: DynamicImage,
+    /// The transform that was applied; `NoTransforms` when the file had none.
+    pub orientation: Orientation,
+}
+
+/// Decodes and applies the EXIF orientation (JPEG APP1, PNG eXIf, WebP EXIF).
+/// Formats without orientation metadata decode as-is.
+pub fn decode_oriented(bytes: &[u8]) -> CoreResult<DecodedImage> {
+    let mut decoder = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    image.apply_orientation(orientation);
+    Ok(DecodedImage { image, orientation })
+}
+
+/// Oriented pixels for callers that do not need to know whether a transform ran.
 pub fn decode_image(bytes: &[u8]) -> CoreResult<DynamicImage> {
-    Ok(image::load_from_memory(bytes)?)
+    Ok(decode_oriented(bytes)?.image)
 }
 
 pub fn dimensions(image: &DynamicImage) -> (i64, i64) {
@@ -95,8 +131,12 @@ pub fn thumbnail_image(source: &DynamicImage) -> DynamicImage {
     source.thumbnail(THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE)
 }
 
-/// Resample to fit [`PREVIEW_MAX_EDGE`].
+/// Resample to fit [`PREVIEW_MAX_EDGE`]. Sources already within it (previews
+/// forced by a non-displayable format or an EXIF orientation) are not upscaled.
 pub fn preview_image(source: &DynamicImage) -> DynamicImage {
+    if source.width().max(source.height()) <= PREVIEW_MAX_EDGE {
+        return source.clone();
+    }
     source.resize(PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE, FilterType::Lanczos3)
 }
 
@@ -122,8 +162,64 @@ pub fn generate_preview(source: &DynamicImage, output_path: &Path) -> CoreResult
     Ok(())
 }
 
+/// Test-only JPEG builders shared with the import and regeneration tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use image::codecs::jpeg::JpegEncoder;
+    use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage};
+
+    /// A little-endian TIFF chunk holding only IFD0 tag 0x0112 (Orientation).
+    /// This is the payload `JpegEncoder::set_exif_metadata` wraps in APP1.
+    pub fn exif_orientation_chunk(orientation: u8) -> Vec<u8> {
+        let mut chunk = Vec::with_capacity(26);
+        chunk.extend_from_slice(b"II"); // byte order
+        chunk.extend_from_slice(&42u16.to_le_bytes()); // TIFF magic
+        chunk.extend_from_slice(&8u32.to_le_bytes()); // IFD0 offset
+        chunk.extend_from_slice(&1u16.to_le_bytes()); // one entry
+        chunk.extend_from_slice(&0x0112u16.to_le_bytes()); // Orientation
+        chunk.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        chunk.extend_from_slice(&1u32.to_le_bytes()); // count
+        chunk.extend_from_slice(&u32::from(orientation).to_le_bytes()); // value, padded
+        chunk.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+        chunk
+    }
+
+    /// `width` x `height` JPEG whose left half is red and right half is blue,
+    /// tagged with the given EXIF orientation. Orientation 6 (rotate 90 CW)
+    /// displays it as `height` x `width` with red on top and blue below.
+    pub fn jpeg_with_orientation(width: u32, height: u32, orientation: u8) -> Vec<u8> {
+        let image = RgbImage::from_fn(width, height, |x, _| {
+            if x < width / 2 {
+                Rgb([220, 20, 20])
+            } else {
+                Rgb([20, 20, 220])
+            }
+        });
+        let mut bytes = Vec::new();
+        let mut encoder = JpegEncoder::new_with_quality(&mut bytes, 92);
+        encoder
+            .set_exif_metadata(exif_orientation_chunk(orientation))
+            .expect("exif");
+        encoder
+            .write_image(image.as_raw(), width, height, ExtendedColorType::Rgb8)
+            .expect("jpeg");
+        bytes
+    }
+
+    /// True when the pixel is clearly red (not blue).
+    pub fn is_red(pixel: &[u8]) -> bool {
+        pixel[0] > 150 && pixel[2] < 100
+    }
+
+    /// True when the pixel is clearly blue (not red).
+    pub fn is_blue(pixel: &[u8]) -> bool {
+        pixel[2] > 150 && pixel[0] < 100
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::{is_blue, is_red, jpeg_with_orientation};
     use super::*;
     use image::{Rgb, Rgba, RgbaImage};
 
@@ -208,16 +304,103 @@ mod tests {
     }
 
     #[test]
-    fn preview_is_skipped_for_small_displayable_originals_only() {
-        assert!(!needs_preview(ImageFormat::Jpeg, 1600, 900));
-        assert!(!needs_preview(ImageFormat::Png, 320, 320));
-        assert!(!needs_preview(ImageFormat::WebP, 1041, 1041));
-        assert!(!needs_preview(ImageFormat::Gif, 800, 1600));
-        assert!(needs_preview(ImageFormat::Jpeg, 1601, 900));
-        assert!(needs_preview(ImageFormat::Png, 900, 2400));
-        assert!(needs_preview(ImageFormat::Tiff, 100, 100));
-        assert!(needs_preview(ImageFormat::Bmp, 100, 100));
-        assert!(needs_preview(ImageFormat::Ico, 32, 32));
+    fn preview_is_skipped_for_small_displayable_unrotated_originals_only() {
+        let plain = Orientation::NoTransforms;
+        assert!(!needs_preview(ImageFormat::Jpeg, 1600, 900, plain));
+        assert!(!needs_preview(ImageFormat::Png, 320, 320, plain));
+        assert!(!needs_preview(ImageFormat::WebP, 1041, 1041, plain));
+        assert!(!needs_preview(ImageFormat::Gif, 800, 1600, plain));
+        assert!(needs_preview(ImageFormat::Jpeg, 1601, 900, plain));
+        assert!(needs_preview(ImageFormat::Png, 900, 2400, plain));
+        assert!(needs_preview(ImageFormat::Tiff, 100, 100, plain));
+        assert!(needs_preview(ImageFormat::Bmp, 100, 100, plain));
+        assert!(needs_preview(ImageFormat::Ico, 32, 32, plain));
+        // Any EXIF transform forces a generated preview, whatever the size.
+        for orientation in [
+            Orientation::Rotate90,
+            Orientation::Rotate180,
+            Orientation::Rotate270,
+            Orientation::FlipHorizontal,
+            Orientation::FlipVertical,
+            Orientation::Rotate90FlipH,
+            Orientation::Rotate270FlipH,
+        ] {
+            assert!(needs_preview(ImageFormat::Jpeg, 100, 50, orientation));
+        }
+    }
+
+    #[test]
+    fn decoding_applies_exif_orientation_and_reports_it() {
+        let bytes = jpeg_with_orientation(120, 60, 6);
+        assert_eq!(image::guess_format(&bytes).unwrap(), ImageFormat::Jpeg);
+        // Raw pixels are landscape; the decoded image is the displayed portrait.
+        let raw = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((raw.width(), raw.height()), (120, 60));
+        let decoded = decode_oriented(&bytes).expect("decode");
+        assert_eq!(decoded.orientation, Orientation::Rotate90);
+        assert_eq!((decoded.image.width(), decoded.image.height()), (60, 120));
+        let rgb = decoded.image.to_rgb8();
+        assert!(
+            is_red(&rgb.get_pixel(30, 10).0),
+            "red half rotates to the top"
+        );
+        assert!(
+            is_blue(&rgb.get_pixel(30, 110).0),
+            "blue half rotates to the bottom"
+        );
+        assert_eq!(dimensions(&decoded.image), (60, 120));
+
+        let untagged = jpeg_with_orientation(120, 60, 1);
+        let decoded = decode_oriented(&untagged).expect("decode");
+        assert_eq!(decoded.orientation, Orientation::NoTransforms);
+        assert_eq!((decoded.image.width(), decoded.image.height()), (120, 60));
+    }
+
+    #[test]
+    fn small_previews_are_not_upscaled() {
+        let source = checkerboard(300, 200, u8::MAX);
+        let preview = preview_image(&source);
+        assert_eq!((preview.width(), preview.height()), (300, 200));
+        let large = preview_image(&checkerboard(3200, 1600, u8::MAX));
+        assert_eq!((large.width(), large.height()), (1600, 800));
+    }
+
+    #[test]
+    fn imported_rotated_jpeg_stores_displayed_dimensions_and_oriented_derivatives() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("phone.jpg");
+        std::fs::write(&source, jpeg_with_orientation(120, 60, 6)).expect("source");
+        let core = crate::FragmentCore::new_at(temp.path().join("vault")).expect("core");
+        let fragment = core
+            .import_image(None, source.to_string_lossy().into_owned(), None)
+            .expect("import");
+        // Dimensions describe the image as displayed, matching WebKit's rendering of the original.
+        assert_eq!((fragment.width, fragment.height), (Some(60), Some(120)));
+        let read = |relative: &str| {
+            let path = core
+                .paths()
+                .resolve_relative_path(relative)
+                .expect("resolve");
+            image::load_from_memory(&std::fs::read(path).expect("read"))
+                .expect("decode")
+                .to_rgb8()
+        };
+        let thumbnail = read(&fragment.thumbnail_path);
+        assert!(
+            thumbnail.height() > thumbnail.width(),
+            "thumbnail is portrait"
+        );
+        let (w, h) = thumbnail.dimensions();
+        assert!(is_red(&thumbnail.get_pixel(w / 2, h / 10).0));
+        assert!(is_blue(&thumbnail.get_pixel(w / 2, h - h / 10).0));
+        // Small, but rotated: the original must not stand in for the preview.
+        let preview_path = fragment.preview_path.as_deref().expect("preview");
+        assert_ne!(preview_path, fragment.original_path);
+        assert!(preview_path.ends_with(".webp"));
+        let preview = read(preview_path);
+        assert_eq!(preview.dimensions(), (60, 120), "oriented, not upscaled");
+        assert!(is_red(&preview.get_pixel(30, 10).0));
+        assert!(is_blue(&preview.get_pixel(30, 110).0));
     }
 
     fn fixture(name: &str) -> std::path::PathBuf {
