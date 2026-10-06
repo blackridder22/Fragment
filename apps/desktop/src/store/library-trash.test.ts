@@ -213,6 +213,7 @@ vi.mock("../lib/tauri", () => {
   };
 });
 
+import { resetTrashSession, getTrashSessionSnapshot } from "../features/trash/trash-session";
 import { changeView } from "./library-actions";
 import { refreshSnapshot, subscribeLibrarySideEffects } from "./library-bootstrap";
 import { moveFragmentsToTrash } from "./library-fragments";
@@ -239,6 +240,7 @@ describe("Trash page actions", () => {
   beforeEach(async () => {
     calls.length = 0;
     resetBackend();
+    resetTrashSession();
     resetLibraryStore(
       {},
       { storage: null, previewMode: false, systemPrefersDark: false },
@@ -402,5 +404,36 @@ describe("Trash page actions", () => {
     expect(count("load_library_snapshot")).toBe(1);
     expect(libraryStore.getState().toast?.message).toBe("Moved 1 Fragment back to Trash");
     expect(libraryStore.getState().undo).toBeNull();
+  });
+
+  it("does not pulse the Empty Trash button when the Trash held only Frames at launch", async () => {
+    // Launch again with a Frames-only Trash, then open the Trash page.
+    dispose();
+    backend.trashedFragments = [];
+    resetTrashSession();
+    resetLibraryStore({}, { storage: null, previewMode: false, systemPrefersDark: false });
+    const stopEffects = subscribeLibrarySideEffects();
+    const stopLoader = libraryLoader.start();
+    dispose = () => {
+      stopLoader();
+      stopEffects();
+    };
+    await refreshSnapshot();
+    await flush();
+    expect(libraryStore.getState().trashTotal).toBe(0);
+    changeView("trash");
+    await flush();
+    expect(libraryStore.getState().trashedFrames).toHaveLength(1);
+    expect(getTrashSessionSnapshot().pulsePending).toBe(false);
+
+    // A Fragment landing in a Trash that already held a Frame is not "first non-empty" either.
+    changeView("home");
+    backend.activeFragments = [fragment("live", "posters")];
+    libraryStore.setState((state) => ({
+      activePage: { ...state.activePage, items: backend.activeFragments, total: 1 },
+    }));
+    await moveFragmentsToTrash(["live"]);
+    await flush();
+    expect(getTrashSessionSnapshot().pulsePending).toBe(false);
   });
 });
