@@ -91,8 +91,9 @@ async function loadSnapshot(throwOnError: boolean) {
         smartFrames,
         knownTags: normalizeTags(tags),
         revision: snapshot.revision,
-        fragmentTagsById: {},
-        fragmentTagStatusById: {},
+        // fragmentTagsById / fragmentTagStatusById survive a refresh: nothing
+        // refetches them while the focused overlay is open, and tag edits made
+        // in-app already patch the cache (patchFragmentTags).
       };
       const reuse = canReuseUnfilteredRootSnapshot({
         frameId: current.selectedFrameId,

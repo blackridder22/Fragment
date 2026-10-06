@@ -259,6 +259,23 @@ describe("invoke counts per interaction", () => {
     ]);
   });
 
+  it("snapshot refresh keeps the focused Fragment's tags ready", async () => {
+    const item = libraryStore.getState().activePage.items[0]!;
+    openFragmentPreview(item);
+    await flush();
+    expect(libraryStore.getState().fragmentTagsById[item.id]).toEqual([
+      "poster",
+    ]);
+
+    calls.length = 0;
+    await refreshSnapshot();
+    await flush();
+    const state = libraryStore.getState();
+    expect(state.fragmentTagsById[item.id]).toEqual(["poster"]);
+    expect(state.fragmentTagStatusById[item.id]).toBe("ready");
+    expect(count("get_fragment_tags")).toBe(0);
+  });
+
   it("rename, move and tag patch the store without a snapshot reload", async () => {
     calls.length = 0;
     await renameFrameAction(FRAMES[1]!, "Print");
