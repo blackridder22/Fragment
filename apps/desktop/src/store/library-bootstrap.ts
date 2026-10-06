@@ -47,20 +47,32 @@ import type { LibraryState } from "./library-types";
 
 const { getState, setState } = libraryStore;
 let snapshotPromise: Promise<void> | null = null;
+let queuedSnapshot: Promise<void> | null = null;
 
-/** Full refresh: frames, counts, Smart Frames, tags and the first page. */
+/**
+ * Full refresh: frames, counts, Smart Frames, tags and the first page.
+ *
+ * Without `throwOnError` a call joins any refresh already in flight and
+ * never rejects. With it, the call waits for the in-flight refresh and then
+ * runs one more (shared by every forced caller that arrives meanwhile), so
+ * the caller's own backend writes are reflected, and failures reject.
+ */
 export function refreshSnapshot(throwOnError = false): Promise<void> {
   if (!isTauriRuntime()) {
     setState({ booted: true });
     return Promise.resolve();
   }
   if (snapshotPromise) {
-    if (throwOnError) {
-      return Promise.reject(
-        new Error("The library is already refreshing. Try again."),
-      );
+    if (!throwOnError) return snapshotPromise;
+    if (!queuedSnapshot) {
+      queuedSnapshot = snapshotPromise
+        .catch(() => undefined)
+        .then(() => {
+          queuedSnapshot = null;
+          return refreshSnapshot(true);
+        });
     }
-    return snapshotPromise;
+    return queuedSnapshot;
   }
   snapshotPromise = loadSnapshot(throwOnError).finally(() => {
     snapshotPromise = null;
