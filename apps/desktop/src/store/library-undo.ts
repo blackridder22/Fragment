@@ -2,6 +2,10 @@ import { restorePreviewItems } from "../features/trash/preview-trash-state";
 import { deleteFragments, restoreFrame, restoreFragments } from "../lib/tauri";
 import { refreshSnapshot } from "./library-bootstrap";
 import { reportError, setToastPending, showToast } from "./library-feedback";
+import {
+  insertFramePreviewFragments,
+  pruneFramePreviews,
+} from "./library-previews";
 import { pluralize } from "./library-selectors";
 import { libraryStore } from "./library-store";
 import type { UndoEntry } from "./library-types";
@@ -51,6 +55,10 @@ function applyFragmentsRestored(
         ...undo.removed.map((entry) => entry.fragment),
         ...state.coverFragments,
       ],
+      ...insertFramePreviewFragments(
+        state,
+        undo.removed.map((entry) => entry.fragment),
+      ),
     };
   });
 }
@@ -110,6 +118,7 @@ function applyLinksRemoved(undo: Extract<UndoEntry, { kind: "linked" }>) {
       coverFragments: state.coverFragments.filter(
         (fragment) => !ids.has(fragment.id),
       ),
+      ...pruneFramePreviews(state, ids),
       frameCounts,
     };
   });

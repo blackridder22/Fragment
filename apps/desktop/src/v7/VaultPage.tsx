@@ -23,7 +23,6 @@ import {
   type FrameCanvasProps,
   type GalleryCard,
   type V7AssetFallback,
-  type V7FrameCardProps,
 } from "./FrameGallery";
 import {
   FOLDER_CARD_LIMIT,
@@ -74,11 +73,6 @@ type StaggerStyle = CSSProperties & {
 type RecentRowStyle = CSSProperties & {
   "--v7-recent-row-count": number;
   "--v7-recent-row-sum": number;
-};
-
-type RecentCardStyle = NonNullable<V7FrameCardProps["style"]> & {
-  "--v7-recent-ratio": number;
-  "--v7-stagger-index"?: number;
 };
 
 const EMPTY_COVERS: GalleryCard[] = [];
@@ -430,14 +424,12 @@ export function VaultPage({
                           onContextMenu={onContextMenu}
                           onOpen={onOpen}
                           onSelect={onSelect}
+                          ratio={ratio}
                           selected={selectedIds.has(fragment.id)}
-                          style={
-                            {
-                              "--v7-recent-ratio": ratio,
-                              "--v7-stagger-index": staggerIndex(
-                                row.start + index,
-                              ),
-                            } as RecentCardStyle
+                          stagger={
+                            introDone
+                              ? undefined
+                              : staggerIndex(row.start + index)
                           }
                         />
                       );

@@ -28,6 +28,7 @@ import {
   pageNameForView,
   pageOf,
 } from "./library-loader";
+import { syncFramePreviews } from "./library-previews";
 import {
   selectSelectableIds,
   selectSelectionScopeKey,
@@ -191,6 +192,7 @@ export function subscribeLibrarySideEffects() {
       writeStorage(RECENT_FRAME_STORAGE_KEY, next.recentFrameId);
     }
     if (next.settings !== before.settings) writeV7SettingsState(next.settings);
+    syncFramePreviews(next);
     if (
       next.theme !== before.theme ||
       next.systemPrefersDark !== before.systemPrefersDark ||

@@ -20,6 +20,7 @@ import {
   prependToActivePage,
 } from "./library-fragments";
 import { libraryLoader } from "./library-loader";
+import { insertFramePreviewFragments } from "./library-previews";
 import { pluralize, selectFrameById } from "./library-selectors";
 import { libraryStore } from "./library-store";
 import { offerUndo } from "./library-undo";
@@ -53,6 +54,7 @@ function addImportedFragment(requestId: string, fragment: Fragment) {
       fragment,
       ...state.coverFragments.filter((item) => item.id !== fragment.id),
     ],
+    ...insertFramePreviewFragments(state, [fragment]),
   }));
   const state = getState();
   if (!activeScopeIncludes(state, fragment.frameId)) return;

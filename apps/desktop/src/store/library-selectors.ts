@@ -5,6 +5,12 @@ import { resolveSelectedIds } from "../features/selection/selection-model";
 import { createAssetSourceCache } from "../lib/asset-sources";
 import type { AssetSource } from "../lib/assets";
 import { demoFrames } from "../lib/demo-vault";
+import {
+  FOLDER_PREVIEW_LIMIT,
+  RECENT_LIMIT,
+  collageFragments,
+  recentFragments,
+} from "../v7/vault-home";
 import { createSelector } from "./create-store";
 import {
   selectDemoActiveFragments,
@@ -229,12 +235,19 @@ export const selectVaultFolders = createSelector(
   },
 );
 
-const coverAssetSources = createAssetSourceCache("gallery");
+const EMPTY_COVERS: ReadonlyMap<string, GalleryCard[]> = new Map();
 
-/** Up to three collage cards per Frame, from the snapshot covers and the loaded page. */
+/**
+ * Collage cards per top-level Frame. The backend previews (latest Fragments,
+ * nested Frames included) win when loaded; a Frame without previews falls
+ * back to the newest-first snapshot page and the loaded page, which covers
+ * the window before the first fetch and a failed fetch.
+ */
 export const selectFolderCovers = createSelector(
   [
     (state: LibraryState) => state.previewMode,
+    selectDisplayFrames,
+    (state: LibraryState) => state.framePreviews,
     (state: LibraryState) => state.coverFragments,
     selectActiveFragments,
     selectDemoActiveFragments,
@@ -242,24 +255,59 @@ export const selectFolderCovers = createSelector(
     (state: LibraryState) => state.assetDataUrls,
     selectFrameById,
   ],
-  (previewMode, covers, active, demo, assetRoot, assetDataUrls, frameById) => {
-    const source = previewMode ? demo : [...covers, ...active];
-    const seen = new Set<string>();
+  (
+    previewMode,
+    frames,
+    previews,
+    covers,
+    active,
+    demo,
+    assetRoot,
+    assetDataUrls,
+    frameById,
+  ) => {
+    const fallback = previewMode ? demo : [...covers, ...active];
+    const source = previewMode ? undefined : (previews ?? undefined);
     const byFrame = new Map<string, GalleryCard[]>();
-    for (const fragment of source) {
-      if (seen.has(fragment.id)) continue;
-      seen.add(fragment.id);
-      const cards = byFrame.get(fragment.frameId) ?? [];
-      if (cards.length >= 3) continue;
-      cards.push({
-        fragment,
-        assetSources: coverAssetSources(fragment, assetRoot, assetDataUrls),
-        folderName: frameById.get(fragment.frameId)?.name ?? "Vault",
-      });
-      byFrame.set(fragment.frameId, cards);
+    for (const frame of frames) {
+      if (frame.parentId !== null) continue;
+      const fragments = collageFragments(
+        frame.id,
+        source,
+        fallback,
+        FOLDER_PREVIEW_LIMIT,
+      );
+      if (fragments.length === 0) continue;
+      byFrame.set(
+        frame.id,
+        buildCards(fragments, assetRoot, assetDataUrls, frameById),
+      );
     }
-    return byFrame;
+    return byFrame.size === 0 ? EMPTY_COVERS : byFrame;
   },
+);
+
+/**
+ * "Recently added": the newest-first snapshot page, bounded, whatever the
+ * gallery sort is. While a search is typed (or in browser preview) the
+ * matching page is shown instead.
+ */
+export const selectRecentCards = createSelector(
+  [
+    (state: LibraryState) => state.previewMode || state.query.trim() !== "",
+    (state: LibraryState) => state.coverFragments,
+    selectActiveFragments,
+    (state: LibraryState) => state.assetRoot,
+    (state: LibraryState) => state.assetDataUrls,
+    selectFrameById,
+  ],
+  (usePage, covers, active, assetRoot, assetDataUrls, frameById) =>
+    buildCards(
+      recentFragments(usePage ? active : covers, RECENT_LIMIT),
+      assetRoot,
+      assetDataUrls,
+      frameById,
+    ),
 );
 
 export const selectSelectableIds = createSelector(

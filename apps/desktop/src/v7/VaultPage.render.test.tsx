@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Fragment, Frame } from "@fragment/shared";
+import type { GalleryCard } from "./FrameGallery";
+import { RECENT_LIMIT } from "./vault-home";
 import { VaultPage, type VaultPageProps } from "./VaultPage";
 
 function frame(id: string, name = id): Frame {
@@ -37,28 +39,44 @@ const twelveFrames = [
   })),
   inbox,
 ];
-const page = Array.from({ length: 30 }, (_, index) =>
-  fragment(`fragment-${index}`, index % 2 === 0 ? "inbox" : "frame-1"),
+
+function card(item: Fragment): GalleryCard {
+  return {
+    fragment: item,
+    assetSources: [{ url: `asset://${item.thumbnailPath}` }],
+    folderName: "Vault",
+  };
+}
+
+// The store bounds "Recently added" to RECENT_LIMIT before the page sees it.
+const page = Array.from({ length: RECENT_LIMIT }, (_, index) =>
+  card(fragment(`fragment-${index}`, index % 2 === 0 ? "inbox" : "frame-1")),
 );
+
+// Collages as `selectFolderCovers` builds them: backend previews for Frame 11
+// (nested, outside the page) and Frame 1; the snapshot page for Inbox.
+const covers = new Map<string, GalleryCard[]>([
+  ["frame-11", [card(fragment("deep-1", "frame-11-child"))]],
+  [
+    "frame-1",
+    [card(fragment("f1-a", "frame-1")), card(fragment("f1-b", "frame-1"))],
+  ],
+  ["inbox", [card(fragment("fragment-0", "inbox"))]],
+]);
 
 function render(overrides: Partial<VaultPageProps> = {}) {
   return renderToStaticMarkup(
     <VaultPage
-      assetSourcesFor={(item) => [{ url: `asset://${item.thumbnailPath}` }]}
-      folderNameFor={() => "Vault"}
-      frameCounts={new Map([
-        ["inbox", 1],
-        ["frame-1", 3],
-        ["frame-11", 1200],
-      ])}
-      framePreviews={
+      folderCovers={covers}
+      folders={twelveFrames}
+      frameCounts={
         new Map([
-          ["frame-11", [fragment("deep-1", "frame-11-child")]],
-          ["frame-1", [fragment("f1-a", "frame-1"), fragment("f1-b", "frame-1")]],
+          ["inbox", 1],
+          ["frame-1", 3],
+          ["frame-11", 1200],
         ])
       }
-      frames={twelveFrames}
-      fragments={page}
+      items={page}
       selectedIds={new Set()}
       systemFrameId="inbox"
       onBrowseAll={vi.fn()}
@@ -117,10 +135,10 @@ describe("VaultPage frames section", () => {
     expect(count(markup, 'data-drop-state="armed"')).toBe(1);
   });
 
-  it("builds collages from backend previews, then the loaded page, then neutral tiles", () => {
+  it("renders the store's collage cards and neutral tiles where none exist", () => {
     const frames = framesSection(
       render({
-        frames: [
+        folders: [
           inbox,
           frame("frame-1", "Frame 1"),
           frame("frame-11", "Frame 11"),
@@ -130,10 +148,10 @@ describe("VaultPage frames section", () => {
     );
     // Frame 11 is outside the loaded page; its collage comes from the backend previews.
     expect(frames).toContain("asset://thumbnails/deep-1.png");
-    // Frame 1 has previews, so the page items for it are not used for its collage.
+    // Frame 1 has two previews: two real tiles and one neutral tile.
     expect(frames).toContain("asset://thumbnails/f1-a.png");
+    expect(frames).toContain("asset://thumbnails/f1-b.png");
     expect(frames).not.toContain("asset://thumbnails/fragment-1.png");
-    // Inbox has no previews and falls back to the loaded page.
     expect(frames).toContain("asset://thumbnails/fragment-0.png");
     // A Frame with nothing anywhere shows neutral tiles.
     expect(frames).toContain(
@@ -171,7 +189,7 @@ describe("VaultPage recently added", () => {
   });
 
   it("offers an import when Frames exist but nothing has been saved yet", () => {
-    const markup = render({ fragments: [], framePreviews: undefined });
+    const markup = render({ items: [], folderCovers: new Map() });
     expect(markup).toContain("No Fragments yet");
     expect(markup).toContain("Import Fragments");
     expect(markup).not.toContain("Your Vault is empty");
@@ -180,7 +198,11 @@ describe("VaultPage recently added", () => {
 
 describe("VaultPage empty Vault", () => {
   it("explains Frames and Fragments with import and Capture Mode actions", () => {
-    const markup = render({ frames: [inbox], fragments: [], framePreviews: undefined });
+    const markup = render({
+      folders: [inbox],
+      items: [],
+      folderCovers: new Map(),
+    });
     expect(markup).toContain("Your Vault is empty");
     expect(markup).toContain("<strong>Frames</strong>");
     expect(markup).toContain("<strong>Fragments</strong>");
@@ -192,7 +214,12 @@ describe("VaultPage empty Vault", () => {
   });
 
   it("does not flash the empty state before the first snapshot", () => {
-    const markup = render({ frames: [], fragments: [], framePreviews: undefined, ready: false });
+    const markup = render({
+      folders: [],
+      items: [],
+      folderCovers: new Map(),
+      ready: false,
+    });
     expect(markup).not.toContain("Your Vault is empty");
     expect(markup).not.toContain("No Fragments yet");
     expect(markup).toContain("Recently added");

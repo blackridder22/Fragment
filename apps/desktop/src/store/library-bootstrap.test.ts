@@ -68,6 +68,7 @@ vi.mock("../lib/tauri", () => ({
     paletteRevision: null,
   }),
   listTrashedFrames: async () => [],
+  listFramePreviews: async () => [],
   getLibraryRevision: async () => "r1",
   getPaletteIndexStatus: async () => null,
   startPaletteIndexing: async () => undefined,
