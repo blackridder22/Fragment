@@ -472,8 +472,10 @@ impl FragmentCore {
     }
 
     /// Latest active Fragments for every top-level Frame, counting nested Frames, newest
-    /// first. Frames without any active Fragment are omitted. `limit_per_frame` is clamped
-    /// to 1..=12 so the home page never pulls a full gallery through this call.
+    /// first. An asset linked into several Frames under one root (a parent and its child)
+    /// yields one tile, its newest membership. Frames without any active Fragment are
+    /// omitted. `limit_per_frame` is clamped to 1..=12 so the home page never pulls a full
+    /// gallery through this call.
     pub fn list_frame_previews(&self, limit_per_frame: usize) -> CoreResult<Vec<FramePreview>> {
         let limit = i64::try_from(limit_per_frame.clamp(1, MAX_FRAME_PREVIEW_ITEMS))
             .map_err(|_| CoreError::InvalidInput("Frame preview limit is too large".to_string()))?;
@@ -486,17 +488,29 @@ impl FragmentCore {
                INNER JOIN frame_tree ON frames.parent_id = frame_tree.id
                WHERE frames.deleted_at IS NULL AND frame_tree.depth < {MAX_FRAME_TREE_DEPTH}
              ),
-             ranked AS (
+             memberships AS (
                SELECT
                  frame_tree.root_id AS root_id,
                  fragments.id AS fragment_id,
+                 fragments.captured_at AS captured_at,
                  row_number() OVER (
-                   PARTITION BY frame_tree.root_id
+                   PARTITION BY frame_tree.root_id, COALESCE(fragments.asset_id, fragments.id)
                    ORDER BY fragments.captured_at DESC, fragments.id DESC
-                 ) AS preview_rank
+                 ) AS asset_rank
                FROM fragments
                INNER JOIN frame_tree ON frame_tree.id = fragments.frame_id
                WHERE fragments.deleted_at IS NULL
+             ),
+             ranked AS (
+               SELECT
+                 root_id,
+                 fragment_id,
+                 row_number() OVER (
+                   PARTITION BY root_id
+                   ORDER BY captured_at DESC, fragment_id DESC
+                 ) AS preview_rank
+               FROM memberships
+               WHERE asset_rank = 1
              )
              {}",
             fragment_select_sql_with(
@@ -2244,11 +2258,16 @@ mod tests {
     }
 
     fn sample_png_bytes() -> Vec<u8> {
+        sample_png_bytes_seeded(0)
+    }
+
+    /// Distinct pixels per seed, so each seed imports as its own asset.
+    fn sample_png_bytes_seeded(seed: u8) -> Vec<u8> {
         let image = ImageBuffer::from_fn(24, 16, |x, y| {
             if (x + y) % 2 == 0 {
                 Rgba([255_u8, 64, 128, 255])
             } else {
-                Rgba([16_u8, 24, 32, 255])
+                Rgba([16_u8.wrapping_add(seed.wrapping_mul(29)), 24, 32, 255])
             }
         });
         let mut cursor = Cursor::new(Vec::new());
@@ -3659,18 +3678,13 @@ mod tests {
     #[test]
     fn frame_previews_return_latest_active_fragments_per_top_level_frame() {
         let temp = tempdir().expect("tempdir");
-        let source_path = temp.path().join("source.png");
-        std::fs::write(&source_path, sample_png_bytes()).expect("write source");
         let core = FragmentCore::new_at(temp.path().join("vault")).expect("core");
         let parent = core
             .create_frame(None, "Parent".to_string())
             .expect("create parent");
-        let children = (0..4)
-            .map(|index| {
-                core.create_frame(Some(parent.id.clone()), format!("Child {index}"))
-                    .expect("create child")
-            })
-            .collect::<Vec<_>>();
+        let child = core
+            .create_frame(Some(parent.id.clone()), "Child".to_string())
+            .expect("create child");
         let other = core
             .create_frame(None, "Other".to_string())
             .expect("create other");
@@ -3678,30 +3692,32 @@ mod tests {
             .create_frame(None, "Empty".to_string())
             .expect("create empty");
 
-        // One asset, one membership per Frame: parent, child 0, child 1, other, child 2, child 3.
-        let first = core
-            .import_image(
-                Some(parent.id.clone()),
-                source_path.to_string_lossy().to_string(),
-                Some("first".to_string()),
-            )
-            .expect("import first");
-        let mut memberships = vec![first.clone()];
-        for frame_id in [
-            children[0].id.clone(),
-            children[1].id.clone(),
-            other.id.clone(),
-            children[2].id.clone(),
-            children[3].id.clone(),
-        ] {
-            memberships.push(
-                core.add_existing_fragment_to_frame(first.id.clone(), Some(frame_id))
-                    .expect("add membership"),
+        // Five distinct assets, oldest to newest: parent, child, other, child, parent.
+        let mut imported = Vec::new();
+        for (index, frame_id) in [&parent.id, &child.id, &other.id, &child.id, &parent.id]
+            .into_iter()
+            .enumerate()
+        {
+            let source_path = temp.path().join(format!("source-{index}.png"));
+            std::fs::write(&source_path, sample_png_bytes_seeded(index as u8 + 1))
+                .expect("write source");
+            imported.push(
+                core.import_image(
+                    Some(frame_id.clone()),
+                    source_path.to_string_lossy().to_string(),
+                    Some(format!("asset {index}")),
+                )
+                .expect("import"),
             );
         }
+        // The newest asset is also linked into the child Frame: two memberships, one asset.
+        let linked = core
+            .add_existing_fragment_to_frame(imported[4].id.clone(), Some(child.id.clone()))
+            .expect("link into child");
+        assert_eq!(linked.asset_id, imported[4].asset_id);
         {
             let conn = core.conn().expect("conn");
-            for (index, fragment) in memberships.iter().enumerate() {
+            for (index, fragment) in imported.iter().chain([&linked]).enumerate() {
                 conn.execute(
                     "UPDATE fragments SET captured_at = ? WHERE id = ?",
                     params![format!("2026-01-0{}T00:00:00Z", index + 1), fragment.id],
@@ -3715,56 +3731,74 @@ mod tests {
                 .map(|fragment| fragment.id.clone())
                 .collect::<Vec<_>>()
         };
+        let preview_for = |previews: &[crate::models::FramePreview], frame_id: &str| {
+            previews
+                .iter()
+                .find(|preview| preview.frame_id == frame_id)
+                .map(|preview| preview.fragments.clone())
+        };
 
         let previews = core.list_frame_previews(3).expect("previews");
-        let parent_preview = previews
-            .iter()
-            .find(|preview| preview.frame_id == parent.id)
-            .expect("parent preview");
+        let parent_preview = preview_for(&previews, &parent.id).expect("parent preview");
         assert_eq!(
-            ids(&parent_preview.fragments),
+            ids(&parent_preview),
             vec![
-                memberships[5].id.clone(),
-                memberships[4].id.clone(),
-                memberships[2].id.clone(),
+                linked.id.clone(),
+                imported[3].id.clone(),
+                imported[1].id.clone(),
             ],
-            "nested memberships count toward the top-level Frame, newest first"
+            "nested memberships count toward the top-level Frame, newest first, \
+             and an asset linked into both the parent and its child appears once"
         );
-        let other_preview = previews
+        assert!(
+            !ids(&parent_preview).contains(&imported[4].id),
+            "the older membership of the linked asset must not take a second tile"
+        );
+        let distinct_assets = parent_preview
             .iter()
-            .find(|preview| preview.frame_id == other.id)
-            .expect("other preview");
+            .filter_map(|fragment| fragment.asset_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(distinct_assets.len(), 3);
         assert_eq!(
-            ids(&other_preview.fragments),
-            vec![memberships[3].id.clone()]
+            preview_for(&previews, &other.id)
+                .map(|fragments: Vec<crate::Fragment>| ids(&fragments)),
+            Some(vec![imported[2].id.clone()])
         );
-        assert!(previews.iter().all(|preview| preview.frame_id != empty.id));
-        assert!(previews
-            .iter()
-            .all(|preview| children.iter().all(|child| child.id != preview.frame_id)));
+        assert!(preview_for(&previews, &empty.id).is_none());
+        assert!(preview_for(&previews, &child.id).is_none());
 
-        core.delete_fragment_with_policy(memberships[5].id.clone(), Some(7))
-            .expect("trash newest");
+        // Trashing the link leaves the asset's older membership to take its tile.
+        core.delete_fragment_with_policy(linked.id.clone(), Some(7))
+            .expect("trash link");
         let after_trash = core.list_frame_previews(3).expect("previews after trash");
-        let parent_after = after_trash
-            .iter()
-            .find(|preview| preview.frame_id == parent.id)
-            .expect("parent preview after trash");
         assert_eq!(
-            ids(&parent_after.fragments),
-            vec![
-                memberships[4].id.clone(),
-                memberships[2].id.clone(),
-                memberships[1].id.clone(),
-            ]
+            preview_for(&after_trash, &parent.id)
+                .map(|fragments: Vec<crate::Fragment>| ids(&fragments)),
+            Some(vec![
+                imported[4].id.clone(),
+                imported[3].id.clone(),
+                imported[1].id.clone(),
+            ])
+        );
+        // Trashing that membership too drops the asset from the collage entirely.
+        core.delete_fragment_with_policy(imported[4].id.clone(), Some(7))
+            .expect("trash original");
+        let after_both = core.list_frame_previews(3).expect("previews after both");
+        assert_eq!(
+            preview_for(&after_both, &parent.id)
+                .map(|fragments: Vec<crate::Fragment>| ids(&fragments)),
+            Some(vec![
+                imported[3].id.clone(),
+                imported[1].id.clone(),
+                imported[0].id.clone(),
+            ])
         );
 
         let clamped = core.list_frame_previews(0).expect("clamped previews");
-        let parent_clamped = clamped
-            .iter()
-            .find(|preview| preview.frame_id == parent.id)
-            .expect("parent clamped");
-        assert_eq!(parent_clamped.fragments.len(), 1);
+        assert_eq!(
+            preview_for(&clamped, &parent.id).map(|fragments| fragments.len()),
+            Some(1)
+        );
     }
 
     #[test]
