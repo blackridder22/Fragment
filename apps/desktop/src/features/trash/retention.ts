@@ -81,3 +81,19 @@ export function estimateDeleteAfter(
   if (start === null) return null;
   return new Date(start + retention.days * DAY_MS).toISOString();
 }
+
+/**
+ * Whole days of retention left on a row, used to re-trash it with its original
+ * window when a restore is undone. The backend only accepts a number of days
+ * from now, so this is day-granular: a row with no date, or one whose date has
+ * passed, falls back to the policy or to one day. Never longer than the policy.
+ */
+export function remainingRetentionDays(
+  deleteAfter: string | null | undefined,
+  policyDays: number,
+  now: Date = new Date(),
+): number {
+  const days = deleteAfter ? daysUntil(deleteAfter, now) : null;
+  if (days === null) return policyDays;
+  return Math.max(1, Math.min(policyDays, days));
+}

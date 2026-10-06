@@ -23,7 +23,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ConfirmDialogView } from "../components/ConfirmDialog";
 import { ColorFilterControl } from "../features/colors/ColorFilterControl";
 import {
   createSelectionState,
@@ -41,15 +41,24 @@ import {
   canUndoRestore,
   previewRestoredFrameName,
   type EmptyTrashSummary,
+  type FrameDeleteReport,
+  type FrameRestoreReport,
   type RestoredFrameResult,
+  type RetrashFragment,
+  type RetrashFrame,
 } from "../features/trash/trash-actions";
+import {
+  runTrashBatch,
+  type TrashBatchFailure,
+  type TrashBatchPlan,
+} from "../features/trash/trash-batch";
 import {
   buildFragmentRows,
   buildFrameRows,
+  emptyTrashConsequence,
   fragmentRowKey,
   frameRowKey,
   pluralize,
-  sortByDeletedAt,
   trashSelectionSummary,
   type TrashFragmentRow,
   type TrashFrameRow,
@@ -61,44 +70,23 @@ import {
 } from "../features/trash/trash-session";
 import { useExitingRows } from "../features/trash/useExitingRows";
 import type { AssetSource } from "../lib/assets";
+import type { GalleryCard } from "../store/library-selectors";
+import type { TrashToast } from "../store/library-trash";
 import { PaginationFooter } from "./PaginationFooter";
 import { SelectionActionBar } from "./SelectionActionBar";
 
 export type { TrashSort } from "../features/trash/trash-model";
+export type { TrashToast } from "../store/library-trash";
 
 type MaybePromise = void | Promise<void>;
-
-export async function runRecoverableTrashAction(
-  action: () => MaybePromise,
-  onError: (error: unknown) => MaybePromise,
-): Promise<boolean> {
-  try {
-    await action();
-    return true;
-  } catch (caught) {
-    try {
-      await onError(caught);
-    } catch {
-      // Recovery reporting must never create a second unhandled rejection.
-    }
-    return false;
-  }
-}
-
-/** Feedback the page asks the shell to show; Undo is offered when reversible. */
-export type TrashToast = {
-  label: string;
-  tone: "restore" | "delete" | "neutral";
-  undo?: {
-    run: () => Promise<void>;
-    doneLabel: string;
-  };
-};
 
 type TrashDialog =
   | { kind: "restore"; fragmentIds: string[]; frames: Frame[] }
   | { kind: "delete-now"; fragmentIds: string[]; frames: Frame[] }
   | { kind: "empty" };
+
+/** A trashed Fragment row together with its precomputed card. */
+type TrashCardRow = TrashFragmentRow & { card: GalleryCard };
 
 export type TrashPageProps = {
   color?: ColorFilter | null;
@@ -108,20 +96,22 @@ export type TrashPageProps = {
   onRefreshColors?: () => void;
 
   /** Trashed Fragments loaded so far, in the server's deleted-date order. */
-  fragments: Fragment[];
+  items: GalleryCard[];
   /** Trashed Frames (roots of trashed trees). */
   frames: Frame[];
   /** Active Frames, used to predict restore name conflicts. */
   activeFrames?: readonly Frame[];
-  /** Server-side total of trashed Fragments. */
+  /** Server-side total of trashed Fragments matching the current filters. */
   fragmentTotal: number;
+  /** Everything in the Trash regardless of filters: what Empty Trash removes. */
+  vaultTotals?: { fragments: number; frames: number };
   hasMore?: boolean;
   loading: boolean;
   loaded?: boolean;
   retention: TrashRetention;
 
-  assetSourcesFor: (fragment: Fragment) => AssetSource[];
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
+  /** Name of a Frame by id, used for a trashed Frame's parent. */
   frameNameFor: (frameId: string) => string;
 
   /** Fragment sort is server-side; Frames sort locally. */
@@ -139,14 +129,14 @@ export type TrashPageProps = {
   /** Every trashed Fragment id matching the current filters, for Restore all. */
   onListAllFragmentIds?: () => Promise<string[]>;
 
-  onRestoreFragments: (ids: string[]) => Promise<void>;
-  onRestoreFrame: (frame: Frame) => Promise<RestoredFrameResult>;
-  onDeleteFragmentsNow: (ids: string[]) => Promise<void>;
-  onDeleteFrameNow: (frame: Frame) => Promise<void>;
+  onRestoreFragments: (ids: string[]) => Promise<unknown>;
+  onRestoreFrames: (frames: Frame[]) => Promise<FrameRestoreReport>;
+  onDeleteFragmentsNow: (ids: string[]) => Promise<unknown>;
+  onDeleteFramesNow: (frames: Frame[]) => Promise<FrameDeleteReport>;
   onEmptyTrash: () => Promise<EmptyTrashSummary | void>;
-  /** Undo of a restore: the rows go back to Trash. */
-  onTrashFragments?: (ids: string[]) => Promise<void>;
-  onTrashFrame?: (frame: Frame) => Promise<void>;
+  /** Undo of a restore: the rows go back to Trash with their time left. */
+  onTrashFragments?: (entries: RetrashFragment[]) => Promise<void>;
+  onTrashFrames?: (entries: RetrashFrame[]) => Promise<void>;
   onNotify: (toast: TrashToast) => void;
   onActionError?: (error: unknown) => MaybePromise;
 };
@@ -174,15 +164,15 @@ export function TrashPage({
   colorResultsChanged,
   onColorChange,
   onRefreshColors,
-  fragments,
+  items,
   frames,
   activeFrames = [],
   fragmentTotal,
+  vaultTotals,
   hasMore = false,
   loading,
   loaded = true,
   retention,
-  assetSourcesFor,
   onAssetFallback,
   frameNameFor,
   sort: controlledSort,
@@ -196,12 +186,12 @@ export function TrashPage({
   onOpen,
   onListAllFragmentIds,
   onRestoreFragments,
-  onRestoreFrame,
+  onRestoreFrames,
   onDeleteFragmentsNow,
-  onDeleteFrameNow,
+  onDeleteFramesNow,
   onEmptyTrash,
   onTrashFragments,
-  onTrashFrame,
+  onTrashFrames,
   onNotify,
   onActionError,
 }: TrashPageProps) {
@@ -230,9 +220,14 @@ export function TrashPage({
     setExitDuration(readMotionDuration("--dur-base", 200));
   }, []);
 
-  const fragmentRows = useMemo(
-    () => sortByDeletedAt(buildFragmentRows(fragments), fragmentSort),
-    [fragmentSort, fragments],
+  // The Trash sort is part of the page query, so the rows arrive in order;
+  // re-sorting here would fight the server (and the preview's demo selector).
+  const fragmentRows = useMemo<TrashCardRow[]>(
+    () =>
+      buildFragmentRows(items.map((card) => card.fragment)).map(
+        (row, index) => ({ ...row, card: items[index] }),
+      ),
+    [items],
   );
   const frameRows = useMemo(
     () => buildFrameRows(frames, frameSort, retention),
@@ -373,103 +368,126 @@ export function TrashPage({
     openDialog({ kind: "restore", fragmentIds: ids, frames: [] });
   }
 
-  async function runRestore(fragmentIds: string[], frameList: Frame[]) {
-    const fragmentKeys = fragmentIds.map(fragmentRowKey);
-    const frameKeys = frameList.map((frame) => frameRowKey(frame.id));
-    const animate = fragmentKeys.length + frameKeys.length <= MAX_ANIMATED_ROWS;
-    fragmentExit.holdRows(fragmentKeys);
-    frameExit.holdRows(frameKeys);
-
-    const results: RestoredFrameResult[] = [];
-    const releasedFrameKeys = new Set<string>();
-    let fragmentsDone = fragmentIds.length === 0;
-    try {
-      if (fragmentIds.length > 0) {
-        await onRestoreFragments(fragmentIds);
-        fragmentsDone = true;
-        fragmentExit.releaseRows(fragmentKeys, animate);
-      }
-      for (const frame of frameList) {
-        results.push(await onRestoreFrame(frame));
-        const key = frameRowKey(frame.id);
-        releasedFrameKeys.add(key);
-        frameExit.releaseRows([key], animate);
-      }
-    } catch (caught) {
-      if (!fragmentsDone) fragmentExit.releaseRows(fragmentKeys, false);
-      frameExit.releaseRows(
-        frameKeys.filter((key) => !releasedFrameKeys.has(key)),
-        false,
-      );
-      throw caught;
-    }
-
-    const summary = trashSelectionSummary(fragmentIds.length, frameList.length);
-    const renamed = results.filter((result) => result.renamedFrom);
-    let label = `Restored ${summary}`;
-    if (renamed.length === 1 && results.length === 1 && fragmentIds.length === 0) {
-      label = `Restored “${renamed[0].renamedFrom}” as “${renamed[0].frame.name}”`;
-    } else if (renamed.length > 0) {
-      label += ` · ${renamed
-        .map((result) => `${result.renamedFrom} is now ${result.frame.name}`)
-        .join(", ")}`;
-    }
-
-    const undoable =
-      canUndoRestore(retention) &&
-      (fragmentIds.length === 0 || Boolean(onTrashFragments)) &&
-      (results.length === 0 || Boolean(onTrashFrame));
-    onNotify({
-      label,
-      tone: "restore",
-      undo: undoable
-        ? {
-            doneLabel: `Moved ${summary} back to Trash`,
-            run: async () => {
-              if (fragmentIds.length > 0) await onTrashFragments?.(fragmentIds);
-              for (const result of results) await onTrashFrame?.(result.frame);
-            },
-          }
-        : undefined,
-    });
-    clearSelections();
+  /** Row exit handlers shared by Restore and Delete now. */
+  function exitHandlers(plan: TrashBatchPlan) {
+    const animate = plan.fragmentIds.length + plan.frames.length <= MAX_ANIMATED_ROWS;
+    fragmentExit.holdRows(plan.fragmentIds.map(fragmentRowKey));
+    frameExit.holdRows(plan.frames.map((frame) => frameRowKey(frame.id)));
+    return {
+      onFragmentsSettled: (ids: string[], completed: boolean) =>
+        fragmentExit.releaseRows(ids.map(fragmentRowKey), completed && animate),
+      onFramesSettled: (completed: Frame[], failed: Frame[]) => {
+        frameExit.releaseRows(
+          completed.map((frame) => frameRowKey(frame.id)),
+          animate,
+        );
+        frameExit.releaseRows(
+          failed.map((frame) => frameRowKey(frame.id)),
+          false,
+        );
+      },
+    };
   }
 
-  async function runDeleteNow(fragmentIds: string[], frameList: Frame[]) {
-    const fragmentKeys = fragmentIds.map(fragmentRowKey);
-    const frameKeys = frameList.map((frame) => frameRowKey(frame.id));
-    const animate = fragmentKeys.length + frameKeys.length <= MAX_ANIMATED_ROWS;
-    fragmentExit.holdRows(fragmentKeys);
-    frameExit.holdRows(frameKeys);
+  function failedSuffix(failure: TrashBatchFailure | null) {
+    if (!failure) return "";
+    const { fragmentIds, frames: frameList } = failure.remaining;
+    return ` · ${trashSelectionSummary(fragmentIds.length, frameList.length)} failed`;
+  }
 
-    const releasedFrameKeys = new Set<string>();
-    let fragmentsDone = fragmentIds.length === 0;
-    try {
-      if (fragmentIds.length > 0) {
-        await onDeleteFragmentsNow(fragmentIds);
-        fragmentsDone = true;
-        fragmentExit.releaseRows(fragmentKeys, animate);
-      }
-      for (const frame of frameList) {
-        await onDeleteFrameNow(frame);
-        const key = frameRowKey(frame.id);
-        releasedFrameKeys.add(key);
-        frameExit.releaseRows([key], animate);
-      }
-    } catch (caught) {
-      if (!fragmentsDone) fragmentExit.releaseRows(fragmentKeys, false);
-      frameExit.releaseRows(
-        frameKeys.filter((key) => !releasedFrameKeys.has(key)),
-        false,
-      );
-      throw caught;
-    }
-
-    onNotify({
-      label: `Deleted ${trashSelectionSummary(fragmentIds.length, frameList.length)} forever`,
-      tone: "delete",
+  async function runRestore(
+    plan: TrashBatchPlan,
+  ): Promise<TrashBatchFailure | null> {
+    // Captured before the rows leave the page, for the Undo re-trash window.
+    const fragmentDeleteAfter = new Map(
+      fragmentRows.map((row) => [row.id, row.deleteAfter]),
+    );
+    const frameDeleteAfter = new Map(
+      frameRows.map((row) => [row.id, row.deleteAfter]),
+    );
+    const { done, failure } = await runTrashBatch<RestoredFrameResult>(plan, {
+      runFragments: onRestoreFragments,
+      runFrames: async (frameList) => {
+        const report = await onRestoreFrames(frameList);
+        return { done: report.restored, failed: report.failed };
+      },
+      frameOf: (result) => result.frame,
+      ...exitHandlers(plan),
     });
-    clearSelections();
+
+    if (done.fragmentIds.length + done.frames.length > 0) {
+      const summary = trashSelectionSummary(
+        done.fragmentIds.length,
+        done.frames.length,
+      );
+      const renamed = done.frames.filter((result) => result.renamedFrom);
+      let label = `Restored ${summary}`;
+      if (
+        renamed.length === 1 &&
+        done.frames.length === 1 &&
+        done.fragmentIds.length === 0
+      ) {
+        label = `Restored “${renamed[0].renamedFrom}” as “${renamed[0].frame.name}”`;
+      } else if (renamed.length > 0) {
+        label += ` · ${renamed
+          .map((result) => `${result.renamedFrom} is now ${result.frame.name}`)
+          .join(", ")}`;
+      }
+      label += failedSuffix(failure);
+
+      const undoable =
+        canUndoRestore(retention) &&
+        (done.fragmentIds.length === 0 || Boolean(onTrashFragments)) &&
+        (done.frames.length === 0 || Boolean(onTrashFrames));
+      const retrashFragments: RetrashFragment[] = done.fragmentIds.map(
+        (id) => ({ id, deleteAfter: fragmentDeleteAfter.get(id) ?? null }),
+      );
+      const retrashFrames: RetrashFrame[] = done.frames.map((result) => ({
+        ...result,
+        deleteAfter: frameDeleteAfter.get(result.frame.id) ?? null,
+      }));
+      onNotify({
+        label,
+        tone: failure ? "error" : "success",
+        undo: undoable
+          ? {
+              doneLabel: `Moved ${summary} back to Trash`,
+              run: async () => {
+                if (retrashFragments.length > 0) {
+                  await onTrashFragments?.(retrashFragments);
+                }
+                if (retrashFrames.length > 0) {
+                  await onTrashFrames?.(retrashFrames);
+                }
+              },
+            }
+          : undefined,
+      });
+    }
+    if (!failure) clearSelections();
+    return failure;
+  }
+
+  async function runDeleteNow(
+    plan: TrashBatchPlan,
+  ): Promise<TrashBatchFailure | null> {
+    const { done, failure } = await runTrashBatch<Frame>(plan, {
+      runFragments: onDeleteFragmentsNow,
+      runFrames: async (frameList) => {
+        const report = await onDeleteFramesNow(frameList);
+        return { done: report.deleted, failed: report.failed };
+      },
+      frameOf: (frame) => frame,
+      ...exitHandlers(plan),
+    });
+    if (done.fragmentIds.length + done.frames.length > 0) {
+      onNotify({
+        label: `Deleted ${trashSelectionSummary(done.fragmentIds.length, done.frames.length)} forever${failedSuffix(failure)}`,
+        tone: failure ? "error" : "success",
+      });
+    }
+    if (!failure) clearSelections();
+    return failure;
   }
 
   async function runEmpty() {
@@ -488,15 +506,15 @@ export function TrashPage({
     }
     fragmentExit.releaseRows(fragmentKeys, animate);
     frameExit.releaseRows(frameKeys, animate);
+    const totals = vaultTotals ?? { fragments: fragmentCount, frames: frameCount };
     const removed = summary
       ? trashSelectionSummary(summary.fragments, summary.frames)
-      : trashSelectionSummary(fragmentCount, frameCount);
+      : trashSelectionSummary(totals.fragments, totals.frames);
     onNotify({
       label:
         removed === "nothing"
           ? "Trash emptied"
           : `Trash emptied · ${removed} removed`,
-      tone: "delete",
     });
     clearSelections();
   }
@@ -506,14 +524,29 @@ export function TrashPage({
     setDialogPending(true);
     setDialogError(null);
     try {
-      if (dialog.kind === "restore") {
-        await runRestore(dialog.fragmentIds, dialog.frames);
-      } else if (dialog.kind === "delete-now") {
-        await runDeleteNow(dialog.fragmentIds, dialog.frames);
-      } else {
+      if (dialog.kind === "empty") {
         await runEmpty();
+        setDialog(null);
+        return;
       }
-      setDialog(null);
+      const plan = { fragmentIds: dialog.fragmentIds, frames: dialog.frames };
+      const failure =
+        dialog.kind === "restore"
+          ? await runRestore(plan)
+          : await runDeleteNow(plan);
+      if (!failure) {
+        setDialog(null);
+        return;
+      }
+      // Keep only what still needs doing, so a retry never resubmits ids the
+      // backend already processed.
+      setDialog({ kind: dialog.kind, ...failure.remaining });
+      setDialogError(failure.message);
+      try {
+        await onActionError?.(failure.error);
+      } catch {
+        // Reporting must not mask the original failure shown in the dialog.
+      }
     } catch (caught) {
       setDialogError(errorMessage(caught));
       try {
@@ -714,9 +747,7 @@ export function TrashPage({
               >
                 {fragmentExit.renderedRows.map(({ row, pending, exiting }) => (
                   <FragmentRow
-                    assetSources={assetSourcesFor(row.fragment)}
                     exiting={exiting}
-                    frameNameFor={frameNameFor}
                     key={row.key}
                     pending={pending}
                     row={row}
@@ -774,11 +805,11 @@ export function TrashPage({
           activeFrames={activeFrames}
           dialog={dialog}
           error={dialogError}
-          fragmentById={fragmentByIdFrom(fragments)}
+          fragmentById={fragmentByIdFrom(items)}
           frameNameFor={frameNameFor}
-          loadedCounts={{ fragments: fragmentCount, frames: frameCount }}
           pending={dialogPending}
           retention={retention}
+          vaultTotals={vaultTotals ?? { fragments: fragmentCount, frames: frameCount }}
           onCancel={closeDialog}
           onConfirm={() => void confirmDialog()}
         />
@@ -787,8 +818,8 @@ export function TrashPage({
   );
 }
 
-function fragmentByIdFrom(fragments: readonly Fragment[]) {
-  return new Map(fragments.map((fragment) => [fragment.id, fragment]));
+function fragmentByIdFrom(items: readonly GalleryCard[]) {
+  return new Map(items.map((card) => [card.fragment.id, card.fragment]));
 }
 
 type TrashSectionProps = {
@@ -1077,11 +1108,9 @@ function FrameRow({
 }
 
 type FragmentRowProps = {
-  assetSources: AssetSource[];
   exiting: boolean;
-  frameNameFor: (frameId: string) => string;
   pending: boolean;
-  row: TrashFragmentRow;
+  row: TrashCardRow;
   selected: boolean;
   onAssetFallback?: (relativePath: string) => Promise<string | null>;
   onDeleteNow: () => void;
@@ -1091,9 +1120,7 @@ type FragmentRowProps = {
 };
 
 function FragmentRow({
-  assetSources,
   exiting,
-  frameNameFor,
   pending,
   row,
   selected,
@@ -1103,7 +1130,7 @@ function FragmentRow({
   onRestore,
   onToggle,
 }: FragmentRowProps) {
-  const from = frameNameFor(row.fragment.frameId);
+  const from = row.card.folderName;
   return (
     <RowShell
       exiting={exiting}
@@ -1118,7 +1145,7 @@ function FragmentRow({
         <TrashThumbnail
           alt={row.name}
           onAssetFallback={onAssetFallback}
-          sources={assetSources}
+          sources={row.card.assetSources}
         />
       </div>
       <div className="v7-trash-cell v7-trash-name-cell" role="cell">
@@ -1208,9 +1235,10 @@ type TrashConfirmDialogProps = {
   error: string | null;
   fragmentById: Map<string, Fragment>;
   frameNameFor: (frameId: string) => string;
-  loadedCounts: { fragments: number; frames: number };
   pending: boolean;
   retention: TrashRetention;
+  /** Unfiltered totals: Empty Trash removes everything, not the visible rows. */
+  vaultTotals: { fragments: number; frames: number };
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -1221,28 +1249,28 @@ function TrashConfirmDialog({
   error,
   fragmentById,
   frameNameFor,
-  loadedCounts,
   pending,
   retention,
+  vaultTotals,
   onCancel,
   onConfirm,
 }: TrashConfirmDialogProps) {
+  const resolve = (confirmed: boolean) => (confirmed ? onConfirm() : onCancel());
+
   if (dialog.kind === "empty") {
-    const summary = trashSelectionSummary(
-      loadedCounts.fragments,
-      loadedCounts.frames,
-    );
     return (
-      <ConfirmDialog
-        confirmLabel="Empty Trash"
-        description={`Permanently delete ${summary}, including anything not loaded yet, and the image files no active Fragment uses. This cannot be undone.`}
-        destructive
+      <ConfirmDialogView
         error={error}
         pending={pending}
         pendingLabel="Emptying…"
-        title="Empty Trash?"
-        onCancel={onCancel}
-        onConfirm={onConfirm}
+        request={{
+          title: "Empty Trash?",
+          message: emptyTrashConsequence(vaultTotals),
+          confirmLabel: "Empty Trash",
+          cancelLabel: "Cancel",
+          destructive: true,
+        }}
+        onResolve={resolve}
       />
     );
   }
@@ -1271,16 +1299,18 @@ function TrashConfirmDialog({
       "and the image files no other Fragment uses. This cannot be undone.",
     ].join("");
     return (
-      <ConfirmDialog
-        confirmLabel="Delete now"
-        description={consequence}
-        destructive
+      <ConfirmDialogView
         error={error}
         pending={pending}
         pendingLabel="Deleting…"
-        title={`Delete ${summary} now?`}
-        onCancel={onCancel}
-        onConfirm={onConfirm}
+        request={{
+          title: `Delete ${summary} now?`,
+          message: consequence,
+          confirmLabel: "Delete now",
+          cancelLabel: "Cancel",
+          destructive: true,
+        }}
+        onResolve={resolve}
       />
     );
   }
@@ -1311,9 +1341,7 @@ function TrashConfirmDialog({
       : " Retention is off, so this cannot be undone afterwards.";
 
   return (
-    <ConfirmDialog
-      confirmLabel={fragmentCount + frameCount > 1 ? `Restore ${(fragmentCount + frameCount).toLocaleString()}` : "Restore"}
-      description={`${subject} will leave the Trash and return to ${destination}${frameCount > 0 ? ", together with any nested Frames" : ""}.${undoHint}`}
+    <ConfirmDialogView
       detail={
         conflicts.length > 0 ? (
           <ul className="v7-trash-conflicts">
@@ -1329,9 +1357,17 @@ function TrashConfirmDialog({
       error={error}
       pending={pending}
       pendingLabel="Restoring…"
-      title={`Restore ${summary}?`}
-      onCancel={onCancel}
-      onConfirm={onConfirm}
+      request={{
+        title: `Restore ${summary}?`,
+        message: `${subject} will leave the Trash and return to ${destination}${frameCount > 0 ? ", together with any nested Frames" : ""}.${undoHint}`,
+        confirmLabel:
+          fragmentCount + frameCount > 1
+            ? `Restore ${(fragmentCount + frameCount).toLocaleString()}`
+            : "Restore",
+        cancelLabel: "Cancel",
+        destructive: false,
+      }}
+      onResolve={resolve}
     />
   );
 }

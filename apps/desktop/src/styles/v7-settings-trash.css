@@ -1,25 +1,11 @@
 .v7-settings-page {
-  --v7-canvas: var(--color-canvas, #080a0a);
-  --v7-canvas-soft: var(--color-canvas-soft, #111413);
-  --v7-surface: var(--color-surface, rgb(26 29 27 / 74%));
-  --v7-surface-strong: var(--color-surface-strong, rgb(32 36 33 / 94%));
-  --v7-surface-hover: var(--color-surface-hover, rgb(44 50 46 / 90%));
-  --v7-border: var(--color-border, rgb(255 255 255 / 10.5%));
-  --v7-border-strong: var(--color-border-strong, rgb(255 255 255 / 18%));
-  --v7-text: var(--color-text, #f4f7f2);
-  --v7-text-muted: var(--color-text-muted, #b3bab0);
-  --v7-text-faint: var(--color-text-faint, #7f887f);
-  --v7-focus: var(--color-focus, #89f7ff);
-  --v7-primary: var(--color-primary, #79e1a2);
-  --v7-on-primary: var(--color-on-primary, #061b11);
-  --v7-danger: var(--color-danger, #f27b72);
   background: var(--v7-canvas);
   color: var(--v7-text);
   container-type: inline-size;
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 20px;
   min-height: 0;
@@ -75,7 +61,7 @@
 .v7-settings-title-stack h1,
 .v7-settings-heading h2 {
   color: var(--v7-text);
-  font-family: var(--font-display, "SF Pro Display", system-ui, sans-serif);
+  font-family: var(--font-display);
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -375,7 +361,7 @@
   height: 22px;
   justify-content: flex-start;
   padding: 2px;
-  transition: background-color 120ms ease;
+  transition: background-color var(--dur-fast) var(--ease-out);
   width: 38px;
 }
 
@@ -390,8 +376,8 @@
   display: block;
   height: 18px;
   transition:
-    background-color 120ms ease,
-    transform 120ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   width: 18px;
 }
 
@@ -472,28 +458,13 @@ button.v7-settings-status:hover:not(:disabled) {
 }
 
 .v7-settings-status-spinner {
-  animation: v7-settings-status-spin 800ms linear infinite;
+  animation: v7-settings-status-spin var(--dur-spin) linear infinite;
 }
 
 @keyframes v7-settings-status-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-.v7-settings-shortcut {
-  background: var(--v7-surface-strong);
-  border: 1px solid var(--v7-border);
-  border-bottom-color: var(--v7-border-strong);
-  border-radius: 6px;
-  color: var(--v7-text-muted);
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  min-width: 42px;
-  padding: 4px 8px;
-  text-align: center;
 }
 
 .v7-settings-shortcut-editor {
@@ -516,7 +487,7 @@ button.v7-settings-status:hover:not(:disabled) {
   cursor: default;
   display: inline-flex;
   flex: 0 0 auto;
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   height: 30px;
@@ -525,11 +496,11 @@ button.v7-settings-status:hover:not(:disabled) {
   min-width: 104px;
   padding-inline: 10px;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 80ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   white-space: nowrap;
 }
 
@@ -592,9 +563,9 @@ button.v7-settings-status:hover:not(:disabled) {
   justify-content: center;
   padding: 0;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
   width: 28px;
 }
 
@@ -698,14 +669,5 @@ button.v7-settings-status:hover:not(:disabled) {
   .v7-settings-shortcut-error {
     max-width: none;
     text-align: left;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .v7-settings-shortcut-control,
-  .v7-settings-shortcut-reset,
-  .v7-settings-switch,
-  .v7-settings-switch > span {
-    transition: none;
   }
 }

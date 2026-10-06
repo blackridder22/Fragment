@@ -39,10 +39,14 @@ export function fragmentDisplayName(fragment: Pick<Fragment, "title">): string {
 }
 
 export function frameDisplayName(frame: Pick<Frame, "name">): string {
-  return frame.name.trim() || "Untitled Frame";
+  return frame.name.trim() || "Unnamed Frame";
 }
 
-/** Keeps the server's deleted-date order; the page never re-sorts Fragments. */
+/**
+ * Keeps the server's deleted-date order: the Trash sort is part of the page
+ * query key, so the page never re-sorts Fragments (`sortByDeletedAt` is for
+ * Frames, which arrive unsorted, and for the browser preview's demo rows).
+ */
 export function buildFragmentRows(
   fragments: readonly Fragment[],
 ): TrashFragmentRow[] {
@@ -111,6 +115,14 @@ export function trashSelectionSummary(
   if (fragmentCount > 0) parts.push(pluralize(fragmentCount, "Fragment"));
   if (frameCount > 0) parts.push(pluralize(frameCount, "Frame"));
   return parts.join(" and ") || "nothing";
+}
+
+/** The Empty Trash consequence: it removes everything, not the visible rows. */
+export function emptyTrashConsequence(totals: {
+  fragments: number;
+  frames: number;
+}): string {
+  return `This empties the whole Trash: ${trashSelectionSummary(totals.fragments, totals.frames)}, including anything hidden by the current filter or not loaded yet, and the image files no active Fragment uses. This cannot be undone.`;
 }
 
 export function normalizeFrameName(name: string): string {

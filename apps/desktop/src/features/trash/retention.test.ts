@@ -4,6 +4,7 @@ import {
   daysUntil,
   deletionLabel,
   estimateDeleteAfter,
+  remainingRetentionDays,
   retentionFromDeletePolicy,
   retentionSummary,
 } from "./retention";
@@ -60,5 +61,19 @@ describe("retention policy", () => {
     );
     expect(estimateDeleteAfter(deletedAt, { kind: "forever" })).toBeNull();
     expect(estimateDeleteAfter("bad", { kind: "days", days: 7 })).toBeNull();
+  });
+});
+
+describe("retention carried through Undo", () => {
+  it("re-trashes with the whole days a row had left, never longer than the policy", () => {
+    const inFiveDays = new Date(now.getTime() + 5 * DAY_MS - 60_000).toISOString();
+    const inFortyDays = new Date(now.getTime() + 40 * DAY_MS).toISOString();
+    const yesterday = new Date(now.getTime() - DAY_MS).toISOString();
+
+    expect(remainingRetentionDays(inFiveDays, 31, now)).toBe(5);
+    expect(remainingRetentionDays(inFortyDays, 31, now)).toBe(31);
+    expect(remainingRetentionDays(yesterday, 31, now)).toBe(1);
+    expect(remainingRetentionDays(null, 14, now)).toBe(14);
+    expect(remainingRetentionDays("bad", 14, now)).toBe(14);
   });
 });

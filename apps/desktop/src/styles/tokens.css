@@ -76,46 +76,31 @@
   --color-text: var(--theme-text);
   --color-text-muted: var(--theme-text-muted);
   --color-text-faint: var(--theme-text-faint);
-  --color-shadow: var(--theme-shadow-color);
   --color-focus: var(--theme-focus);
-  --color-focus-strong: var(--theme-focus-strong);
-  --color-on-focus: var(--theme-on-focus);
   --color-primary: var(--theme-primary);
   --color-primary-strong: var(--theme-primary-strong);
   --color-on-primary: var(--theme-on-primary);
-  --color-success: var(--theme-success);
-  --color-warning: var(--theme-warning);
   --color-danger: var(--theme-danger);
 
   /* Legacy aliases remain stable while the v7 UI migrates to semantic roles. */
   --canvas: var(--theme-canvas);
   --canvas-soft: var(--theme-canvas-soft);
-  --bg: var(--theme-canvas);
-  --bg-soft: var(--theme-canvas-soft);
   --surface: var(--theme-surface);
   --surface-strong: var(--theme-surface-strong);
   --surface-hover: var(--theme-surface-hover);
   --line: var(--theme-border);
   --line-strong: var(--theme-border-strong);
-  --border: var(--theme-border);
   --border-strong: var(--theme-border-strong);
   --text: var(--theme-text);
   --muted: var(--theme-text-muted);
   --subtle: var(--theme-text-faint);
-  --text-faint: var(--theme-text-faint);
   --accent: var(--theme-primary);
   --accent-strong: var(--theme-primary-strong);
   --accent-ink: var(--theme-on-primary);
   --primary: var(--theme-primary);
   --primary-strong: var(--theme-primary-strong);
-  --on-primary: var(--theme-on-primary);
-  --warm: var(--theme-warning);
-  --danger: var(--theme-danger);
   --focus: var(--theme-focus);
-  --success: var(--theme-success);
-  --warning: var(--theme-warning);
   --neon: var(--theme-focus);
-  --shadow: var(--theme-shadow);
   --glass-shadow: var(--theme-glass-shadow);
   --pressed-shadow: var(--theme-pressed-shadow);
 
@@ -124,33 +109,6 @@
   --radius-md: 14px;
   --radius-lg: 22px;
   --radius-pill: 999px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-12: 48px;
-  --space-16: 64px;
-  --space-24: 96px;
-  --text-11: 11px;
-  --text-13: 13px;
-  --text-15: 15px;
-  --text-18: 18px;
-  --text-22: 22px;
-  --text-28: 28px;
-  --text-34: 34px;
-  --line-16: 16px;
-  --line-20: 20px;
-  --line-24: 24px;
-  --line-28: 28px;
-  --line-34: 34px;
-  --line-40: 40px;
-  --window-bar-height: 48px;
-  --page-bar-height: 68px;
-  --sidebar-width: 240px;
-  --inspector-width: 320px;
-  --control-height: 32px;
   --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
     "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
@@ -158,45 +116,6 @@
     -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
     "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
   --font: var(--font-sans);
-  --font-accent: "Caveat", "Brush Script MT", cursive;
-
-  /* Motion tokens (shared contract with wt-00). Pages animate transform and
-     opacity only, over these durations and curves. */
-  --dur-fast: 120ms;
-  --dur-base: 200ms;
-  --dur-slow: 320ms;
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --ease-spring: linear(
-    0,
-    0.006,
-    0.025 2.8%,
-    0.101 6.1%,
-    0.539 18.9%,
-    0.721 25.3%,
-    0.849 31.5%,
-    0.937 38.1%,
-    0.968 41.8%,
-    0.991 45.7%,
-    1.006 50.1%,
-    1.015 55%,
-    1.017 63.9%,
-    1.001
-  );
-}
-
-@media (prefers-reduced-motion: reduce) {
-  :root {
-    --dur-fast: 0ms;
-    --dur-base: 0ms;
-    --dur-slow: 0ms;
-  }
-}
-
-html[data-reduce-motion="true"] {
-  --dur-fast: 0ms;
-  --dur-base: 0ms;
-  --dur-slow: 0ms;
 }
 
 :root[data-theme="light"] {
@@ -229,16 +148,46 @@ html[data-reduce-motion="true"] {
     inset 0 4px 14px rgb(8 10 10 / 14%), inset 0 1px 0 rgb(255 255 255 / 68%);
 }
 
-html[data-reduce-motion="true"] {
-  scroll-behavior: auto;
+/* Motion tokens. Transitions and animations use these; nothing hard-codes a duration. */
+:root {
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --dur-spin: 800ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: linear(
+    0,
+    0.006,
+    0.025 2.8%,
+    0.101 6.1%,
+    0.539 18.9%,
+    0.721 25.3%,
+    0.849 31.5%,
+    0.937 38.1%,
+    0.968 41.8%,
+    0.991 45.7%,
+    1.006 50.1%,
+    1.015 55%,
+    1.017 63.9%,
+    1.001
+  );
 }
 
-html[data-reduce-motion="true"] *,
-html[data-reduce-motion="true"] *::before,
-html[data-reduce-motion="true"] *::after {
-  animation-delay: 0ms !important;
-  animation-duration: 1ms !important;
-  animation-iteration-count: 1 !important;
-  scroll-behavior: auto !important;
-  transition-duration: 1ms !important;
+/* Reduced motion zeroes the durations instead of overriding every element. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+    --dur-spin: 0ms;
+  }
+}
+
+html[data-reduce-motion="true"] {
+  --dur-fast: 0ms;
+  --dur-base: 0ms;
+  --dur-slow: 0ms;
+  --dur-spin: 0ms;
+  scroll-behavior: auto;
 }

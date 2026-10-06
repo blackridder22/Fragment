@@ -53,7 +53,9 @@ function cleanNumber(value: number | null | undefined) {
 export function normalizeFragmentFilter(
   filter: FragmentFilter,
 ): FragmentFilter {
-  const tags = [...new Set((filter.tags ?? []).map(cleanText).filter(Boolean))] as string[];
+  const tags = [
+    ...new Set((filter.tags ?? []).map(cleanText).filter(Boolean)),
+  ] as string[];
   const mimeTypes = [
     ...new Set((filter.mimeTypes ?? []).map(cleanText).filter(Boolean)),
   ] as string[];

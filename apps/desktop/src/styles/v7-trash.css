@@ -2,21 +2,6 @@
    the user acted on; nothing animates on initial load. */
 
 .v7-trash-page {
-  --v7-canvas: var(--color-canvas, #080a0a);
-  --v7-canvas-soft: var(--color-canvas-soft, #111413);
-  --v7-surface: var(--color-surface, rgb(26 29 27 / 74%));
-  --v7-surface-strong: var(--color-surface-strong, rgb(32 36 33 / 94%));
-  --v7-surface-hover: var(--color-surface-hover, rgb(44 50 46 / 90%));
-  --v7-border: var(--color-border, rgb(255 255 255 / 10.5%));
-  --v7-border-strong: var(--color-border-strong, rgb(255 255 255 / 18%));
-  --v7-text: var(--color-text, #f4f7f2);
-  --v7-text-muted: var(--color-text-muted, #b3bab0);
-  --v7-text-faint: var(--color-text-faint, #7f887f);
-  --v7-focus: var(--color-focus, #89f7ff);
-  --v7-primary: var(--color-primary, #79e1a2);
-  --v7-primary-strong: var(--color-primary-strong, #b3ffc9);
-  --v7-on-primary: var(--color-on-primary, #061b11);
-  --v7-danger: var(--color-danger, #f27b72);
   --v7-trash-row-height: 72px;
   background: var(--v7-canvas);
   color: var(--v7-text);
@@ -24,7 +9,7 @@
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
-  font-family: var(--font-sans, "SF Pro Text", system-ui, sans-serif);
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 20px;
   min-height: 0;
@@ -74,7 +59,7 @@
 
 .v7-trash-title-stack h1 {
   color: var(--v7-text);
-  font-family: var(--font-display, "SF Pro Display", system-ui, sans-serif);
+  font-family: var(--font-display);
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -716,7 +701,7 @@
 }
 
 .v7-trash-spinner {
-  animation: v7-spin 800ms linear infinite;
+  animation: v7-spin var(--dur-spin) linear infinite;
   border: 2px solid var(--v7-border-strong);
   border-radius: 999px;
   border-top-color: var(--v7-primary);
@@ -730,164 +715,18 @@
   }
 }
 
-/* Confirm dialog details (shared ConfirmDialog; styles move with it) ---- */
+/* Restore conflicts listed inside the shared ConfirmDialogView ----------- */
 
-.v7-app .v7-confirm-dialog .v7-trash-conflicts {
-  color: var(--v7-text-muted, #b3bab0);
+.v7-app .fragment-confirm-dialog .v7-trash-conflicts {
+  color: var(--v7-text-muted);
   font-size: 12px;
   line-height: 18px;
-  margin: 12px 0 0;
+  margin: 0;
   padding-left: 18px;
 }
 
-.v7-app .v7-confirm-dialog .v7-trash-conflicts strong {
-  color: var(--v7-text, #f4f7f2);
-}
-
-.v7-app .v7-confirm-dialog .v7-confirm-error {
-  color: var(--v7-danger, #f27b72);
-  font-size: 12px;
-  line-height: 18px;
-  margin: 12px 0 0;
-}
-
-/* Undo toast (shell feedback surface) --------------------------------- */
-
-.v7-undo-toast {
-  align-items: center;
-  animation: v7-undo-toast-enter var(--dur-base) var(--ease-out);
-  background: var(--color-surface-strong, rgb(32 36 33 / 98%));
-  border: 1px solid var(--color-border-strong, rgb(255 255 255 / 18%));
-  border-radius: 14px;
-  bottom: 24px;
-  box-shadow: 0 18px 48px rgb(0 0 0 / 46%);
-  color: var(--color-text, #f4f7f2);
-  display: flex;
-  gap: 8px;
-  min-height: 52px;
-  max-width: min(460px, calc(100vw - 48px));
-  padding: 8px;
-  position: fixed;
-  right: 24px;
-  z-index: 160;
-}
-
-@keyframes v7-undo-toast-enter {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.v7-undo-toast[data-pending="true"] {
-  border-color: rgb(121 225 162 / 34%);
-}
-
-.v7-undo-icon {
-  align-items: center;
-  background: rgb(242 123 114 / 10%);
-  border: 1px solid rgb(242 123 114 / 18%);
-  border-radius: 8px;
-  color: var(--color-danger, #f27b72);
-  display: inline-flex;
-  flex: 0 0 32px;
-  height: 32px;
-  justify-content: center;
-  width: 32px;
-}
-
-.v7-undo-icon[data-tone="restore"] {
-  background: rgb(121 225 162 / 10%);
-  border-color: rgb(121 225 162 / 24%);
-  color: var(--color-primary, #79e1a2);
-}
-
-.v7-undo-icon[data-tone="neutral"] {
-  background: var(--color-surface, rgb(26 29 27 / 74%));
-  border-color: var(--color-border, rgb(255 255 255 / 10.5%));
-  color: var(--color-text-muted, #b3bab0);
-}
-
-.v7-undo-toast > strong {
-  color: var(--color-text, #f4f7f2);
-  flex: 1 1 auto;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 20px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.v7-undo-action,
-.v7-undo-dismiss {
-  align-items: center;
-  background: transparent;
-  border: 1px solid var(--color-border, rgb(255 255 255 / 10.5%));
-  border-radius: 8px;
-  box-shadow: none;
-  color: var(--color-text-muted, #b3bab0);
-  cursor: pointer;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 32px;
-  justify-content: center;
-  transition:
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
-}
-
-.v7-undo-action {
-  gap: 6px;
-  padding-inline: 11px;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 20px;
-}
-
-.v7-undo-action svg {
-  color: var(--color-primary, #79e1a2);
-}
-
-.v7-undo-pending-icon {
-  animation: v7-spin 720ms linear infinite;
-}
-
-.v7-undo-dismiss {
-  padding: 0;
-  width: 32px;
-}
-
-.v7-undo-action:hover:not(:disabled),
-.v7-undo-dismiss:hover:not(:disabled) {
-  background: var(--color-surface-hover, rgb(44 50 46 / 90%));
-  border-color: var(--color-border-strong, rgb(255 255 255 / 18%));
-  color: var(--color-text, #f4f7f2);
-}
-
-.v7-undo-action:active:not(:disabled),
-.v7-undo-dismiss:active:not(:disabled) {
-  background: var(--color-surface, rgb(26 29 27 / 74%));
-  transform: translateY(1px);
-}
-
-.v7-undo-action:focus-visible,
-.v7-undo-dismiss:focus-visible {
-  outline: 2px solid var(--color-focus, #89f7ff);
-  outline-offset: 2px;
-}
-
-.v7-undo-action:disabled,
-.v7-undo-dismiss:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
+.v7-app .fragment-confirm-dialog .v7-trash-conflicts strong {
+  color: var(--v7-text);
 }
 
 /* Responsive ----------------------------------------------------------- */

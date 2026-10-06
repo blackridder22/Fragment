@@ -1,8 +1,7 @@
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import type { SourceFilter } from "../components/TopCommandBar";
 import type { FragmentFilter } from "../features/filters/filter-model";
-import type { BrowsingDensity } from "../features/library/BrowsingModeControl";
+import type { BrowsingDensity, SourceFilter } from "../store/library-types";
 import {
   FrameCanvas,
   FrameGallery,
@@ -36,7 +35,7 @@ export type FramesPageProps = FrameGalleryProps & {
 type PopoverFilter = Exclude<V7FrameFilter, "all">;
 
 const FILTERS: Array<{ key: V7FrameFilter; label: string }> = [
-  { key: "all", label: "All Frames" },
+  { key: "all", label: "All Fragments" },
   { key: "fragment", label: "Fragment" },
   { key: "source", label: "Source" },
   { key: "tags", label: "Tags" },
@@ -139,7 +138,11 @@ export function FramesPage({
       filter.sourceDomain || filter.siteContains || filter.creatorContains,
     );
   const hasTagFilter = activeTags.length > 0;
-  const hasAnyFilter = hasFragmentFilter || hasSourceFilter || hasTagFilter || Boolean(filter.color);
+  const hasAnyFilter =
+    hasFragmentFilter ||
+    hasSourceFilter ||
+    hasTagFilter ||
+    Boolean(filter.color);
 
   useEffect(() => {
     if (!openFilter) return;
@@ -197,7 +200,7 @@ export function FramesPage({
       <div
         className="v7-frame-filters"
         data-canvas-control
-        aria-label="Frame filters"
+        aria-label="Fragment filters"
       >
         <div className="v7-frame-filter-group" ref={filterGroupRef}>
           {FILTERS.map((filterItem) => {
@@ -247,7 +250,7 @@ export function FramesPage({
 
                 {expanded && filterItem.key === "fragment" ? (
                   <div
-                    aria-label="Filter Frames by image properties"
+                    aria-label="Filter Fragments by image properties"
                     className="v7-filter-popover"
                     id={menuId}
                     role="menu"
@@ -288,7 +291,7 @@ export function FramesPage({
 
                 {expanded && filterItem.key === "source" ? (
                   <div
-                    aria-label="Filter Frames by source"
+                    aria-label="Filter Fragments by source"
                     className="v7-filter-popover"
                     id={menuId}
                     role="menu"
@@ -313,7 +316,7 @@ export function FramesPage({
 
                 {expanded && filterItem.key === "tags" ? (
                   <div
-                    aria-label="Filter Frames by tags"
+                    aria-label="Filter Fragments by tags"
                     className="v7-filter-popover v7-filter-popover-tags"
                     id={menuId}
                     role="menu"
@@ -338,7 +341,7 @@ export function FramesPage({
                         ))
                       ) : (
                         <span className="v7-filter-menu-empty">
-                          Add tags to Frames to filter them here.
+                          Add tags to Fragments to filter them here.
                         </span>
                       )}
                     </section>
@@ -359,7 +362,13 @@ export function FramesPage({
               </div>
             );
           })}
-          <ColorFilterControl value={filter.color} onChange={(color) => { setOpenFilter(null); patchFilter({ color }); }} />
+          <ColorFilterControl
+            value={filter.color}
+            onChange={(color) => {
+              setOpenFilter(null);
+              patchFilter({ color });
+            }}
+          />
         </div>
 
         <span className="v7-frame-result-count">
@@ -367,10 +376,26 @@ export function FramesPage({
         </span>
       </div>
 
-      {filter.color && (Boolean(paletteIndex?.pending) || colorResultsChanged) ? <div className="fragment-index-status" role="status">
-        {paletteIndex?.pending ? <span>Colors are still being extracted · {paletteIndex.ready + paletteIndex.empty} processed, {paletteIndex.pending} remaining</span> : null}
-        {colorResultsChanged ? <><span>More color results available</span><button type="button" onClick={onRefreshColors}>Refresh</button></> : null}
-      </div> : null}
+      {filter.color &&
+      (Boolean(paletteIndex?.pending) || colorResultsChanged) ? (
+        <div className="fragment-index-status" role="status">
+          {paletteIndex?.pending ? (
+            <span>
+              Colors are still being extracted ·{" "}
+              {paletteIndex.ready + paletteIndex.empty} processed,{" "}
+              {paletteIndex.pending} remaining
+            </span>
+          ) : null}
+          {colorResultsChanged ? (
+            <>
+              <span>More color results available</span>
+              <button type="button" onClick={onRefreshColors}>
+                Refresh
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       <FrameGallery
         density={density}
         resultCount={resultCount}
@@ -378,7 +403,7 @@ export function FramesPage({
       />
       <PaginationFooter
         hasMore={hasMore}
-        loadedCount={galleryProps.fragments.length}
+        loadedCount={galleryProps.items.length}
         loading={loading}
         onLoadMore={onLoadMore}
         totalCount={resultCount}

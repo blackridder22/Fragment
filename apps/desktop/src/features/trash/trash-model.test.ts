@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFragmentRows,
   buildFrameRows,
+  emptyTrashConsequence,
   pluralize,
   removeFragmentsFromPage,
   resolveRestoredFrameName,
@@ -102,6 +103,15 @@ describe("Trash copy", () => {
     expect(trashSelectionSummary(0, 2)).toBe("2 Frames");
     expect(trashSelectionSummary(1, 0)).toBe("1 Fragment");
     expect(trashSelectionSummary(0, 0)).toBe("nothing");
+  });
+});
+
+describe("Empty Trash copy", () => {
+  it("states that everything goes, with the unfiltered totals", () => {
+    const copy = emptyTrashConsequence({ fragments: 120, frames: 4 });
+    expect(copy).toContain("empties the whole Trash: 120 Fragments and 4 Frames");
+    expect(copy).toContain("hidden by the current filter or not loaded yet");
+    expect(copy).toContain("This cannot be undone.");
   });
 });
 

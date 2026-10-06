@@ -1,47 +1,56 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { resolveConfirm } from "../store/library-feedback";
+import { useLibraryStore } from "../store/library-store";
+import type { ConfirmRequest } from "../store/library-types";
 import { Modal } from "./Modal";
 
-export type ConfirmDialogProps = {
-  title: string;
-  /** The consequence of confirming, stated with the exact count. */
-  description: ReactNode;
-  /** Optional extra block under the description, such as a resolved name. */
+/** In-app confirmation dialog: focus trapped, Esc cancels, destructive styling. */
+export function ConfirmDialog() {
+  const confirm = useLibraryStore((state) => state.confirm);
+  if (!confirm) return null;
+  return (
+    <ConfirmDialogView
+      key={confirm.id}
+      onResolve={resolveConfirm}
+      request={confirm}
+    />
+  );
+}
+
+export type ConfirmDialogViewProps = {
+  /** The store's request, or one a page builds itself (no id needed). */
+  request: Omit<ConfirmRequest, "id"> & { id?: number };
+  onResolve: (confirmed: boolean) => void;
+  /** Optional block under the message, such as a resolved Frame name. */
   detail?: ReactNode;
-  confirmLabel: string;
-  cancelLabel?: string;
-  /** Styles the confirm button as destructive. */
-  destructive?: boolean;
+  /** Keeps the dialog open with its buttons disabled while the action runs. */
   pending?: boolean;
+  /** Confirm button label while pending, for example "Restoring…". */
   pendingLabel?: string;
+  /** Shown after a failed attempt; the dialog stays open for a retry. */
   error?: string | null;
-  onConfirm: () => void | Promise<void>;
-  onCancel: () => void;
 };
 
 /**
- * In-app replacement for `window.confirm`. Focus is trapped inside the dialog,
- * Escape and the backdrop cancel, and the confirm button receives initial focus.
+ * The presentational dialog. The store-driven `ConfirmDialog` resolves a plain
+ * yes/no; a page that must keep the dialog open while its action runs (and
+ * show the failure in place) renders this directly with `pending`/`error`.
  */
-export function ConfirmDialog({
-  title,
-  description,
+export function ConfirmDialogView({
+  request,
+  onResolve,
   detail,
-  confirmLabel,
-  cancelLabel = "Cancel",
-  destructive = false,
   pending = false,
   pendingLabel,
   error,
-  onConfirm,
-  onCancel,
-}: ConfirmDialogProps) {
-  const cancelRef = useRef(onCancel);
+}: ConfirmDialogViewProps) {
+  const resolveRef = useRef(onResolve);
   const pendingRef = useRef(pending);
 
   useEffect(() => {
-    cancelRef.current = onCancel;
+    resolveRef.current = onResolve;
     pendingRef.current = pending;
-  }, [onCancel, pending]);
+  }, [onResolve, pending]);
 
   // Escape cancels wherever focus is, even in the frame before the Modal has
   // moved focus inside, and never reaches page-level listeners.
@@ -50,44 +59,42 @@ export function ConfirmDialog({
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      if (!pendingRef.current) cancelRef.current();
+      if (!pendingRef.current) resolveRef.current(false);
     }
     window.addEventListener("keydown", handleEscape, true);
     return () => window.removeEventListener("keydown", handleEscape, true);
   }, []);
 
   function cancel() {
-    if (!pending) onCancel();
+    if (!pending) onResolve(false);
   }
 
   function containKeys(event: KeyboardEvent<HTMLDivElement>) {
-    // The Modal already closes on Escape; stop the key from also reaching
-    // page-level listeners such as "clear selection" or "delete selection".
-    if (
-      event.key === "Escape" ||
-      event.key === "Backspace" ||
-      event.key === "Delete"
-    ) {
+    // Backspace and Delete must not reach the page's "delete selection" keys.
+    if (event.key === "Backspace" || event.key === "Delete") {
       event.stopPropagation();
     }
   }
 
   return (
     <Modal
-      className="v7-frame-name-modal v7-confirm-modal"
-      title={title}
+      className="v7-frame-name-modal fragment-confirm-dialog"
       onClose={cancel}
+      title={request.title}
     >
       <div
-        className="v7-frame-name-form v7-confirm-dialog"
-        data-destructive={destructive}
+        aria-busy={pending}
+        className="v7-frame-name-form"
+        data-pending={pending}
         onKeyDown={containKeys}
       >
         <div className="v7-frame-name-copy">
-          {typeof description === "string" ? <p>{description}</p> : description}
-          {detail}
+          <p>{request.message}</p>
+          {detail ? (
+            <div className="fragment-confirm-detail">{detail}</div>
+          ) : null}
           {error ? (
-            <p className="v7-confirm-error" role="alert">
+            <p className="fragment-confirm-error" role="alert">
               {error}
             </p>
           ) : null}
@@ -95,22 +102,30 @@ export function ConfirmDialog({
         <div className="v7-frame-name-actions">
           <button
             className="v7-frame-dialog-button"
+            data-modal-preferred-focus={
+              request.destructive ? "true" : undefined
+            }
             disabled={pending}
             onClick={cancel}
             type="button"
           >
-            {cancelLabel}
+            {request.cancelLabel}
           </button>
           <button
             className={`v7-frame-dialog-button ${
-              destructive ? "v7-trash-confirm-button" : "v7-frame-dialog-primary"
+              request.destructive
+                ? "fragment-confirm-destructive"
+                : "v7-frame-dialog-primary"
             }`}
-            data-modal-preferred-focus="true"
+            data-destructive={request.destructive}
+            data-modal-preferred-focus={
+              request.destructive ? undefined : "true"
+            }
             disabled={pending}
-            onClick={() => void onConfirm()}
+            onClick={() => onResolve(true)}
             type="button"
           >
-            {pending ? (pendingLabel ?? confirmLabel) : confirmLabel}
+            {pending ? (pendingLabel ?? request.confirmLabel) : request.confirmLabel}
           </button>
         </div>
       </div>

@@ -1,0 +1,126 @@
+/* Feedback surfaces: the Toast and the ConfirmDialog. Notices stay in v7-shell.css. */
+
+.fragment-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 160;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  max-width: min(520px, calc(100vw - 48px));
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--v7-popover-border, var(--theme-border-strong));
+  border-radius: 12px;
+  color: var(--v7-text, var(--theme-text));
+  background: var(--v7-popover-surface, var(--theme-popover-surface));
+  box-shadow: 0 18px 40px var(--v7-shadow-color, var(--theme-shadow-color));
+  font-size: 13px;
+  line-height: 20px;
+  transform: translateX(-50%);
+}
+
+.fragment-toast[data-tone="error"] {
+  border-color: color-mix(in srgb, var(--theme-danger) 42%, transparent);
+}
+
+.fragment-toast[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--theme-primary) 34%, transparent);
+}
+
+.fragment-toast[data-pending="true"] {
+  border-color: color-mix(in srgb, var(--theme-primary) 34%, transparent);
+}
+
+.fragment-toast-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fragment-toast-action,
+.fragment-toast-dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  border: 1px solid var(--v7-border, var(--theme-border));
+  border-radius: 8px;
+  color: var(--v7-text-muted, var(--theme-text-muted));
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.fragment-toast-action {
+  gap: 6px;
+  padding-inline: 11px;
+  color: var(--v7-text, var(--theme-text));
+  font-weight: 600;
+}
+
+.fragment-toast-dismiss {
+  width: 32px;
+  padding: 0;
+}
+
+.fragment-toast-action:hover:not(:disabled),
+.fragment-toast-dismiss:hover:not(:disabled) {
+  border-color: var(--v7-border-strong, var(--theme-border-strong));
+  color: var(--v7-text, var(--theme-text));
+  background: var(--v7-surface-hover, var(--theme-surface-hover));
+}
+
+.fragment-toast-action:disabled,
+.fragment-toast-dismiss:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.fragment-toast-spinner {
+  color: var(--theme-primary);
+  animation: fragment-toast-spin var(--dur-spin) linear infinite;
+}
+
+@keyframes fragment-toast-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Destructive confirm button, on top of the shared Frame dialog button. */
+.v7-app .v7-frame-name-modal .fragment-confirm-destructive {
+  border-color: color-mix(in srgb, var(--v7-danger) 42%, transparent);
+  color: var(--v7-danger);
+  background: color-mix(in srgb, var(--v7-danger) 10%, transparent);
+  font-weight: 600;
+}
+
+.v7-app
+  .v7-frame-name-modal
+  .fragment-confirm-destructive:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--v7-danger) 62%, transparent);
+  color: var(--v7-danger);
+  background: color-mix(in srgb, var(--v7-danger) 16%, transparent);
+}
+
+/* Optional detail block (such as a resolved Frame name) and the error shown
+   after a failed attempt, while the dialog stays open for a retry. */
+.v7-app .fragment-confirm-dialog .fragment-confirm-detail {
+  margin: 12px 0 0;
+}
+
+.v7-app .fragment-confirm-dialog .fragment-confirm-error {
+  color: var(--v7-danger);
+  font-size: 12px;
+  line-height: 18px;
+  margin: 12px 0 0;
+}

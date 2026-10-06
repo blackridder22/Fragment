@@ -25,7 +25,7 @@ describe("SelectionActionBar", () => {
     expect(markup).toBe("");
   });
 
-  it("exposes every batch action for multiple selected Frames", () => {
+  it("exposes every batch action for multiple selected Fragments", () => {
     const markup = renderToStaticMarkup(
       <SelectionActionBar
         {...actions}
@@ -37,10 +37,10 @@ describe("SelectionActionBar", () => {
 
     expect(markup).toContain("3 selected");
     expect(markup).toContain(">Preview</button>");
-    expect(markup).toContain(">Move to Fragment</button>");
+    expect(markup).toContain(">Move to Frame</button>");
     expect(markup).toContain(">Tag</button>");
     expect(markup).toContain(">Trash</button>");
-    expect(markup).toContain('aria-label="Clear Frame selection"');
+    expect(markup).toContain('aria-label="Clear Fragment selection"');
   });
 
   it("offers Restore and Delete now in Trash scope with Fragment vocabulary", () => {

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { DAY_MS } from "../features/trash/retention";
+import type { GalleryCard } from "../store/library-selectors";
 import { TrashPage, type TrashPageProps } from "./TrashPage";
 
 const now = Date.now();
@@ -28,6 +29,14 @@ function fragment(id: string, title: string, daysLeft: number | null): Fragment 
   };
 }
 
+function card(id: string, title: string, daysLeft: number | null): GalleryCard {
+  return {
+    fragment: fragment(id, title, daysLeft),
+    assetSources: [],
+    folderName: "Posters",
+  };
+}
+
 function frame(id: string, name: string): Frame {
   return {
     id,
@@ -41,22 +50,21 @@ function frame(id: string, name: string): Frame {
 
 const actions = {
   onDeleteFragmentsNow: vi.fn(),
-  onDeleteFrameNow: vi.fn(),
+  onDeleteFramesNow: vi.fn(),
   onEmptyTrash: vi.fn(),
   onNotify: vi.fn(),
   onRestoreFragments: vi.fn(),
-  onRestoreFrame: vi.fn(),
+  onRestoreFrames: vi.fn(),
 };
 
 function render(overrides: Partial<TrashPageProps> = {}) {
   return renderToStaticMarkup(
     <TrashPage
       {...actions}
-      assetSourcesFor={() => []}
       fragmentTotal={0}
-      fragments={[]}
       frameNameFor={() => "Posters"}
       frames={[]}
+      items={[]}
       loading={false}
       retention={{ kind: "days", days: 31 }}
       {...overrides}
@@ -67,7 +75,7 @@ function render(overrides: Partial<TrashPageProps> = {}) {
 describe("TrashPage structure", () => {
   it("separates Frames and Fragments into sections with their own counts and sorts", () => {
     const markup = render({
-      fragments: [fragment("a", "Prism glass study", 6), fragment("b", "Poster", 1)],
+      items: [card("a", "Prism glass study", 6), card("b", "Poster", 1)],
       fragmentTotal: 2,
       frames: [frame("f1", "Old posters")],
     });
@@ -85,9 +93,21 @@ describe("TrashPage structure", () => {
     expect(markup).toContain("2 Fragments · 1 Frame · Items remain recoverable in Trash for 31 days");
   });
 
-  it("labels rows with their vocabulary and retention", () => {
+  it("keeps the Fragments in the order they arrive (the server sorts)", () => {
     const markup = render({
-      fragments: [fragment("a", "Prism glass study", 6), fragment("b", "Poster", null)],
+      items: [card("older", "Older", 1), card("newer", "Newer", 6)],
+      fragmentTotal: 2,
+      sort: "newest",
+    });
+
+    expect(markup.indexOf('data-fragment-id="older"')).toBeLessThan(
+      markup.indexOf('data-fragment-id="newer"'),
+    );
+  });
+
+  it("labels rows with their vocabulary and retention from the precomputed card", () => {
+    const markup = render({
+      items: [card("a", "Prism glass study", 6), card("b", "Poster", null)],
       fragmentTotal: 2,
       frames: [frame("f1", "Old posters")],
       retention: { kind: "days", days: 7 },
@@ -106,7 +126,7 @@ describe("TrashPage structure", () => {
 
   it("mirrors the Settings choice when retention is off", () => {
     const markup = render({
-      fragments: [fragment("a", "Prism glass study", null)],
+      items: [card("a", "Prism glass study", null)],
       fragmentTotal: 1,
       retention: { kind: "forever" },
     });
@@ -132,9 +152,16 @@ describe("TrashPage structure", () => {
     expect(markup).toContain("disabled");
   });
 
+  it("shows the loading state until the Trash has been listed once", () => {
+    const markup = render({ loading: true, loaded: false });
+
+    expect(markup).toContain("Loading Trash");
+    expect(markup).not.toContain("Trash is empty");
+  });
+
   it("shows the Trash-scoped selection bar for a Fragment selection", () => {
     const markup = render({
-      fragments: [fragment("a", "Prism glass study", 6), fragment("b", "Poster", 1)],
+      items: [card("a", "Prism glass study", 6), card("b", "Poster", 1)],
       fragmentTotal: 2,
       selectedIds: new Set(["a", "b"]),
       onClearSelection: vi.fn(),
@@ -150,21 +177,23 @@ describe("TrashPage structure", () => {
 });
 
 describe("TrashPage policy", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "TrashPage.tsx"),
+    "utf8",
+  );
+
   it("never falls back to the native confirm", () => {
-    const source = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "TrashPage.tsx"),
-      "utf8",
-    );
     expect(source).not.toMatch(/window\.confirm|\bconfirm\(/);
   });
 
   it("uses Frame for collections and Fragment for images", () => {
-    const source = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "TrashPage.tsx"),
-      "utf8",
-    );
     expect(source).not.toMatch(/\bPin\b|\bBoard\b|Repin/);
     // Inverted phrases from the v0.0.9 diagnosis.
     expect(source).not.toMatch(/Restored Frame\b|Deleted Frame\b|Frames moved to Trash/);
+  });
+
+  it("confirms Empty Trash with the unfiltered totals, never the visible rows", () => {
+    expect(source).toContain("emptyTrashConsequence(vaultTotals)");
+    expect(source).not.toMatch(/emptyTrashConsequence\(\{\s*fragments: fragmentCount/);
   });
 });

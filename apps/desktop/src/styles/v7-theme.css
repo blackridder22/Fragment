@@ -1,4 +1,5 @@
 /* v7 consumes resolved theme roles; Paper primitives stay isolated in tokens.css. */
+
 .v7-app {
   --v7-canvas: var(--theme-canvas);
   --v7-canvas-soft: var(--theme-canvas-soft);
@@ -37,12 +38,12 @@
 }
 
 /* Menus and notices share the same semantic floating-surface contract. */
+
 .v7-app .v7-add-menu,
 .v7-app .v7-sort-menu,
 .v7-app .v7-filter-popover,
 .v7-app .v7-trash-sort-menu,
-.v7-app .v7-notice,
-.v7-app .v7-undo-toast {
+.v7-app .v7-notice {
   border-color: var(--v7-popover-border);
   color: var(--v7-text);
   background: var(--v7-popover-surface);
@@ -94,73 +95,8 @@
   color: var(--v7-text);
 }
 
-/* Paper context menu: opaque surface, strong edge, compact rows, calm shadow. */
-.v7-app .fragment-context-menu {
-  --v7-context-menu-surface: var(--theme-popover-surface);
-  --v7-context-menu-hover: var(--theme-surface-hover);
-  --v7-context-menu-border: var(--theme-border-strong);
-  --v7-context-menu-text: var(--theme-text);
-  --v7-context-menu-muted: var(--theme-text-faint);
-  --v7-context-menu-shadow: var(--theme-shadow-color);
-  padding: 8px;
-  gap: 4px;
-  border: 1px solid var(--v7-context-menu-border);
-  border-radius: 14px;
-  color: var(--v7-context-menu-text);
-  background: var(--v7-context-menu-surface);
-  box-shadow: 0 18px 40px var(--v7-context-menu-shadow);
-}
-
-.v7-app .fragment-context-menu > header {
-  padding: 10px 12px;
-  border-bottom-color: var(--theme-border);
-}
-
-.v7-app .fragment-context-menu > header strong,
-.v7-app .fragment-context-menu > button {
-  color: var(--v7-context-menu-text);
-}
-
-.v7-app .fragment-context-menu > header span,
-.v7-app .fragment-context-menu kbd,
-.v7-app .fragment-context-submenu > span {
-  color: var(--v7-context-menu-muted);
-}
-
-.v7-app .fragment-context-menu > button {
-  height: 34px;
-  min-height: 34px;
-  padding-inline: 12px;
-  border-radius: 8px;
-  background: transparent;
-}
-
-.v7-app .fragment-context-menu > button:hover {
-  color: var(--v7-context-menu-text);
-  background: var(--v7-context-menu-hover);
-}
-
-.v7-app .fragment-context-menu > button.danger {
-  color: var(--theme-danger);
-}
-
-.v7-app .fragment-context-divider {
-  background: var(--theme-border);
-}
-
-.v7-app .fragment-context-submenu button {
-  border-color: var(--theme-border);
-  color: var(--theme-text-muted);
-  background: var(--theme-surface-strong);
-}
-
-.v7-app .fragment-context-submenu button:hover {
-  border-color: var(--theme-border-strong);
-  color: var(--theme-text);
-  background: var(--theme-surface-hover);
-}
-
 /* Selection follows the theme; dark preview retains its existing media contrast. */
+
 .v7-app .v7-selection-action-bar {
   box-shadow: 0 18px 40px var(--v7-shadow-color);
 }
@@ -192,6 +128,7 @@
 }
 
 /* Light preview keeps the image workspace within the resolved Paper palette. */
+
 :root[data-theme="light"] .v7-app .v7-focused-overlay {
   background: color-mix(in srgb, var(--theme-canvas) 88%, transparent);
 }
@@ -254,6 +191,7 @@
 }
 
 /* Frame dialogs now follow the same Paper surface and control roles. */
+
 .v7-app .modal.v7-frame-name-modal {
   border-color: var(--v7-border-strong);
   color: var(--v7-text);
@@ -354,8 +292,4 @@
 :root[data-theme="light"] .v7-app .v7-trash-restore:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--theme-focus) 42%, transparent);
   color: var(--theme-focus);
-}
-
-:root[data-theme="light"] .v7-app .v7-undo-toast {
-  box-shadow: 0 18px 40px var(--theme-shadow-color);
 }
