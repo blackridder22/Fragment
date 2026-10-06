@@ -404,7 +404,8 @@ Rules:
   Vault (v0.0.9): 12 PNG thumbnails 2.99 MB -> WebP 0.37 MB (8.2x) with alpha intact; one
   1600x702 PNG preview 1.39 MB -> 175 KB. WKWebView on macOS 11+ decodes WebP natively.
 - PNG is used only for SVG-rendered tiers (`svg.rs`, `previews.rs`), where tiny-skia's exact
-  straight-alpha output matters more than bytes, and as the fallback if libwebp cannot be built.
+  straight-alpha output matters more than bytes. There is no PNG fallback for raster
+  derivatives: libwebp is a build requirement.
 - Decoding applies the EXIF orientation: thumbnails, previews and the stored width/height
   describe the image as WebKit displays the original.
 - No preview file is written when the original's longest edge is <= 1600 px, its format is

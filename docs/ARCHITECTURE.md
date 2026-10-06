@@ -151,6 +151,20 @@ preview holds a foreground permit. `derivatives_status` reports
 `{ pending, done, failed }`; `retry_failed_derivatives` returns the number of
 jobs it reset.
 
+Upgrade note (v0.0.9). Regeneration is driven only by `derivatives_version`;
+nothing checks whether the files a row points at exist. Once migration 0006 has
+run and regeneration has completed, the old `thumbnails/*.png` and
+`previews/*.png` files are deleted at the following launch. Restoring a
+database backup taken before v0.0.9 then points every asset at those deleted
+PNG files, and the gallery falls back to the originals until regeneration
+catches up: the restored database has no `derivatives_version` column, so
+migration 0006 runs again, marks every asset version 1, and the worker rewrites
+all WebP derivatives from the untouched originals on that launch. A backup
+taken after migration 0006 is different: assets it records at version 2 are
+assumed current, so if their WebP files are missing (backup restored into a
+different Vault folder, derivative folders deleted by hand) they are not
+regenerated. Originals are never modified by any of this.
+
 ## Data flow
 
 Desktop import:
