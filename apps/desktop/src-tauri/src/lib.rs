@@ -118,6 +118,7 @@ pub fn run() {
             ensure_svg_preview,
             cancel_svg_preview,
             derivatives_status,
+            retry_failed_derivatives,
             ensure_default_frame,
             create_frame,
             list_frames,
@@ -173,6 +174,7 @@ pub fn run() {
                 let state = app.state::<FragmentState>();
                 state.background_stopped.store(true,std::sync::atomic::Ordering::Release);
                 state.palette_waker.notify("exit");
+                state.derivatives_waker.notify("exit");
                 fragment_core::svg_worker::shutdown_worker();
             }
         });

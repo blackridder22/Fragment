@@ -16,6 +16,9 @@ const BACKGROUND_PAUSE: Duration = Duration::from_millis(500);
 /// Launch delay before regeneration starts, so first paint is not contended.
 pub const DERIVATIVES_START_DELAY: Duration = Duration::from_secs(3);
 const DERIVATIVES_BATCH: usize = 8;
+/// Fallback poll for the parked derivative worker. Nothing creates below-version
+/// assets while the app runs, so only a manual retry (which notifies) needs it.
+const DERIVATIVES_IDLE_POLL: Duration = Duration::from_secs(3600);
 
 #[tauri::command]
 pub fn start_palette_indexing(app: tauri::AppHandle, state: State<'_, FragmentState>) {
@@ -171,8 +174,29 @@ pub async fn derivatives_status(
     .map_err(|e| e.to_string())?
 }
 
-/// Starts the one-shot regeneration worker after `delay`. Idempotent. The worker
-/// exits once nothing is pending; terminal failures are left for a manual retry.
+/// Resets terminal regeneration failures and wakes the worker so they are
+/// retried now, without a relaunch. Returns how many jobs were reset.
+#[tauri::command]
+pub async fn retry_failed_derivatives(
+    app: tauri::AppHandle,
+    state: State<'_, FragmentState>,
+) -> Result<u64, String> {
+    let core = state.core.clone();
+    let reset = tauri::async_runtime::spawn_blocking(move || {
+        core.retry_failed_derivatives().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // The worker is parked once it ran out of work; wake it (or start it if the
+    // shell never did, e.g. in tests).
+    start_derivative_regeneration(app, &state, Duration::ZERO);
+    state.derivatives_waker.notify("retry");
+    Ok(reset)
+}
+
+/// Starts the regeneration worker after `delay`. Idempotent. The worker parks on
+/// `derivatives_waker` once nothing is pending; terminal failures wait for
+/// `retry_failed_derivatives`, which wakes it.
 pub fn start_derivative_regeneration(
     app: tauri::AppHandle,
     state: &FragmentState,
@@ -183,6 +207,7 @@ pub fn start_derivative_regeneration(
     }
     let core = state.core.clone();
     let stopped = Arc::clone(&state.background_stopped);
+    let waker = Arc::clone(&state.derivatives_waker);
     std::thread::Builder::new()
         .name("fragment-derivatives".into())
         .spawn(move || {
@@ -210,54 +235,60 @@ pub fn start_derivative_regeneration(
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            match core.derivatives_status() {
-                Ok(status) if status.pending == 0 => {
-                    tracing::debug!(?status, "derivatives already current");
-                    return;
-                }
-                Ok(status) => tracing::info!(?status, "regenerating derivatives in the background"),
-                Err(error) => {
-                    tracing::warn!(%error, "derivative status unavailable; skipping regeneration");
-                    return;
-                }
-            }
-            let started = std::time::Instant::now();
-            let mut regenerated = 0_usize;
             while !stopped.load(Ordering::Acquire) {
-                match core.process_derivatives_batch(DERIVATIVES_BATCH) {
-                    Ok(batch) => {
-                        regenerated += batch.completed.len();
-                        let idle = batch.completed.is_empty() && batch.failed.is_empty();
-                        if !batch.completed.is_empty() {
-                            let _ = app.emit("derivatives-changed", batch.completed);
-                        }
-                        if batch.paused {
-                            std::thread::sleep(BACKGROUND_PAUSE);
-                            continue;
-                        }
-                        if idle {
-                            match core.derivatives_status() {
-                                Ok(status) if status.pending == 0 => break,
-                                // Only leased or retrying rows remain; give them a moment.
-                                _ => std::thread::sleep(Duration::from_secs(1)),
-                            }
-                        } else {
-                            // Keep the SQLite mutex and CPU available to the UI between items.
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
+                match core.derivatives_status() {
+                    Ok(status) if status.pending == 0 => {
+                        tracing::debug!(?status, "derivatives current; worker parked");
+                        waker.wait(DERIVATIVES_IDLE_POLL);
+                        continue;
+                    }
+                    Ok(status) => {
+                        tracing::info!(?status, "regenerating derivatives in the background")
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "derivative regeneration batch failed");
-                        std::thread::sleep(Duration::from_secs(5));
+                        tracing::warn!(%error, "derivative status unavailable; worker parked");
+                        waker.wait(DERIVATIVES_IDLE_POLL);
+                        continue;
                     }
                 }
+                let started = std::time::Instant::now();
+                let mut regenerated = 0_usize;
+                while !stopped.load(Ordering::Acquire) {
+                    match core.process_derivatives_batch(DERIVATIVES_BATCH) {
+                        Ok(batch) => {
+                            regenerated += batch.completed.len();
+                            let idle = batch.completed.is_empty() && batch.failed.is_empty();
+                            if !batch.completed.is_empty() {
+                                let _ = app.emit("derivatives-changed", batch.completed);
+                            }
+                            if batch.paused {
+                                std::thread::sleep(BACKGROUND_PAUSE);
+                                continue;
+                            }
+                            if idle {
+                                match core.derivatives_status() {
+                                    Ok(status) if status.pending == 0 => break,
+                                    // Only leased or retrying rows remain; give them a moment.
+                                    _ => std::thread::sleep(Duration::from_secs(1)),
+                                }
+                            } else {
+                                // Keep the SQLite mutex and CPU available to the UI between items.
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "derivative regeneration batch failed");
+                            std::thread::sleep(Duration::from_secs(5));
+                        }
+                    }
+                }
+                tracing::info!(
+                    regenerated,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    status = ?core.derivatives_status().ok(),
+                    "derivative regeneration finished"
+                );
             }
-            tracing::info!(
-                regenerated,
-                elapsed_ms = started.elapsed().as_millis(),
-                status = ?core.derivatives_status().ok(),
-                "derivative regeneration finished"
-            );
         })
         .expect("spawn derivatives worker");
 }

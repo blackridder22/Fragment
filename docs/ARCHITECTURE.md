@@ -148,7 +148,8 @@ purges skips deferred rows, and the native host never sweeps them. A crash at
 any point leaves a browsable Vault. Leases expire after 120 s, three failed
 attempts mark the job `failed`, and the worker pauses while an import or
 preview holds a foreground permit. `derivatives_status` reports
-`{ pending, done, failed }`.
+`{ pending, done, failed }`; `retry_failed_derivatives` returns the number of
+jobs it reset.
 
 ## Data flow
 
@@ -192,9 +193,11 @@ import completes, a palette is retried, a priority or Frame changes, or the
 window regains focus, with a 30 s fallback poll for captures written by the
 native host process. It pauses while a foreground import or preview runs.
 
-The derivative regeneration worker starts about 3 s after launch, exits once
-nothing is pending, and emits `derivatives-changed` with the regenerated asset
-IDs. Both workers stop on `ExitRequested`.
+The derivative regeneration worker starts about 3 s after launch, parks on its
+own `Condvar` once nothing is pending, and emits `derivatives-changed` with the
+regenerated asset IDs. The `retry_failed_derivatives` command resets terminal
+failures and wakes it, so a retry never needs a relaunch. Both workers stop on
+`ExitRequested`.
 
 macOS window-control realignment (`window_chrome.rs`) runs immediately on focus
 and theme changes; `Resized` events are coalesced into one refresh 150 ms after

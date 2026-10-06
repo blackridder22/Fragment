@@ -1,5 +1,6 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
+  DerivativesStatus,
   Fragment,
   Frame,
   FragmentPalette,
@@ -61,6 +62,11 @@ export const ensureSvgPreview = (
   });
 export const cancelSvgPreview = (requestId: string) =>
   invoke<void>("cancel_svg_preview", { requestId });
+export const derivativesStatus = () =>
+  invoke<DerivativesStatus>("derivatives_status");
+/** Resets failed derivative regenerations and wakes the worker; returns the reset count. */
+export const retryFailedDerivatives = () =>
+  invoke<number>("retry_failed_derivatives");
 
 export type FragmentPageSortMode =
   | "newest"

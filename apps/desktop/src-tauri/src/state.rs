@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use fragment_core::FragmentCore;
 
-/// Wakes the palette worker. The worker drains its queue, then sleeps on this
-/// until an import, capture, retry or priority change notifies it, with a
-/// 30 s fallback poll for work done by other processes (the native host).
+/// Wakes a background worker. The palette worker drains its queue, then sleeps
+/// on this until an import, capture, retry or priority change notifies it, with
+/// a 30 s fallback poll for work done by other processes (the native host). The
+/// derivative worker sleeps on its own instance once nothing is pending and is
+/// woken by `retry_failed_derivatives`.
 #[derive(Default)]
 pub struct PaletteWaker {
     pending: Mutex<bool>,
@@ -18,7 +20,7 @@ impl PaletteWaker {
     pub fn notify(&self, reason: &'static str) {
         if let Ok(mut pending) = self.pending.lock() {
             *pending = true;
-            tracing::debug!(reason, "palette worker wake requested");
+            tracing::debug!(reason, "background worker wake requested");
         }
         self.changed.notify_all();
     }
@@ -49,6 +51,7 @@ pub struct FragmentState {
     pub palette_priority: Arc<Mutex<Option<String>>>,
     pub palette_frame: Arc<Mutex<Option<String>>>,
     pub palette_waker: Arc<PaletteWaker>,
+    pub derivatives_waker: Arc<PaletteWaker>,
 }
 
 impl FragmentState {
@@ -63,6 +66,7 @@ impl FragmentState {
             palette_priority: Arc::new(Mutex::new(None)),
             palette_frame: Arc::new(Mutex::new(None)),
             palette_waker: Arc::new(PaletteWaker::default()),
+            derivatives_waker: Arc::new(PaletteWaker::default()),
         })
         .inspect(|_| {
             tracing::info!(
