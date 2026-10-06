@@ -124,11 +124,18 @@ one background worker, started by the desktop shell about 3 s after launch, that
 leases assets below the current version (active Fragments first, Trash last),
 decodes the original outside the SQLite lock, writes the new files atomically,
 then updates paths and version for the asset and its memberships, queues the
-old files in `pending_file_deletions`, and commits, all in one transaction. The
-old files are removed only after that commit; a crash at any point leaves a
-browsable Vault. Leases expire after 120 s, three failed attempts mark the job
-`failed`, and the worker pauses while an import or preview holds a foreground
-permit. `derivatives_status` reports `{ pending, done, failed }`.
+old files in `pending_file_deletions` with `deferred_until_relaunch = 1`
+(migration 0007), and commits, all in one transaction. The old files are not
+removed by the process that replaced them: the WebView only refetches paths on
+focus, so a card or preview could still be showing them. The desktop shell
+sweeps the deferred rows at its next launch (`sweep_deferred_file_deletions`,
+run by the regeneration worker before anything else), when every view has
+loaded the new paths. The regular cleanup pass used by hard deletes and Trash
+purges skips deferred rows, and the native host never sweeps them. A crash at
+any point leaves a browsable Vault. Leases expire after 120 s, three failed
+attempts mark the job `failed`, and the worker pauses while an import or
+preview holds a foreground permit. `derivatives_status` reports
+`{ pending, done, failed }`.
 
 ## Data flow
 

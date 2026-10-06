@@ -381,8 +381,8 @@ fn schema_four_upgrade_preserves_data_and_rolls_back_on_failure() {
     let bytes = fs::read(path).unwrap();
     drop(core);
     let db = Connection::open(dir.path().join("fragment.db")).unwrap();
-    // Undo migrations 6 and 5 so the database is a genuine schema-4 Vault.
-    db.execute_batch("DROP TABLE asset_derivative_jobs; DROP INDEX idx_assets_derivatives_version; ALTER TABLE assets DROP COLUMN derivatives_version; DROP TABLE asset_palette_colors; DROP TABLE asset_palettes; DROP TABLE asset_preview_cache; ALTER TABLE assets DROP COLUMN render_warnings_json; ALTER TABLE vault_metadata DROP COLUMN palette_revision; PRAGMA user_version=4;").unwrap();
+    // Undo migrations 7, 6 and 5 so the database is a genuine schema-4 Vault.
+    db.execute_batch("ALTER TABLE pending_file_deletions DROP COLUMN deferred_until_relaunch; DROP TABLE asset_derivative_jobs; DROP INDEX idx_assets_derivatives_version; ALTER TABLE assets DROP COLUMN derivatives_version; DROP TABLE asset_palette_colors; DROP TABLE asset_palettes; DROP TABLE asset_preview_cache; ALTER TABLE assets DROP COLUMN render_warnings_json; ALTER TABLE vault_metadata DROP COLUMN palette_revision; PRAGMA user_version=4;").unwrap();
     // Force the middle of migration 5 to fail, proving its earlier ALTERs roll back.
     db.execute_batch("CREATE TABLE asset_palettes(blocker TEXT);")
         .unwrap();
@@ -397,7 +397,7 @@ fn schema_four_upgrade_preserves_data_and_rolls_back_on_failure() {
         .is_err());
     db.execute_batch("DROP TABLE asset_palettes;").unwrap();
     let upgraded = FragmentCore::new_at(dir.path().to_path_buf()).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 6);
+    assert_eq!(upgraded.schema_version().unwrap(), 7);
     assert_eq!(
         upgraded.get_fragment(fragment.id.clone()).unwrap(),
         fragment

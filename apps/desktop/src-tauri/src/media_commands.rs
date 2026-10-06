@@ -186,6 +186,17 @@ pub fn start_derivative_regeneration(
     std::thread::Builder::new()
         .name("fragment-derivatives".into())
         .spawn(move || {
+            // Derivatives replaced by an earlier launch are only now safe to delete:
+            // this process loaded the new paths from the database, so no view holds
+            // the old ones. Runs before the delay so the files are gone before any
+            // new regeneration adds to the queue.
+            match core.sweep_deferred_file_deletions() {
+                Ok(report) if report.removed > 0 || report.deferred > 0 => {
+                    tracing::info!(?report, "swept derivatives replaced by an earlier launch")
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "deferred derivative cleanup failed"),
+            }
             let deadline = std::time::Instant::now() + delay;
             while std::time::Instant::now() < deadline {
                 if stopped.load(Ordering::Acquire) {

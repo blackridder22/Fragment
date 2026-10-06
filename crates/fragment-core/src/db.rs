@@ -17,7 +17,9 @@ const SMART_FRAMES_MIGRATION: &str = include_str!("../migrations/0004_smart_fram
 const ASSET_COLORS_MIGRATION: &str = include_str!("../migrations/0005_asset_colors_and_svg.sql");
 const DERIVATIVES_VERSION_MIGRATION: &str =
     include_str!("../migrations/0006_derivatives_version.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const DEFERRED_FILE_DELETIONS_MIGRATION: &str =
+    include_str!("../migrations/0007_deferred_file_deletions.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 #[derive(Clone)]
 pub struct FragmentCore {
@@ -153,6 +155,14 @@ fn run_migrations(connection: &mut Connection) -> CoreResult<()> {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(DERIVATIVES_VERSION_MIGRATION)?;
         tx.pragma_update(None, "user_version", 6_i64)?;
+        tx.commit()?;
+        version = 6;
+    }
+
+    if version < 7 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(DEFERRED_FILE_DELETIONS_MIGRATION)?;
+        tx.pragma_update(None, "user_version", 7_i64)?;
         tx.commit()?;
     }
 

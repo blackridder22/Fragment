@@ -408,8 +408,9 @@ Rules:
 - No preview file is written when the original's longest edge is <= 1600 px and its format is
   browser-displayable (JPEG, PNG, WebP, GIF); `preview_path` then equals `original_path`.
 - `assets.derivatives_version` records the policy an asset was written with (1 = PNG,
-  2 = WebP + skip rule). Older rows are regenerated in the background (`derivative_jobs.rs`),
-  new files committed before old ones are deleted.
+  2 = WebP + skip rule). Older rows are regenerated in the background (`derivative_jobs.rs`);
+  the replaced files are queued as deferred and deleted at the next desktop launch, never by
+  the process whose UI may still display them.
 - The original file is the source of truth for the image asset.
 - Paths stored in the database should be relative to the Fragment app data root whenever possible.
 - Never trust paths received from the extension.

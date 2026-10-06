@@ -1145,11 +1145,15 @@ impl FragmentCore {
         })
     }
 
+    /// Removes every immediately deletable queued file. Rows deferred until the
+    /// next launch (replaced derivatives) are left alone; see
+    /// [`FragmentCore::sweep_deferred_file_deletions`].
     pub fn retry_pending_file_cleanup(&self) -> CoreResult<FileCleanupReport> {
         let paths = {
             let conn = self.conn()?;
             let mut stmt = conn.prepare(
-                "SELECT relative_path FROM pending_file_deletions ORDER BY created_at ASC",
+                "SELECT relative_path FROM pending_file_deletions
+                 WHERE deferred_until_relaunch = 0 ORDER BY created_at ASC",
             )?;
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
@@ -1197,6 +1201,33 @@ impl FragmentCore {
         if let Err(error) = self.retry_pending_file_cleanup() {
             tracing::warn!(%error, "Fragment file cleanup was deferred");
         }
+    }
+
+    /// Promotes files queued with `deferred_until_relaunch` to immediate
+    /// deletions and removes them. Only the desktop shell calls this, once per
+    /// launch and before any view has loaded, because that is the first moment
+    /// no live WebView can still reference the replaced derivative paths. A row
+    /// whose path an asset references again is dropped without touching the file.
+    pub fn sweep_deferred_file_deletions(&self) -> CoreResult<FileCleanupReport> {
+        {
+            let conn = self.conn()?;
+            conn.execute(
+                "DELETE FROM pending_file_deletions
+                 WHERE deferred_until_relaunch = 1
+                   AND relative_path IN (
+                     SELECT original_path FROM assets
+                     UNION SELECT thumbnail_path FROM assets
+                     UNION SELECT preview_path FROM assets WHERE preview_path IS NOT NULL
+                   )",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE pending_file_deletions SET deferred_until_relaunch = 0, updated_at = ?1
+                 WHERE deferred_until_relaunch = 1",
+                params![Utc::now().to_rfc3339()],
+            )?;
+        }
+        self.retry_pending_file_cleanup()
     }
 
     fn purge_expired_fragments(&self) -> CoreResult<(u64, u64)> {
@@ -2066,6 +2097,9 @@ pub(crate) fn enqueue_fragment_cleanup(
     )
 }
 
+/// Queues files for deletion by the next cleanup pass. A path already queued as
+/// deferred (a replaced derivative) becomes immediate: its asset is gone now, so
+/// no view can reference it after the deleting command returns.
 pub(crate) fn enqueue_cleanup_paths<'a, I>(connection: &Connection, paths: I) -> CoreResult<()>
 where
     I: IntoIterator<Item = &'a str>,
@@ -2074,9 +2108,35 @@ where
     for relative_path in paths.into_iter().filter(|path| !path.is_empty()) {
         connection.execute(
             "
+            INSERT INTO pending_file_deletions (
+              relative_path, created_at, updated_at, attempts, last_error, deferred_until_relaunch
+            ) VALUES (?1, ?2, ?2, 0, NULL, 0)
+            ON CONFLICT(relative_path) DO UPDATE SET
+              deferred_until_relaunch = 0, updated_at = excluded.updated_at
+            ",
+            params![relative_path, &now],
+        )?;
+    }
+    Ok(())
+}
+
+/// Queues files that the running UI may still display (replaced derivatives).
+/// They are removed by [`FragmentCore::sweep_deferred_file_deletions`] at the
+/// next desktop launch, never by the regular cleanup pass of this process.
+pub(crate) fn enqueue_deferred_cleanup_paths<'a, I>(
+    connection: &Connection,
+    paths: I,
+) -> CoreResult<()>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let now = Utc::now().to_rfc3339();
+    for relative_path in paths.into_iter().filter(|path| !path.is_empty()) {
+        connection.execute(
+            "
             INSERT OR IGNORE INTO pending_file_deletions (
-              relative_path, created_at, updated_at, attempts, last_error
-            ) VALUES (?1, ?2, ?2, 0, NULL)
+              relative_path, created_at, updated_at, attempts, last_error, deferred_until_relaunch
+            ) VALUES (?1, ?2, ?2, 0, NULL, 1)
             ",
             params![relative_path, &now],
         )?;

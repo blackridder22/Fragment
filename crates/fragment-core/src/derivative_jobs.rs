@@ -3,9 +3,12 @@
 //! Modelled on `palette_jobs.rs`: one app-lifetime worker leases assets whose
 //! `derivatives_version` is below [`CURRENT_DERIVATIVES_VERSION`], decodes the
 //! original outside the DB lock, writes the new files atomically, then commits
-//! paths and version in one transaction. Old files are only queued for deletion
-//! inside that same transaction and removed after it commits, so a crash at any
-//! point leaves the Vault browsable with either the old or the new derivatives.
+//! paths and version in one transaction. Old files are queued for deletion
+//! inside that same transaction with `deferred_until_relaunch = 1`: the running
+//! WebView may still show them (its candidate chain only refetches on focus),
+//! so they are swept by the desktop shell at its next launch instead of right
+//! after the commit. A crash at any point leaves the Vault browsable with either
+//! the old or the new derivatives.
 use std::{fs, path::PathBuf};
 
 use chrono::Utc;
@@ -14,7 +17,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    fragments::enqueue_cleanup_paths,
+    fragments::enqueue_deferred_cleanup_paths,
     media::{read_asset, AssetFormat},
     storage::write_atomic,
     thumbnails::{
@@ -149,8 +152,8 @@ impl FragmentCore {
             Ok(new) => {
                 let published = self.publish_derivatives(&leased.id, &leased.token, &new)?;
                 if published {
-                    // Old files were queued inside the committed transaction; remove them now.
-                    self.retry_cleanup_best_effort();
+                    // The replaced files stay on disk until the next launch sweeps them;
+                    // the live UI may still reference their paths.
                     Ok(Some(true))
                 } else {
                     self.remove_written(&new.written);
@@ -272,9 +275,10 @@ impl FragmentCore {
         })
     }
 
-    /// Commits new paths and version, queues the replaced files for deletion, and
-    /// releases the lease, all in one transaction. Returns `false` (and changes
-    /// nothing) when the lease was lost or the asset was deleted or replaced.
+    /// Commits new paths and version, queues the replaced files for deletion at
+    /// the next launch, and releases the lease, all in one transaction. Returns
+    /// `false` (and changes nothing) when the lease was lost or the asset was
+    /// deleted or replaced.
     pub(crate) fn publish_derivatives(
         &self,
         asset_id: &str,
@@ -380,7 +384,7 @@ fn publish_in_tx(
         .filter(|path| *path != original_path && !keep.contains(path))
         .map(PathBuf::from)
         .collect();
-    enqueue_cleanup_paths(tx, replaced.iter().filter_map(|path| path.to_str()))?;
+    enqueue_deferred_cleanup_paths(tx, replaced.iter().filter_map(|path| path.to_str()))?;
     Ok(true)
 }
 
@@ -468,8 +472,24 @@ mod tests {
         (temp, core, fragment)
     }
 
+    fn deferred_deletions(core: &FragmentCore) -> Vec<String> {
+        let conn = core.conn().expect("conn");
+        let mut stmt = conn
+            .prepare(
+                "SELECT relative_path FROM pending_file_deletions
+                 WHERE deferred_until_relaunch = 1 ORDER BY relative_path",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows
+    }
+
     #[test]
-    fn regeneration_replaces_png_derivatives_with_webp_and_removes_old_files() {
+    fn regeneration_replaces_png_derivatives_with_webp_and_defers_old_files_to_next_launch() {
         let (_temp, core, legacy) = legacy_vault(2000, 1000);
         let before = core.derivatives_status().expect("status");
         assert_eq!(
@@ -506,11 +526,22 @@ mod tests {
             let bytes = std::fs::read(&path).expect("new derivative");
             assert_eq!(image::guess_format(&bytes).unwrap(), ImageFormat::WebP);
         }
+        // The running UI may still display the old paths: they survive the pass.
         assert!(
-            !old_thumbnail.exists(),
-            "old thumbnail is deleted after commit"
+            old_thumbnail.is_file(),
+            "old thumbnail stays on disk in the process that replaced it"
         );
-        assert!(!old_preview.exists(), "old preview is deleted after commit");
+        assert!(old_preview.is_file(), "old preview stays on disk too");
+        let mut expected = vec![
+            legacy.thumbnail_path.clone(),
+            legacy.preview_path.clone().unwrap(),
+        ];
+        expected.sort();
+        assert_eq!(deferred_deletions(&core), expected);
+        // The regular cleanup pass (hard deletes, Trash purge) must not touch them either.
+        let report = core.retry_pending_file_cleanup().expect("cleanup");
+        assert_eq!((report.removed, report.deferred), (0, 0));
+        assert!(old_thumbnail.is_file() && old_preview.is_file());
         assert!(core.library_revision().expect("revision") > revision);
         let conn = core.conn().expect("conn");
         let (version, legacy_copy): (i64, String) = conn
@@ -528,12 +559,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(jobs, 0);
-        let pending: i64 = conn
-            .query_row("SELECT count(*) FROM pending_file_deletions", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(pending, 0);
         drop(conn);
         assert_eq!(
             core.derivatives_status().expect("status"),
@@ -544,6 +569,72 @@ mod tests {
             }
         );
         assert!(run_batch(&core).completed.is_empty());
+
+        // Simulated relaunch: a fresh core over the same Vault sweeps the queue.
+        let root = core.paths().root().to_path_buf();
+        drop(core);
+        let relaunched = FragmentCore::new_at(root).expect("relaunch");
+        assert!(
+            old_thumbnail.is_file(),
+            "opening the Vault alone (native host) never sweeps"
+        );
+        let report = relaunched.sweep_deferred_file_deletions().expect("sweep");
+        assert_eq!((report.removed, report.deferred), (2, 0));
+        assert!(
+            !old_thumbnail.exists(),
+            "old thumbnail is gone after the sweep"
+        );
+        assert!(!old_preview.exists(), "old preview is gone after the sweep");
+        let pending: i64 = relaunched
+            .conn()
+            .unwrap()
+            .query_row("SELECT count(*) FROM pending_file_deletions", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(pending, 0);
+        let updated = relaunched.get_fragment(legacy.id).expect("fragment");
+        assert!(relaunched
+            .paths()
+            .resolve_relative_path(&updated.thumbnail_path)
+            .unwrap()
+            .is_file());
+    }
+
+    /// Hard deletes keep their immediate behaviour for the asset's current files.
+    /// The replaced PNG is not linked to the asset any more, so it stays in the
+    /// deferred queue and goes with the next launch sweep like every other one.
+    #[test]
+    fn hard_deleting_a_regenerated_fragment_removes_current_files_now_and_old_ones_on_relaunch() {
+        let (_temp, core, legacy) = legacy_vault(2000, 1000);
+        let old_thumbnail = core
+            .paths()
+            .resolve_relative_path(&legacy.thumbnail_path)
+            .unwrap();
+        assert_eq!(run_batch(&core).completed.len(), 1);
+        assert!(old_thumbnail.is_file());
+        let updated = core.get_fragment(legacy.id.clone()).unwrap();
+        let new_thumbnail = core
+            .paths()
+            .resolve_relative_path(&updated.thumbnail_path)
+            .unwrap();
+        let original = core
+            .paths()
+            .resolve_relative_path(&updated.original_path)
+            .unwrap();
+        core.delete_fragment_everywhere(legacy.id)
+            .expect("hard delete");
+        assert!(
+            !new_thumbnail.exists(),
+            "current WebP is removed with the asset"
+        );
+        assert!(!original.exists(), "original is removed with the asset");
+        assert!(old_thumbnail.is_file(), "replaced PNG waits for the sweep");
+        assert_eq!(deferred_deletions(&core).len(), 2);
+        let report = core.sweep_deferred_file_deletions().expect("sweep");
+        assert_eq!((report.removed, report.deferred), (2, 0));
+        assert!(!old_thumbnail.exists());
+        assert!(deferred_deletions(&core).is_empty());
     }
 
     #[test]
@@ -559,6 +650,15 @@ mod tests {
             updated.preview_path.as_deref(),
             Some(updated.original_path.as_str())
         );
+        assert!(old_preview.is_file(), "deferred until the next launch");
+        assert_eq!(
+            deferred_deletions(&core),
+            vec![
+                legacy.preview_path.clone().unwrap(),
+                legacy.thumbnail_path.clone()
+            ]
+        );
+        core.sweep_deferred_file_deletions().expect("sweep");
         assert!(!old_preview.exists());
         assert!(core
             .paths()
