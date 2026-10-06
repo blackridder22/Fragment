@@ -229,6 +229,22 @@ impl FragmentCore {
             return Ok(None);
         }
         let now = Utc::now().timestamp();
+        // Attempts only became terminal in `fail_lease`. A job whose holder died
+        // (crash, kill) keeps its expired lease and would be re-leased on every
+        // launch forever; make the attempt budget terminal here as well.
+        let exhausted = tx.execute(
+            "UPDATE asset_derivative_jobs SET status = 'failed',
+               error_code = COALESCE(error_code, 'attempts_exhausted'),
+               lease_token = NULL, lease_expires_at = NULL, updated_at = ?1
+             WHERE asset_id = ?2 AND attempts >= ?3
+               AND (status = 'pending' OR (status = 'processing' AND lease_expires_at <= ?4))",
+            params![Utc::now().to_rfc3339(), id, MAX_ATTEMPTS, now],
+        )?;
+        if exhausted > 0 {
+            tx.commit()?;
+            tracing::warn!(asset = %id, "derivative regeneration gave up after repeated interrupted attempts");
+            return Ok(None);
+        }
         let changed = tx.execute(
             "INSERT INTO asset_derivative_jobs(asset_id, status, attempts, lease_token, lease_expires_at, updated_at)
              VALUES (?1, 'processing', 1, ?2, ?3, ?4)
@@ -950,6 +966,56 @@ mod tests {
             assert!(!core.paths().resolve_relative_path(staged).unwrap().exists());
         }
         assert_eq!(core.clear_derivative_staging().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_job_whose_holders_kept_dying_is_marked_failed_instead_of_leased_again() {
+        let (_temp, core, legacy) = legacy_vault(2000, 1000);
+        let asset_id = legacy.asset_id.clone().unwrap();
+        // Three launches each leased the asset and died before `fail_lease` ran.
+        core.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO asset_derivative_jobs(asset_id, status, attempts, lease_token, lease_expires_at, updated_at)
+                 VALUES (?1, 'processing', ?2, 'dead-process', 0, '2026-01-01T00:00:00Z')",
+                params![asset_id, MAX_ATTEMPTS],
+            )
+            .unwrap();
+        assert_eq!(core.derivatives_status().unwrap().pending, 1);
+        let batch = run_batch(&core);
+        assert!(batch.completed.is_empty() && batch.failed.is_empty());
+        let conn = core.conn().unwrap();
+        let (status, attempts, code, token): (String, i64, String, Option<String>) = conn
+            .query_row(
+                "SELECT status, attempts, error_code, lease_token FROM asset_derivative_jobs WHERE asset_id = ?1",
+                params![asset_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (status.as_str(), attempts, code.as_str(), token),
+            ("failed", MAX_ATTEMPTS, "attempts_exhausted", None)
+        );
+        drop(conn);
+        assert_eq!(
+            core.derivatives_status().unwrap(),
+            DerivativesStatus {
+                pending: 0,
+                done: 0,
+                failed: 1
+            }
+        );
+        let current = core.get_fragment(legacy.id.clone()).unwrap();
+        assert_eq!(current.thumbnail_path, legacy.thumbnail_path);
+        assert!(core.lease_asset(&asset_id).unwrap().is_none());
+        // A manual retry resets the budget and the asset regenerates normally.
+        assert_eq!(core.retry_failed_derivatives().unwrap(), 1);
+        assert_eq!(run_batch(&core).completed, vec![asset_id]);
+        assert!(core
+            .get_fragment(legacy.id)
+            .unwrap()
+            .thumbnail_path
+            .ends_with(".webp"));
     }
 
     #[test]
