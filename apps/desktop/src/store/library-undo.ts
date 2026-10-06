@@ -8,7 +8,11 @@ import type { UndoEntry } from "./library-types";
 
 const { getState, setState } = libraryStore;
 
-/** Shows a success toast whose Undo action reverts `entry`. */
+/**
+ * Shows a success toast whose Undo action reverts `entry`. The entry is
+ * reachable only through that toast, so showToast/dismissToast clear it
+ * when the toast is replaced or dismissed.
+ */
 export function offerUndo(entry: UndoEntry, label: string) {
   if (getState().undoPending) return;
   showToast(label, {

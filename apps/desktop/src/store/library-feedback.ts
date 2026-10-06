@@ -14,10 +14,14 @@ export type ShowToastOptions = {
   duration?: number | null;
 };
 
-/** Shows one toast at a time; a new toast replaces the visible one. */
+/**
+ * Shows one toast at a time; a new toast replaces the visible one. An Undo
+ * entry lives exactly as long as its toast (its only entry point), so
+ * replacing or dismissing a toast also drops `undo`, unless Undo is running.
+ */
 export function showToast(message: string, options: ShowToastOptions = {}) {
   const id = ++toastSequence;
-  libraryStore.setState({
+  libraryStore.setState((state) => ({
     toast: {
       id,
       message,
@@ -27,7 +31,8 @@ export function showToast(message: string, options: ShowToastOptions = {}) {
       duration:
         options.duration === undefined ? TOAST_DURATION_MS : options.duration,
     },
-  });
+    undo: state.undoPending ? state.undo : null,
+  }));
   return id;
 }
 
@@ -53,7 +58,7 @@ export function dismissToast(id?: number) {
   libraryStore.setState((state) => {
     if (!state.toast || (id !== undefined && state.toast.id !== id)) return {};
     if (state.toast.pending) return {};
-    return { toast: null };
+    return { toast: null, undo: state.undoPending ? state.undo : null };
   });
 }
 

@@ -8,6 +8,7 @@ import {
   showToast,
 } from "../store/library-feedback";
 import { libraryStore, resetLibraryStore } from "../store/library-store";
+import { offerUndo, undoLastAction } from "../store/library-undo";
 import { ConfirmDialogView } from "./ConfirmDialog";
 import { ToastView } from "./Toast";
 
@@ -52,6 +53,36 @@ describe("Toast", () => {
     expect(libraryStore.getState().toast).not.toBeNull();
     dismissToast(second);
     expect(libraryStore.getState().toast).toBeNull();
+  });
+
+  it("drops the Undo entry when its toast is replaced or dismissed", async () => {
+    resetLibraryStore({}, { storage: null, previewMode: true });
+    offerUndo({ kind: "linked", ids: ["a"] }, "Removed 1 linked Fragment");
+    expect(libraryStore.getState().undo).toEqual({
+      kind: "linked",
+      ids: ["a"],
+    });
+    expect(libraryStore.getState().toast?.action?.label).toBe("Undo");
+
+    showToast("Image copied", { tone: "success" });
+    expect(libraryStore.getState().undo).toBeNull();
+    await undoLastAction();
+    expect(libraryStore.getState().toast?.message).toBe("Image copied");
+
+    offerUndo({ kind: "linked", ids: ["b"] }, "Removed 1 linked Fragment");
+    const undoToast = libraryStore.getState().toast!.id;
+    dismissToast(undoToast);
+    expect(libraryStore.getState().toast).toBeNull();
+    expect(libraryStore.getState().undo).toBeNull();
+
+    offerUndo({ kind: "linked", ids: ["c"] }, "Removed 1 linked Fragment");
+    libraryStore.setState({ undoPending: true });
+    showToast("Importing 2 images");
+    expect(libraryStore.getState().undo).toEqual({
+      kind: "linked",
+      ids: ["c"],
+    });
+    libraryStore.setState({ undoPending: false, undo: null, toast: null });
   });
 });
 
