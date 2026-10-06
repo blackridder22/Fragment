@@ -2,6 +2,7 @@ import type { Fragment, Frame } from "@fragment/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: string[] = [];
+let failPageRequests = false;
 function count(name: string) {
   return calls.filter((call) => call === name).length;
 }
@@ -64,6 +65,7 @@ vi.mock("../lib/tauri", () => {
       trashed?: boolean;
     }) => {
       record("list_fragment_page");
+      if (failPageRequests) throw new Error("disk gone");
       const items = options.trashed
         ? []
         : ROOT_ITEMS.filter(
@@ -128,6 +130,7 @@ import {
   applyFragmentFilter,
   changeView,
   openFragmentPreview,
+  retryPage,
   selectFrame,
   setSortMode,
   setSourceFilter,
@@ -150,6 +153,7 @@ describe("invoke counts per interaction", () => {
 
   beforeEach(async () => {
     calls.length = 0;
+    failPageRequests = false;
     resetLibraryStore(
       {},
       { storage: null, previewMode: false, systemPrefersDark: false },
@@ -196,6 +200,30 @@ describe("invoke counts per interaction", () => {
     selectFrame("posters");
     await flush();
     expect(calls).toEqual(["list_fragment_page"]);
+    expect(
+      libraryStore.getState().activePage.items.map((item) => item.id),
+    ).toEqual(["b", "c"]);
+  });
+
+  it("failed page: no auto-retry on unrelated changes, 1 invoke on retryPage", async () => {
+    failPageRequests = true;
+    calls.length = 0;
+    selectFrame("posters");
+    await flush();
+    expect(calls).toEqual(["list_fragment_page"]);
+    expect(libraryStore.getState().activePage.error).toBe("disk gone");
+
+    libraryStore.setState({ error: null, shortcutsOpen: true });
+    openFragmentPreview(ROOT_ITEMS[0]!);
+    await flush();
+    expect(count("list_fragment_page")).toBe(1);
+    expect(libraryStore.getState().error).toBeNull();
+
+    failPageRequests = false;
+    calls.length = 0;
+    await retryPage();
+    expect(calls).toEqual(["list_fragment_page"]);
+    expect(libraryStore.getState().activePage.error).toBeNull();
     expect(
       libraryStore.getState().activePage.items.map((item) => item.id),
     ).toEqual(["b", "c"]);

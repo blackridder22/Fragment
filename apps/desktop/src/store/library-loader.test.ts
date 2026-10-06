@@ -276,6 +276,65 @@ describe("library loader", () => {
     expect(fetchPage).toHaveBeenCalledTimes(2);
   });
 
+  it("holds a failed key until retry instead of refetching on every change", async () => {
+    fetchPage.mockImplementation(async () => {
+      throw new Error("disk gone");
+    });
+    const { store, loader } = setup();
+    loader.start();
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+    expect(store.getState().activePage.error).toBe("disk gone");
+
+    store.setState({
+      toast: {
+        id: 1,
+        message: "Image copied",
+        tone: "info",
+        pending: false,
+        duration: 4000,
+      },
+    });
+    store.setState({ error: null });
+    store.setState({ shortcutsOpen: true });
+    store.setState({ focused: { fragment: fragment("x"), mode: "quick" } });
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+    expect(store.getState().error).toBeNull();
+
+    fetchPage.mockImplementation(async () => page(["a", "b"], 2));
+    await loader.retry("active");
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    const state = store.getState();
+    expect(state.activePage.error).toBeNull();
+    expect(state.activePage.items).toHaveLength(2);
+    expect(state.activePage.key).toBe(currentPageKey(state, "active"));
+  });
+
+  it("lifts the failed hold when the key changes or the page is invalidated", async () => {
+    fetchPage.mockImplementation(async () => {
+      throw new Error("disk gone");
+    });
+    const { store, loader } = setup();
+    loader.start();
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+
+    store.setState({ sortMode: "name" });
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+    store.setState({ shortcutsOpen: true });
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+
+    loader.invalidate("active");
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+    store.setState({ shortcutsOpen: false });
+    await flush();
+    expect(fetchPage).toHaveBeenCalledTimes(3);
+  });
+
   it("records page errors without clearing loaded items", async () => {
     const { store, loader } = setup();
     loader.start();

@@ -26,7 +26,11 @@ import {
 } from "../lib/tauri";
 import type { V7SettingsState } from "../v7/settings-state";
 import { reportError, showToast } from "./library-feedback";
-import { libraryLoader, pageNameForView } from "./library-loader";
+import {
+  libraryLoader,
+  pageNameForView,
+  type PageName,
+} from "./library-loader";
 import {
   pluralize,
   selectDisplayFrames,
@@ -182,6 +186,13 @@ export function refreshColorResults() {
   setState({ selection: createSelectionState(), colorResultsChanged: false });
   const page = pageNameForView(getState().view);
   if (page) void libraryLoader.reload(page);
+}
+
+/** Re-requests a page whose last request failed; defaults to the visible page. */
+export function retryPage(
+  page: PageName | null = pageNameForView(getState().view),
+): Promise<void> {
+  return page ? libraryLoader.retry(page) : Promise.resolve();
 }
 
 export function setIncludeDescendants(includeDescendants: boolean) {

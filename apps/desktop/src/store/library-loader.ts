@@ -124,6 +124,8 @@ export type LibraryLoader = {
   loadMore: (page: PageName) => Promise<void>;
   reload: (page: PageName) => Promise<void>;
   invalidate: (page: PageName) => void;
+  /** Clears a page's failed marker and requests its first page again. */
+  retry: (page: PageName) => Promise<void>;
 };
 
 /**
@@ -131,7 +133,9 @@ export type LibraryLoader = {
  * decides when to fetch: identical keys never refetch, in-flight requests for
  * the same key and offset are shared, stale responses are dropped by sequence
  * number, and a key change always resets pagination. Only free-text query
- * changes are debounced.
+ * changes are debounced. A key whose request failed is remembered per page
+ * and not requested again on unrelated store changes; the key changing, or
+ * an explicit `retry`, `reload` or `invalidate`, lifts that hold.
  */
 export function createLibraryLoader(
   store: Store<LibraryState>,
@@ -156,6 +160,11 @@ export function createLibraryLoader(
     trash: null,
   };
   const lastDesired: Record<PageName, Desired | null> = {
+    active: null,
+    trash: null,
+  };
+  /** Serialized key whose last request failed; `sync` skips it. */
+  const failed: Record<PageName, string | null> = {
     active: null,
     trash: null,
   };
@@ -268,6 +277,7 @@ export function createLibraryLoader(
             : Promise.resolve(null),
         ]);
         if (seq !== sequence[page]) return;
+        failed[page] = null;
         apply(
           page,
           desired.serialized,
@@ -278,6 +288,7 @@ export function createLibraryLoader(
         );
       } catch (caught) {
         if (seq !== sequence[page]) return;
+        failed[page] = desired.serialized;
         const message =
           caught instanceof Error ? caught.message : String(caught);
         setPage(page, { loading: false, error: message });
@@ -299,6 +310,13 @@ export function createLibraryLoader(
     lastDesired[page] = desired;
     const current = pageOf(state, page);
     if (current.key === desired.serialized) {
+      cancelTimer(page);
+      return;
+    }
+    if (failed[page] !== null && failed[page] !== desired.serialized) {
+      failed[page] = null;
+    }
+    if (failed[page] === desired.serialized) {
       cancelTimer(page);
       return;
     }
@@ -341,11 +359,18 @@ export function createLibraryLoader(
     sync,
     loadMore: (page) => load(page, false),
     reload(page) {
+      failed[page] = null;
       setPage(page, { key: null });
       return load(page, true);
     },
     invalidate(page) {
+      failed[page] = null;
       setPage(page, { key: null });
+      sync();
+    },
+    retry(page) {
+      failed[page] = null;
+      return load(page, true);
     },
   };
 }
