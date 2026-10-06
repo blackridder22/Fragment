@@ -320,7 +320,9 @@ export function startLibrary(): () => void {
         }
       })
       .then((unlisten) => {
-        unlistenDrop = unlisten;
+        // A StrictMode remount can dispose before the webview subscribes.
+        if (disposed) unlisten();
+        else unlistenDrop = unlisten;
       })
       .catch(() => undefined);
   } catch {

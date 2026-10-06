@@ -1,5 +1,5 @@
 import type { Frame } from "@fragment/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -43,6 +43,10 @@ function snapshot(revision: string): Snapshot {
 }
 
 const snapshotRequests: Array<Deferred<Snapshot>> = [];
+const dragDrop = {
+  subscribe: deferred<() => void>(),
+  unlisten: vi.fn(),
+};
 
 vi.mock("../lib/tauri", () => ({
   isTauriRuntime: () => true,
@@ -75,7 +79,13 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: async () => () => undefined,
 }));
 
-import { refreshSnapshot } from "./library-bootstrap";
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: () => dragDrop.subscribe.promise,
+  }),
+}));
+
+import { refreshSnapshot, startLibrary } from "./library-bootstrap";
 import { libraryStore, resetLibraryStore } from "./library-store";
 
 async function flush() {
@@ -130,5 +140,45 @@ describe("refreshSnapshot", () => {
     snapshotRequests[1]!.reject(new Error("vault locked"));
     await expect(forced).rejects.toThrow("vault locked");
     expect(libraryStore.getState().error).toBe("vault locked");
+  });
+});
+
+describe("startLibrary", () => {
+  const windowStub = {
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+
+  beforeEach(() => {
+    snapshotRequests.length = 0;
+    dragDrop.subscribe = deferred<() => void>();
+    dragDrop.unlisten = vi.fn();
+    vi.stubGlobal("window", windowStub);
+    resetLibraryStore(
+      {},
+      { storage: null, previewMode: false, systemPrefersDark: false },
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("drops a drag-drop listener that resolves after dispose", async () => {
+    const dispose = startLibrary();
+    dispose();
+    expect(dragDrop.unlisten).not.toHaveBeenCalled();
+    dragDrop.subscribe.resolve(dragDrop.unlisten);
+    await flush();
+    expect(dragDrop.unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes a drag-drop listener that resolved before dispose", async () => {
+    const dispose = startLibrary();
+    dragDrop.subscribe.resolve(dragDrop.unlisten);
+    await flush();
+    expect(dragDrop.unlisten).not.toHaveBeenCalled();
+    dispose();
+    expect(dragDrop.unlisten).toHaveBeenCalledTimes(1);
   });
 });
