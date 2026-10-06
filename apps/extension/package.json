@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
+    "@types/node": "^24.19.1",
     "@types/react": "^19.1.4",
     "@types/react-dom": "^19.1.5",
     "typescript": "^5.8.3",
